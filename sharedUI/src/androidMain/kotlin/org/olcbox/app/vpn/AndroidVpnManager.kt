@@ -22,6 +22,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
@@ -302,11 +303,18 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         context.startService(intent)
     }
 
-    override suspend fun ping(locationConfig: LocationConfig): Long? {
-        return OlcRtcConnectionChecker.ping(
-            locationConfig = locationConfig,
-            deviceId = deviceIdentityProvider.hwid()
-        )
+    override suspend fun ping(
+        locationConfig: LocationConfig,
+        profile: VpnProfileConfig
+    ): Long? {
+        return if (profile.isOlcRtc()) {
+            OlcRtcConnectionChecker.ping(
+                locationConfig = locationConfig,
+                deviceId = deviceIdentityProvider.hwid()
+            )
+        } else {
+            VpnProfileReachability.ping(profile)
+        }
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {

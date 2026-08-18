@@ -20,7 +20,7 @@ val hasReleaseKeystore =
     keystorePropertiesFile.exists() &&
         listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
             .all { key -> !keystoreProperties.getProperty(key).isNullOrBlank() }
-val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.4")
+val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.5")
 val olcboxVersionCode = providers.gradleProperty("olcbox.versionCode")
     .map { it.toInt() }
     .orElse(1)

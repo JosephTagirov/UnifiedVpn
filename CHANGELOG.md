@@ -2,6 +2,22 @@
 
 Все существенные изменения Unified VPN / Olcbox фиксируются в этом файле.
 
+## [0.0.5] - 2026-08-18
+
+### Добавлено
+
+- Обычная проверка доступности для VLESS по TCP endpoint и для AmneziaWG по адресу peer с TCP fallback.
+- Разбор VLESS IPv4/IPv6 URI, WireGuard `Endpoint` и сжатых `awg://` / `vpn://` профилей для ping.
+- Явная поддержка единой зашифрованной строки `unifiedvpn-friend-v1:` в меню добавления подключения.
+- Desktop smoke-режим `--verify-native-assets` для проверки файлов olcRTC, sing-box, tun2socks и Wintun внутри упакованного приложения.
+
+### Исправлено
+
+- При переходе `olcRTC -> VLESS/AmneziaWG` Android теперь сначала останавливает и дожидается `tun2socks`, а затем останавливает olcRTC SOCKS; устранена гонка native-процессов, вызывавшая вылет приложения.
+- Переключение на внешний профиль ждёт освобождения olcRTC SOCKS endpoint перед запуском нового движка.
+- Windows ищет встроенные native-файлы через context/class loader, каталог jpackage и JAR classpath; ошибка `Bundled native binary is missing: native/olcrtc-windows-amd64.exe` больше не зависит от особенностей загрузчика установленной версии.
+- Обновление ping в списке профилей больше не пропускает VLESS и AmneziaWG.
+
 ## [0.0.4] - 2026-08-18
 
 ### Добавлено

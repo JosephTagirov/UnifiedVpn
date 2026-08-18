@@ -125,12 +125,18 @@ class HomeScreenViewModel(
     }
 
     suspend fun performPing(): Long? {
-        if (_state.value.activeProfile?.isOlcRtc() != true) return null
-        return vpnManager.ping(_state.value.configData)
+        val current = _state.value
+        return vpnManager.ping(
+            locationConfig = current.configData,
+            profile = current.activeProfile ?: VpnProfileConfig.olcRtc()
+        )
     }
 
-    suspend fun performPingFor(config: LocationConfig): Long? {
-        return vpnManager.ping(config)
+    suspend fun performPingFor(
+        config: LocationConfig,
+        profile: VpnProfileConfig = VpnProfileConfig.olcRtc()
+    ): Long? {
+        return vpnManager.ping(config, profile)
     }
 
     suspend fun checkConnectionFor(config: LocationConfig): Long? {

@@ -83,15 +83,15 @@ fun AddConfigurationSheet(
                 }
 
                 AddSheetAction(
-                    title = "Paste link or URI",
-                    value = "HTTP, vless://, awg://, vpn://, olcrtc://",
+                    title = "Paste link, URI, or friend package",
+                    value = "unifiedvpn-friend-v1:, VLESS, AWG, olcRTC",
                     icon = Icons.AutoMirrored.Outlined.Input,
                     onClick = onPasteLinkClick
                 )
 
                 AddSheetAction(
                     title = "Import from file",
-                    value = "Subscription, AmneziaWG .conf, or JSON",
+                    value = "Friend package, subscription, AWG .conf, or JSON",
                     icon = Icons.Outlined.FileOpen,
                     onClick = onImportFileClick
                 )

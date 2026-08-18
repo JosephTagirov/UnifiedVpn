@@ -109,8 +109,8 @@ fun HomeScreen(
     fun refreshHttpPings(targetLocationIds: List<String>? = null) {
         locationViewModel.refreshPings(
             targetLocationIds = targetLocationIds,
-            performPing = { config ->
-                viewModel.performPingFor(config)
+            performPing = { config, profile ->
+                viewModel.performPingFor(config, profile)
             },
         )
     }

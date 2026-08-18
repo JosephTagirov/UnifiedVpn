@@ -33,7 +33,7 @@ val olcrtcAndroidAar = layout.buildDirectory.file("generated/olcrtc/olcrtc.aar")
 val olcrtcAndroidAarFile = olcrtcAndroidAar.get().asFile
 val olcrtcIosXcframework = layout.buildDirectory.dir("generated/olcrtc/ios/OlcRtcMobile.xcframework")
 val olcrtcIosXcframeworkDir = olcrtcIosXcframework.get().asFile
-val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.4")
+val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.5")
 val olcboxVersionValue = olcboxVersion.get()
 val generatedAppInfoDir = layout.buildDirectory.dir("generated/source/olcboxAppInfo/commonMain")
 

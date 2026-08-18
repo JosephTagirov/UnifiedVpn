@@ -70,6 +70,13 @@ password through different private channels. Do not publish either item. The
 receiver creates a separate AWG peer and client private key; the SSH password is
 not stored after provisioning.
 
+To create one combined link, open `Settings -> Subscriptions & Sharing ->
+Package for a friend`, enter the VLESS URI, SSH server details, and a package
+password. Unified VPN produces one encrypted `unifiedvpn-friend-v1:` string.
+The receiver copies that complete string and selects `+ -> Paste link, URI, or
+friend package`, then enters the package password. The app imports olcRTC and
+VLESS, provisions a separate AWG peer, and adds all three profiles.
+
 ## Platform Matrix
 
 | Platform | Modes | Runtime |

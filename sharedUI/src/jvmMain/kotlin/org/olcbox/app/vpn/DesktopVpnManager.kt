@@ -116,11 +116,18 @@ class DesktopVpnManager private constructor(
         }
     }
 
-    override suspend fun ping(locationConfig: LocationConfig): Long? {
-        return OlcRtcConnectionChecker.ping(
-            locationConfig = locationConfig,
-            deviceId = locationsRepository.getDeviceIdentity()
-        )
+    override suspend fun ping(
+        locationConfig: LocationConfig,
+        profile: VpnProfileConfig
+    ): Long? {
+        return if (profile.isOlcRtc()) {
+            OlcRtcConnectionChecker.ping(
+                locationConfig = locationConfig,
+                deviceId = locationsRepository.getDeviceIdentity()
+            )
+        } else {
+            VpnProfileReachability.ping(profile)
+        }
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {

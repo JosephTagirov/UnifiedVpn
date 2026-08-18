@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.ios.IosBridgeResult
 import org.olcbox.app.ios.IosLogWriter
@@ -119,7 +120,11 @@ class IosVpnManager(
         }
     }
 
-    override suspend fun ping(locationConfig: LocationConfig): Long? {
+    override suspend fun ping(
+        locationConfig: LocationConfig,
+        profile: VpnProfileConfig
+    ): Long? {
+        if (!profile.isOlcRtc()) return null
         return runCheck(locationConfig) { request -> olcRtcBridge.ping(request) }
     }
 

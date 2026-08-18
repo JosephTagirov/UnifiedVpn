@@ -120,6 +120,7 @@ import org.olcbox.app.vpn.DesktopSocksProxySettings
 import org.olcbox.app.vpn.DesktopRoutingMode
 import org.olcbox.app.vpn.DesktopVpnManager
 import org.olcbox.app.vpn.JvmDesktopSocksProxySettingsStore
+import org.olcbox.app.vpn.desktop.verifyDesktopNativeAssets
 
 private class DesktopAppDependencies {
     private val locationsDataSource = JvmLocationsDataSourceImpl()
@@ -153,8 +154,21 @@ private class DesktopAppDependencies {
 }
 
 private const val WINDOWS_ELEVATED_START_ARGUMENT = "--olcbox-start-vpn-after-elevation"
+private const val VERIFY_NATIVE_ASSETS_ARGUMENT = "--verify-native-assets"
 
-fun main(args: Array<String>) = application {
+fun main(args: Array<String>) {
+    if (VERIFY_NATIVE_ASSETS_ARGUMENT in args) {
+        val assets = verifyDesktopNativeAssets()
+        check(assets.all { it.toFile().isFile && it.toFile().length() > 0L }) {
+            "One or more desktop native assets are empty"
+        }
+        println("Verified ${assets.size} desktop native assets")
+        return
+    }
+    runDesktopApplication(args)
+}
+
+private fun runDesktopApplication(args: Array<String>) = application {
     // Configure JNA to find native libraries in resources
     System.setProperty(
         "jna.library.path",

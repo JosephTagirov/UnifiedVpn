@@ -170,7 +170,7 @@ class LocationViewModel(
 
     fun refreshPings(
         targetLocationIds: List<String>? = null,
-        performPing: suspend (LocationConfig) -> Long?,
+        performPing: suspend (LocationConfig, VpnProfileConfig) -> Long?,
         onComplete: (onlineCount: Int, totalCount: Int) -> Unit = { _, _ -> },
         onError: (String) -> Unit = {}
     ) {
@@ -179,8 +179,7 @@ class LocationViewModel(
 
         val pingableLocations = locationsSnapshot
             .filter { location ->
-                location.profile.isOlcRtc() &&
-                        location.config?.isComplete() == true &&
+                location.profile.isCompleteFor(location.config) &&
                         (targetLocationIds == null || targetLocationIds.contains(location.storageId))
             }
             .filterNot { location ->
@@ -297,14 +296,15 @@ class LocationViewModel(
 
     private suspend fun checkLocationPing(
         location: LocationItem,
-        performPing: suspend (LocationConfig) -> Long?
+        performPing: suspend (LocationConfig, VpnProfileConfig) -> Long?
     ): Long? {
-        val config = location.config?.takeIf { it.isComplete() } ?: return null
+        val config = location.config ?: LocationConfig()
+        if (!location.profile.isCompleteFor(config)) return null
 
         return withTimeoutOrNull(LOCATION_PING_TIMEOUT_MS) {
             repeat(LOCATION_PING_ATTEMPTS) { attempt ->
                 val result = try {
-                    performPing(config)
+                    performPing(config, location.profile)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (_: Exception) {

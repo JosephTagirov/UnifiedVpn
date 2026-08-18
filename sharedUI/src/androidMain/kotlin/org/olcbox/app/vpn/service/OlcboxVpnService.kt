@@ -668,8 +668,7 @@ class OlcboxVpnService : VpnService() {
         updateUnderlyingNetwork(upstream)
         if (!stopTransportProcesses(
                 closeTun = true,
-                waitForSocksPort = false,
-                stopMobileBeforeTun = true
+                waitForSocksPort = true
             )
         ) {
             setStatus(VpnStatus.Error("Previous VPN tunnel is still stopping"))
@@ -1168,15 +1167,11 @@ class OlcboxVpnService : VpnService() {
 
     private suspend fun stopTransportProcesses(
         closeTun: Boolean,
-        waitForSocksPort: Boolean = true,
-        stopMobileBeforeTun: Boolean = false
+        waitForSocksPort: Boolean = true
     ): Boolean {
         val tunThread = tun2socksThread
         stopAuthenticatedSocksProxy()
         stopExternalEngine()
-        if (stopMobileBeforeTun) {
-            stopMobile()
-        }
         stopTun2socks()
         if (closeTun) cleanupVpnInterface()
         tunThread?.interrupt()
@@ -1185,12 +1180,8 @@ class OlcboxVpnService : VpnService() {
             tun2socksThread = null
         }
         if (waitForSocksPort) {
-            if (stopMobileBeforeTun) {
-                waitForSocksPortReleased()
-            } else {
-                stopMobileAndWait()
-            }
-        } else if (!stopMobileBeforeTun) {
+            stopMobileAndWait()
+        } else {
             stopMobile()
         }
         if (closeTun) {

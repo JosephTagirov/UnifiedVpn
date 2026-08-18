@@ -2,13 +2,32 @@ package org.olcbox.app.vpn.desktop
 
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.jar.JarFile
 import kotlin.io.path.Path
 import kotlin.io.path.exists
 
 internal object DesktopNativeAssets {
+    fun verifyRequiredAssets(): List<Path> {
+        val assets = mutableListOf<Path>()
+        assets.add(resolveOlcRtcBinary())
+        assets.add(resolveOlcRtcDataDir().resolve("names"))
+        assets.add(resolveOlcRtcDataDir().resolve("surnames"))
+        when (DesktopPaths.os) {
+            DesktopOs.Windows -> {
+                assets.add(resolveWindowsTun2SocksBinary())
+                assets.add(resolveSingBoxBinary())
+            }
+            DesktopOs.Linux -> assets.add(resolveHevSocks5TunnelBinary())
+            DesktopOs.MacOS,
+            DesktopOs.Other -> Unit
+        }
+        return assets
+    }
+
     fun resolveOlcRtcBinary(): Path {
         return resolveOlcRtcBinaryCandidates().first()
     }
@@ -113,11 +132,7 @@ internal object DesktopNativeAssets {
         val target = DesktopPaths.appDataDir().resolve("bin").resolve(fileName)
         Files.createDirectories(target.parent)
 
-        val resource = javaClass.classLoader.getResourceAsStream(resourceName)
-        if (resource != null) {
-            resource.use {
-                Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
-            }
+        if (copyBundledResource(resourceName, target)) {
             makeExecutable(target)
             return target
         }
@@ -134,11 +149,7 @@ internal object DesktopNativeAssets {
     private fun copyDataFile(fileName: String, targetDir: Path) {
         val target = targetDir.resolve(fileName)
         val resourceName = "olcrtc-data/$fileName"
-        val resource = javaClass.classLoader.getResourceAsStream(resourceName)
-        if (resource != null) {
-            resource.use {
-                Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
-            }
+        if (copyBundledResource(resourceName, target)) {
             return
         }
 
@@ -229,11 +240,7 @@ internal object DesktopNativeAssets {
         val target = DesktopPaths.appDataDir().resolve("bin").resolve(fileName)
         Files.createDirectories(target.parent)
         val resourceName = "native/$fileName"
-        val resource = javaClass.classLoader.getResourceAsStream(resourceName)
-        if (resource != null) {
-            resource.use {
-                Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
-            }
+        if (copyBundledResource(resourceName, target)) {
             return target
         }
 
@@ -245,6 +252,93 @@ internal object DesktopNativeAssets {
             }
 
         error("Bundled runtime asset is missing: $resourceName")
+    }
+
+    private fun copyBundledResource(resourceName: String, target: Path): Boolean {
+        val classLoaders = listOfNotNull(
+            Thread.currentThread().contextClassLoader,
+            javaClass.classLoader
+        ).distinct()
+        classLoaders.forEach { loader ->
+            loader.getResourceAsStream(resourceName)?.use { resource ->
+                Files.copy(resource, target, StandardCopyOption.REPLACE_EXISTING)
+                return true
+            }
+        }
+
+        javaClass.getResourceAsStream("/$resourceName")?.use { resource ->
+            Files.copy(resource, target, StandardCopyOption.REPLACE_EXISTING)
+            return true
+        }
+
+        bundledResourceDirectories()
+            .map { it.resolve(resourceName) }
+            .firstOrNull(Files::isRegularFile)
+            ?.let { source ->
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+                return true
+            }
+
+        bundledJarCandidates().forEach { jarPath ->
+            val copied = runCatching {
+                JarFile(jarPath.toFile()).use { jar ->
+                    val entry = jar.getJarEntry(resourceName) ?: return@use false
+                    jar.getInputStream(entry).use { resource ->
+                        Files.copy(resource, target, StandardCopyOption.REPLACE_EXISTING)
+                    }
+                    true
+                }
+            }.getOrDefault(false)
+            if (copied) return true
+        }
+
+        return false
+    }
+
+    private fun bundledResourceDirectories(): List<Path> {
+        val classPathEntries = System.getProperty("java.class.path")
+            .orEmpty()
+            .split(File.pathSeparatorChar)
+            .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+            .map { Path(it).toAbsolutePath().normalize() }
+        val launcherDir = System.getProperty("jpackage.app-path")
+            ?.takeIf(String::isNotBlank)
+            ?.let(::Path)
+            ?.toAbsolutePath()
+            ?.normalize()
+            ?.parent
+        val codeSourceDir = runCatching {
+            Path.of(javaClass.protectionDomain.codeSource.location.toURI()).toAbsolutePath().normalize().parent
+        }.getOrNull()
+
+        return buildList {
+            classPathEntries.filter(Files::isDirectory).forEach(::add)
+            launcherDir?.let {
+                add(it)
+                add(it.resolve("app"))
+            }
+            codeSourceDir?.let(::add)
+        }.distinct()
+    }
+
+    private fun bundledJarCandidates(): List<Path> {
+        val directEntries = System.getProperty("java.class.path")
+            .orEmpty()
+            .split(File.pathSeparatorChar)
+            .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+            .map { Path(it).toAbsolutePath().normalize() }
+            .filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".jar", ignoreCase = true) }
+        val directoryEntries = bundledResourceDirectories().flatMap { directory ->
+            if (!Files.isDirectory(directory)) return@flatMap emptyList()
+            runCatching {
+                Files.list(directory).use { files ->
+                    files.filter {
+                        Files.isRegularFile(it) && it.fileName.toString().endsWith(".jar", ignoreCase = true)
+                    }.toList()
+                }
+            }.getOrDefault(emptyList())
+        }
+        return (directEntries + directoryEntries).distinct()
     }
 
     private fun makeExecutable(path: Path) {
@@ -271,3 +365,5 @@ internal object DesktopNativeAssets {
             .toList()
     }
 }
+
+fun verifyDesktopNativeAssets(): List<Path> = DesktopNativeAssets.verifyRequiredAssets()
