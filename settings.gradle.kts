@@ -1,0 +1,36 @@
+rootProject.name = "UnifiedVpn"
+
+pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+                includeGroupByRegex("android.*")
+            }
+        }
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+                includeGroupByRegex("android.*")
+            }
+        }
+        mavenCentral()
+        flatDir {
+            dirs("androidApp/jniLibs/arm64-v8a")
+        }
+    }
+}
+include(":sharedUI")
+include(":androidApp")
+include(":desktopApp")
