@@ -737,6 +737,84 @@ class LocationsRepositoryImplTest {
     }
 
     @Test
+    fun editingLocationKeepsItsPosition() = runTest {
+        val entries = listOf("first", "second", "third").mapIndexed { index, id ->
+            LocationEntry.from(
+                id,
+                LocationConfig(
+                    name = id,
+                    id = "room-$id",
+                    key = ('a' + index).toString().repeat(64),
+                    bypassProvider = LocationConfig.PROVIDER_WB_STREAM
+                )
+            )
+        }
+        val source = FakeLocationsDataSource(
+            LocationBundleV4(activeLocationId = "first", locations = entries)
+        )
+
+        LocationsRepositoryImpl(source).saveLocation(
+            "second",
+            entries[1].location.copy(name = "Renamed")
+        )
+
+        assertEquals(listOf("first", "second", "third"), source.stored?.locations?.map { it.storageId })
+        assertEquals("Renamed", source.stored?.locations?.get(1)?.displayName())
+    }
+
+    @Test
+    fun editingExternalProfileKeepsItsPositionAndSubscription() = runTest {
+        val external = LocationEntry.fromProfile(
+            storageId = "vless",
+            profile = VpnProfileConfig(
+                type = VpnProfileConfig.TYPE_VLESS,
+                name = "Old name",
+                uri = "vless://old@example.test:443"
+            ),
+            subscriptionUrl = "https://example.test/sub"
+        )
+        val source = FakeLocationsDataSource(
+            LocationBundleV4(
+                activeLocationId = "vless",
+                locations = listOf(
+                    LocationEntry.from(
+                        "rtc",
+                        LocationConfig("RTC", "room", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM)
+                    ),
+                    external
+                )
+            )
+        )
+
+        LocationsRepositoryImpl(source).saveProfile(
+            "vless",
+            external.profile.copy(name = "New name", uri = "vless://new@example.test:443")
+        )
+
+        assertEquals(listOf("rtc", "vless"), source.stored?.locations?.map { it.storageId })
+        assertEquals("New name", source.stored?.locations?.last()?.displayName())
+        assertEquals("https://example.test/sub", source.stored?.locations?.last()?.subscriptionUrl)
+    }
+
+    @Test
+    fun movingLocationSwapsEntriesWithoutChangingActiveProfile() = runTest {
+        val entries = listOf("first", "second", "third").map { id ->
+            LocationEntry.from(
+                id,
+                LocationConfig(id, "room-$id", "a".repeat(64), LocationConfig.PROVIDER_WB_STREAM)
+            )
+        }
+        val source = FakeLocationsDataSource(
+            LocationBundleV4(activeLocationId = "second", locations = entries)
+        )
+
+        LocationsRepositoryImpl(source).moveLocation("second", "first")
+
+        assertEquals(listOf("second", "first", "third"), source.stored?.locations?.map { it.storageId })
+        assertEquals("second", source.stored?.activeLocationId)
+    }
+
+    @Test
     fun subscriptionSharingListsDistinctUrls() {
         val first = LocationEntry.from(
             "first",

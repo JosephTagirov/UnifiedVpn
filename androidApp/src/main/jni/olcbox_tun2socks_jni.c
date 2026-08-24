@@ -1,8 +1,18 @@
 #include <jni.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <unistd.h>
 
 #include "hev-main.h"
+
+enum tunnel_state {
+    TUNNEL_STOPPED = 0,
+    TUNNEL_STARTING,
+    TUNNEL_RUNNING,
+    TUNNEL_STOPPING,
+};
+
+static atomic_int tunnel_state = ATOMIC_VAR_INIT(TUNNEL_STOPPED);
 
 JNIEXPORT jint JNICALL
 Java_org_olcbox_app_vpn_service_OlcboxVpnService_startTun2socksNative(
@@ -14,17 +24,51 @@ Java_org_olcbox_app_vpn_service_OlcboxVpnService_startTun2socksNative(
         return -1;
     }
 
+    int expected = TUNNEL_STOPPED;
+    if (!atomic_compare_exchange_strong(&tunnel_state, &expected,
+                                        TUNNEL_STARTING)) {
+        (*env)->ReleaseStringUTFChars(env, config_path, path);
+        close(tun_fd);
+        return -2;
+    }
+
+    expected = TUNNEL_STARTING;
+    atomic_compare_exchange_strong(&tunnel_state, &expected, TUNNEL_RUNNING);
+
     int result = hev_socks5_tunnel_main_from_file(path, tun_fd);
     (*env)->ReleaseStringUTFChars(env, config_path, path);
     close(tun_fd);
+    atomic_store(&tunnel_state, TUNNEL_STOPPED);
     return result;
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jboolean JNICALL
 Java_org_olcbox_app_vpn_service_OlcboxVpnService_stopTun2socksNative(
     JNIEnv *env, jobject thiz)
 {
+    int current = atomic_load(&tunnel_state);
+    for (;;) {
+        if (current == TUNNEL_STOPPED) {
+            return JNI_FALSE;
+        }
+        if (current == TUNNEL_STOPPING) {
+            return JNI_TRUE;
+        }
+        if (atomic_compare_exchange_weak(&tunnel_state, &current,
+                                         TUNNEL_STOPPING)) {
+            break;
+        }
+    }
+
     hev_socks5_tunnel_quit();
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_org_olcbox_app_vpn_service_OlcboxVpnService_isTun2socksRunningNative(
+    JNIEnv *env, jobject thiz)
+{
+    return atomic_load(&tunnel_state) == TUNNEL_STOPPED ? JNI_FALSE : JNI_TRUE;
 }
 
 JNIEXPORT jlongArray JNICALL

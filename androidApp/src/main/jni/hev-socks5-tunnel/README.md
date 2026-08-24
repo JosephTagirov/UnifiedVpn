@@ -9,6 +9,7 @@ A simple, lightweight tunnel over Socks5 proxy (tun2socks).
 * IPv4/IPv6. (dual stack)
 * Redirect TCP connections.
 * Redirect UDP packets. (Fullcone NAT, UDP-in-UDP and UDP-in-TCP [^1])
+* Optional local ICMP Echo (ping) replies.
 * Linux/Android/FreeBSD/macOS/iOS/Windows.
 
 ## Benchmarks
@@ -95,6 +96,8 @@ tunnel:
   ipv4: 198.18.0.1
   # IPv6 address
   ipv6: 'fc00::1'
+  # ICMP Echo mode (off|reply)
+  icmp: 'off'
   # Post up script
 # post-up-script: up.sh
   # Pre down script
@@ -117,6 +120,8 @@ socks5:
 # password: 'password'
   # Socket mark
 # mark: 0
+  # TCP fastopen
+# tcp-fastopen: false
 
 #mapdns:
   # Mapped DNS address
@@ -147,8 +152,8 @@ socks5:
 # tcp-read-write-timeout: 300000
   # UDP read-write timeout (ms)
 # udp-read-write-timeout: 60000
-  # stdout, stderr or file-path
-# log-file: stderr
+  # null, stdout, stderr or file-path
+# log-file: null
   # debug, info, warn or error
 # log-level: warn
   # If present, run as a daemon with this pid file
@@ -260,6 +265,8 @@ services:
       TUN: tun0 # optional, tun interface name, default `tun0`
       MTU: 8500 # optional, MTU is MTU, default `8500`
       IPV4: 198.18.0.1 # optional, tun interface ip, default `198.18.0.1`
+      IPV6: fc00::1 # optional, tun interface ip
+      ICMP: off # optional, ICMP Echo mode, default `off`, other option `reply`
       TABLE: 20 # optional, ip route table id, default `20`
       MARK: 438 # optional, ip route rule mark, dec or hex format, default `438`
       SOCKS5_ADDR: a.b.c.d # socks5 proxy server address
@@ -287,6 +294,8 @@ You can also set the route rules with multiple network segments like:
 ```
 
 ## API
+
+### C
 
 ```c
 /**
@@ -359,11 +368,47 @@ void hev_socks5_tunnel_stats (size_t *tx_packets, size_t *tx_bytes,
                               size_t *rx_packets, size_t *rx_bytes);
 ```
 
+### Java
+
+```java
+public class TProxyService {
+    private static native boolean TProxyStartService(String config_path, int fd);
+    private static native boolean TProxyStopService();
+    private static native boolean TProxyIsRunning();
+    private static native long[] TProxyGetStats();
+
+    static {
+        System.loadLibrary("hev-socks5-tunnel");
+    }
+}
+```
+
+### Kotlin
+```kt
+object TProxyService {
+    private external fun TProxyStartService(config_path: String, fd: Int): Boolean
+    private external fun TProxyStopService(): Boolean
+    private external fun TProxyIsRunning(): Boolean
+    private external fun TProxyGetStats(): LongArray
+
+    init {
+        System.loadLibrary("hev-socks5-tunnel")
+    }
+}
+```
+
+Allow overriding the package and class names in `Application.mk`[^2].
+
+```makefile
+APP_CFLAGS := -DPKGNAME=hev/sockstun -DCLSNAME=TProxyService
+```
+
 ## Use Cases
 
 ### Android VPN
 
 * [SocksTun](https://github.com/heiher/sockstun)
+* [Orbot](https://github.com/guardianproject/orbot-android)
 
 ### iOS
 
@@ -378,11 +423,13 @@ void hev_socks5_tunnel_stats (size_t *tx_packets, size_t *tx_bytes,
 * **ebrahimtahernejad** - https://github.com/ebrahimtahernejad
 * **heiby** - https://github.com/heiby
 * **hev** - https://hev.cc
+* **ihipop** - https://ihipop.com
 * **katana** - https://github.com/officialkatana
 * **pronebird** - https://github.com/pronebird
 * **saeeddev94** - https://github.com/saeeddev94
 * **sskaje** - https://github.com/sskaje
 * **wankkoree** - https://github.com/wankkoree
+* **xiguagua** - https://github.com/xiguagua
 * **xz-dev** - https://github.com/xz-dev
 * **yiguous** - https://github.com/yiguous
 * **yujinpan** - https://github.com/yujinpan
@@ -393,3 +440,4 @@ void hev_socks5_tunnel_stats (size_t *tx_packets, size_t *tx_bytes,
 MIT
 
 [^1]: See [protocol specification](https://github.com/heiher/hev-socks5-core/tree/main?tab=readme-ov-file#udp-in-tcp). The [hev-socks5-server](https://github.com/heiher/hev-socks5-server) supports UDP relay over TCP.
+[^2]: See [Application.mk](https://github.com/heiher/sockstun/blob/12830d444fe60ad1c5d68ea6e60ec141cd2c6d97/app/src/main/jni/Application.mk#L19)

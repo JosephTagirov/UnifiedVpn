@@ -76,7 +76,7 @@ internal class WindowsTunController(
     }
 
     private suspend fun requestAdministratorRestart() {
-        val processInfo = ProcessHandle.current().info()
+        val processInfo = windowsLauncherProcess().info()
         val currentCommand = processInfo.command().orElse(null)
             ?: error("Olcbox cannot resolve its Windows launcher for administrator restart")
         val currentArguments = processInfo.arguments().orElse(emptyArray()).toList()
@@ -86,13 +86,33 @@ internal class WindowsTunController(
             currentArguments + ELEVATED_START_ARGUMENT
         }
 
-        runPowerShell(
+        val elevatedPid = runPowerShell(
             restartAsAdministratorScript(
                 command = currentCommand,
                 arguments = restartArguments,
                 workingDirectory = System.getProperty("user.dir").orEmpty()
             )
-        )
+        ).lineSequence()
+            .map(String::trim)
+            .lastOrNull { it.toLongOrNull() != null }
+            ?.toLongOrNull()
+            ?: error("Windows did not return the elevated Unified VPN process id")
+
+        delay(ELEVATED_PROCESS_START_WAIT_MS)
+        check(ProcessHandle.of(elevatedPid).orElse(null)?.isAlive == true) {
+            "Elevated Unified VPN exited before startup; use System proxy or run the app as administrator"
+        }
+    }
+
+    private fun windowsLauncherProcess(): ProcessHandle {
+        val processChain = generateSequence(ProcessHandle.current()) { handle ->
+            handle.parent().orElse(null)
+        }.toList()
+        return processChain.lastOrNull { handle ->
+            handle.info().command().orElse("")
+                .substringAfterLast('\\')
+                .equals("UnifiedVPN.exe", ignoreCase = true)
+        } ?: ProcessHandle.current()
     }
 
     private suspend fun waitForAdapter(process: Process) {
@@ -267,6 +287,7 @@ internal class WindowsTunController(
         const val TUN_READY_POLL_MS = 100L
         const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
+        const val ELEVATED_PROCESS_START_WAIT_MS = 1_500L
         const val ELEVATED_START_ARGUMENT = "--olcbox-start-vpn-after-elevation"
 
         fun tun2SocksCommand(
@@ -307,7 +328,8 @@ internal class WindowsTunController(
                   ArgumentList = $quotedArguments
                 $workingDirectoryLine
                 }
-                Start-Process @startArgs | Out-Null
+                ${'$'}process = Start-Process @startArgs -PassThru
+                ${'$'}process.Id
             """.trimIndent()
         }
 

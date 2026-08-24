@@ -71,6 +71,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -303,6 +305,7 @@ private fun SharedSettingsHubContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -378,6 +381,7 @@ private fun SharedConnectionSettingsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(top = 16.dp, bottom = 32.dp)
     ) {
@@ -425,6 +429,7 @@ private fun SharedConnectionModeSettingsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp)
     ) {
@@ -462,6 +467,7 @@ private fun SharedSocksProxySettingsContent(
     var editedPort by remember(settings.port) { mutableStateOf(settings.port.toString()) }
     var editedUsername by remember(settings.username) { mutableStateOf(settings.username) }
     var editedPassword by remember(settings.password) { mutableStateOf(settings.password) }
+    var passwordVisible by remember(settings.password) { mutableStateOf(false) }
     val parsedPort = editedPort.toIntOrNull()
     val portValid = parsedPort != null && ApplicationSocksProxySettings.isValidPort(parsedPort)
     val settingsChanged = parsedPort != settings.port ||
@@ -472,6 +478,7 @@ private fun SharedSocksProxySettingsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(top = 16.dp, bottom = 32.dp)
     ) {
@@ -537,7 +544,13 @@ private fun SharedSocksProxySettingsContent(
                     editedPassword != settings.password -> "Unsaved change"
                     else -> null
                 },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done
+                ),
+                sensitive = true,
+                sensitiveVisible = passwordVisible,
+                onSensitiveVisibilityChanged = { passwordVisible = it }
             )
 
             Row(
@@ -577,7 +590,10 @@ private fun SharedSocksProxyTextField(
     isError: Boolean,
     leadingIcon: ImageVector,
     supportingText: String?,
-    keyboardOptions: KeyboardOptions
+    keyboardOptions: KeyboardOptions,
+    sensitive: Boolean = false,
+    sensitiveVisible: Boolean = false,
+    onSensitiveVisibilityChanged: (Boolean) -> Unit = {}
 ) {
     OutlinedTextField(
         value = value,
@@ -589,7 +605,24 @@ private fun SharedSocksProxyTextField(
         isError = isError,
         leadingIcon = { Icon(leadingIcon, contentDescription = null) },
         supportingText = supportingText?.let { { Text(it) } },
-        keyboardOptions = keyboardOptions
+        keyboardOptions = keyboardOptions,
+        visualTransformation = if (sensitive && !sensitiveVisible) {
+            PasswordVisualTransformation()
+        } else {
+            VisualTransformation.None
+        },
+        trailingIcon = if (sensitive) {
+            {
+                SensitiveValueVisibilityButton(
+                    visible = sensitiveVisible,
+                    onVisibilityChanged = onSensitiveVisibilityChanged,
+                    valueLabel = label,
+                    enabled = value.isNotEmpty()
+                )
+            }
+        } else {
+            null
+        }
     )
 }
 

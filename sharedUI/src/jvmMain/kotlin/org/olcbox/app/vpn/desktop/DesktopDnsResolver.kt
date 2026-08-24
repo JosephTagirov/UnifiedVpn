@@ -13,10 +13,33 @@ internal object DesktopDnsResolver {
     fun current(): String {
         return when (DesktopPaths.os) {
             DesktopOs.Linux -> currentLinuxDnsServer() ?: FALLBACK_DNS_SERVER
+            DesktopOs.Windows -> currentWindowsDnsServer() ?: FALLBACK_DNS_SERVER
             DesktopOs.MacOS,
-            DesktopOs.Windows,
             DesktopOs.Other -> FALLBACK_DNS_SERVER
         }
+    }
+
+    private fun currentWindowsDnsServer(): String? {
+        val script = """
+            ${'$'}routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+              Where-Object { ${'$'}_.InterfaceAlias -ne '${WindowsTunController.TUN_NAME}' } |
+              Sort-Object RouteMetric, InterfaceMetric
+            foreach (${'$'}route in ${'$'}routes) {
+              ${'$'}servers = (Get-DnsClientServerAddress -InterfaceIndex ${'$'}route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
+              if (${'$'}servers) { ${'$'}servers; break }
+            }
+        """.trimIndent()
+        val output = runCommand(
+            listOf(
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script
+            )
+        ).orEmpty()
+        return selectWindowsDnsServer(output)
     }
 
     private fun currentLinuxDnsServer(): String? {
@@ -76,6 +99,14 @@ internal object DesktopDnsResolver {
             addAll(resolvConfNameservers(resolvConf))
         }.distinct()
 
+        val selected = candidates.firstOrNull { !isLoopback(it) }
+            ?: candidates.firstOrNull()
+            ?: return null
+        return dnsEndpoint(selected)
+    }
+
+    internal fun selectWindowsDnsServer(output: String): String? {
+        val candidates = ipAddresses(output).distinct()
         val selected = candidates.firstOrNull { !isLoopback(it) }
             ?: candidates.firstOrNull()
             ?: return null

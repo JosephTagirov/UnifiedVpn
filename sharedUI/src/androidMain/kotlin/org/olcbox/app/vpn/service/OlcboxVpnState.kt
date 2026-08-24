@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.vpn.VpnStatus
 
 object OlcboxVpnState {
@@ -22,8 +23,9 @@ object OlcboxVpnState {
     }
 
     fun addLog(msg: String) {
-        Log.d(TAG, msg)
-        _logs.update { (it + msg).takeLast(MAX_LOG_ENTRIES) }
+        val sanitized = sanitizeDiagnosticLogLine(msg)
+        Log.d(TAG, sanitized)
+        _logs.update { (it + sanitized).takeLast(MAX_LOG_ENTRIES) }
     }
 
     private const val MAX_LOG_ENTRIES = 1_000

@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.LocationsRepository
@@ -881,8 +882,9 @@ class DesktopVpnManager private constructor(
     }
 
     private fun addLog(message: String) {
+        val sanitized = sanitizeDiagnosticLogLine(message)
         _logs.update {
-            (it + message).takeLast(MAX_LOG_ENTRIES)
+            (it + sanitized).takeLast(MAX_LOG_ENTRIES)
         }
     }
 

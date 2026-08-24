@@ -1,5 +1,7 @@
 package org.olcbox.app.ui.provisioning
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -37,6 +40,7 @@ import kotlinx.coroutines.launch
 import org.olcbox.app.provisioning.SelfHostedProvisioner
 import org.olcbox.app.provisioning.SelfHostedServer
 import org.olcbox.app.provisioning.SshHostIdentity
+import org.olcbox.app.ui.components.SensitiveValueVisibilityButton
 
 @Composable
 fun SelfHostedSetupDialog(
@@ -49,6 +53,7 @@ fun SelfHostedSetupDialog(
     var port by rememberSaveable { mutableStateOf("22") }
     var username by rememberSaveable { mutableStateOf("root") }
     var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
     var trustedHost by remember { mutableStateOf<SshHostIdentity?>(null) }
     var progress by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -66,6 +71,7 @@ fun SelfHostedSetupDialog(
     fun close() {
         operation?.cancel()
         password = ""
+        passwordVisible = false
         onDismiss()
     }
 
@@ -84,7 +90,9 @@ fun SelfHostedSetupDialog(
         },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 when {
@@ -142,8 +150,20 @@ fun SelfHostedSetupDialog(
                             enabled = !isWorking,
                             singleLine = true,
                             label = { Text("SSH password") },
-                            visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                            visualTransformation = if (passwordVisible) {
+                                VisualTransformation.None
+                            } else {
+                                PasswordVisualTransformation()
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            trailingIcon = {
+                                SensitiveValueVisibilityButton(
+                                    visible = passwordVisible,
+                                    onVisibilityChanged = { passwordVisible = it },
+                                    valueLabel = "SSH password",
+                                    enabled = !isWorking && password.isNotEmpty()
+                                )
+                            }
                         )
                     }
                 }
@@ -172,6 +192,7 @@ fun SelfHostedSetupDialog(
                         operation = scope.launch {
                             try {
                                 trustedHost = provisioner.inspectHost(server)
+                                passwordVisible = false
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (failure: Exception) {
@@ -205,6 +226,7 @@ fun SelfHostedSetupDialog(
                                     scope.launch { progress = stage }
                                 }
                                 password = ""
+                                passwordVisible = false
                                 onProvisioned(config)
                             } catch (cancelled: CancellationException) {
                                 throw cancelled

@@ -33,7 +33,8 @@ val olcrtcAndroidAar = layout.buildDirectory.file("generated/olcrtc/olcrtc.aar")
 val olcrtcAndroidAarFile = olcrtcAndroidAar.get().asFile
 val olcrtcIosXcframework = layout.buildDirectory.dir("generated/olcrtc/ios/OlcRtcMobile.xcframework")
 val olcrtcIosXcframeworkDir = olcrtcIosXcframework.get().asFile
-val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.5")
+val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.6")
+val awgCoreCommitSha = providers.gradleProperty("olcbox.awgCoreSha").orElse("unknown")
 val olcboxVersionValue = olcboxVersion.get()
 val generatedAppInfoDir = layout.buildDirectory.dir("generated/source/olcboxAppInfo/commonMain")
 
@@ -44,6 +45,9 @@ abstract class GenerateAppInfoTask : DefaultTask() {
     @get:Input
     abstract val olcrtcSha: Property<String>
 
+    @get:Input
+    abstract val awgCoreSha: Property<String>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -53,6 +57,7 @@ abstract class GenerateAppInfoTask : DefaultTask() {
         packageDir.mkdirs()
         val escapedVersion = version.get().replace("\\", "\\\\").replace("\"", "\\\"")
         val escapedOlcrtcSha = olcrtcSha.get().replace("\\", "\\\\").replace("\"", "\\\"")
+        val escapedAwgCoreSha = awgCoreSha.get().replace("\\", "\\\\").replace("\"", "\\\"")
         packageDir.resolve("GeneratedAppInfo.kt").writeText(
             """
             package org.olcbox.app
@@ -62,6 +67,7 @@ abstract class GenerateAppInfoTask : DefaultTask() {
                 const val VERSION: String = "$escapedVersion"
                 const val SOURCE_ATTRIBUTION: String = "Based on Olcbox from GitHub"
                 const val OLCRTC_SHA: String = "$escapedOlcrtcSha"
+                const val AWG_CORE_SHA: String = "$escapedAwgCoreSha"
             }
             """.trimIndent() + "\n"
         )
@@ -127,6 +133,7 @@ val buildOlcrtcIosXcframework by tasks.registering(Exec::class) {
 val generateAppInfo by tasks.registering(GenerateAppInfoTask::class) {
     version.set(olcboxVersionValue)
     olcrtcSha.set(olcrtcCommitSha)
+    awgCoreSha.set(awgCoreCommitSha)
     outputDir.set(generatedAppInfoDir)
 }
 

@@ -10,7 +10,7 @@ RUN apk add --update --no-cache \
 WORKDIR /src
 COPY . /src
 
-RUN make
+RUN make clean && make
 
 FROM alpine:latest
 LABEL org.opencontainers.image.source="https://github.com/heiher/hev-socks5-tunnel"
@@ -22,6 +22,7 @@ ENV TUN=tun0 \
     MTU=8500 \
     IPV4=198.18.0.1 \
     IPV6='' \
+    ICMP=off \
     TABLE=20 \
     MARK=438 \
     SOCKS5_ADDR=172.17.0.1 \

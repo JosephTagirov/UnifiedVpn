@@ -100,6 +100,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -110,6 +112,7 @@ import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.model.formatSubscriptionRefreshInterval
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.data.share.SubscriptionShareItem
+import org.olcbox.app.ui.components.SensitiveValueVisibilityButton
 import org.olcbox.app.update.AppUpdateSettings
 import org.olcbox.app.ui.features.home.components.LogLines
 import org.olcbox.app.vpn.AndroidConnectionMode
@@ -379,6 +382,7 @@ private fun AppSettingsHubContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -444,7 +448,8 @@ private fun AppSettingsHubContent(
         ) {
             Text(
                 text = "${CurrentAppInfo.value.name} ${CurrentAppInfo.value.version} · " +
-                    "olcrtc ${CurrentAppInfo.value.olcrtcSha.take(12)}",
+                    "olcrtc ${CurrentAppInfo.value.olcrtcSha.take(12)} · " +
+                    "awg ${CurrentAppInfo.value.awgCoreSha.take(12)}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp
             )
@@ -466,6 +471,7 @@ private fun ConnectionSettingsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(top = 16.dp, bottom = 32.dp)
     ) {
@@ -515,6 +521,7 @@ private fun ConnectionModeSettingsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp)
     ) {
@@ -552,6 +559,7 @@ private fun SocksProxySettingsContent(
     var editedPort by remember(proxySettings.port) { mutableStateOf(proxySettings.port.toString()) }
     var editedUsername by remember(proxySettings.username) { mutableStateOf(proxySettings.username) }
     var editedPassword by remember(proxySettings.password) { mutableStateOf(proxySettings.password) }
+    var passwordVisible by remember(proxySettings.password) { mutableStateOf(false) }
     val parsedPort = editedPort.toIntOrNull()
     val hostValid = editedHost.isNotBlank()
     val portValid = parsedPort != null && AndroidSocksProxySettings.isValidPort(parsedPort)
@@ -570,6 +578,7 @@ private fun SocksProxySettingsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp)
     ) {
@@ -586,6 +595,7 @@ private fun SocksProxySettingsContent(
             port = editedPort,
             username = editedUsername,
             password = editedPassword,
+            passwordVisible = passwordVisible,
             hostValid = hostValid,
             portValid = portValid,
             hostChanged = hostChanged,
@@ -606,6 +616,7 @@ private fun SocksProxySettingsContent(
             },
             onUsernameChanged = { value -> editedUsername = value.take(MAX_PROXY_USERNAME_LENGTH) },
             onPasswordChanged = { value -> editedPassword = value.take(MAX_PROXY_PASSWORD_LENGTH) },
+            onPasswordVisibilityChanged = { passwordVisible = it },
             onSaveSettings = {
                 onProxySettingsSaved(
                     editedHost,
@@ -634,6 +645,7 @@ private fun SplitTunnelingSettingsContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
             .padding(bottom = 32.dp)
     ) {
@@ -2287,6 +2299,7 @@ private fun SocksProxySettingsForm(
     port: String,
     username: String,
     password: String,
+    passwordVisible: Boolean,
     hostValid: Boolean,
     portValid: Boolean,
     hostChanged: Boolean,
@@ -2300,6 +2313,7 @@ private fun SocksProxySettingsForm(
     onPortChanged: (String) -> Unit,
     onUsernameChanged: (String) -> Unit,
     onPasswordChanged: (String) -> Unit,
+    onPasswordVisibilityChanged: (Boolean) -> Unit,
     onSaveSettings: () -> Unit,
     onRegeneratePassword: () -> Unit
 ) {
@@ -2383,7 +2397,13 @@ private fun SocksProxySettingsForm(
                     passwordChanged -> "Unsaved change"
                     else -> null
                 },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done
+                ),
+                sensitive = true,
+                sensitiveVisible = passwordVisible,
+                onSensitiveVisibilityChanged = onPasswordVisibilityChanged
             )
         }
 
@@ -2423,7 +2443,10 @@ private fun SocksProxyTextField(
     isError: Boolean,
     leadingIcon: ImageVector,
     supportingText: String?,
-    keyboardOptions: KeyboardOptions
+    keyboardOptions: KeyboardOptions,
+    sensitive: Boolean = false,
+    sensitiveVisible: Boolean = false,
+    onSensitiveVisibilityChanged: (Boolean) -> Unit = {}
 ) {
     OutlinedTextField(
         value = value,
@@ -2436,7 +2459,24 @@ private fun SocksProxyTextField(
         isError = isError,
         leadingIcon = { Icon(leadingIcon, contentDescription = null) },
         supportingText = supportingText?.let { { Text(it) } },
-        keyboardOptions = keyboardOptions
+        keyboardOptions = keyboardOptions,
+        visualTransformation = if (sensitive && !sensitiveVisible) {
+            PasswordVisualTransformation()
+        } else {
+            VisualTransformation.None
+        },
+        trailingIcon = if (sensitive) {
+            {
+                SensitiveValueVisibilityButton(
+                    visible = sensitiveVisible,
+                    onVisibilityChanged = onSensitiveVisibilityChanged,
+                    valueLabel = label,
+                    enabled = enabled && value.isNotEmpty()
+                )
+            }
+        } else {
+            null
+        }
     )
 }
 

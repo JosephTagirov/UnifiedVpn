@@ -19,6 +19,7 @@ import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.VpnProfileConfig
+import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.repository.LocationImportResult
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.FriendAccessPackageCodec
@@ -468,7 +469,7 @@ class HomeScreenViewModel(
             appendLine("Entries: ${logs.size}")
             appendLine()
             logs.forEachIndexed { index, line ->
-                appendLine("${index + 1}. $line")
+                appendLine("${index + 1}. ${sanitizeDiagnosticLogLine(line)}")
             }
         }
     }

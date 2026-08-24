@@ -3,7 +3,6 @@ package org.olcbox.app.ui.theme
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
@@ -40,7 +39,7 @@ actual fun AppTheme(
             colorScheme = colorScheme,
             typography = typography
         ) {
-            ProvideTextStyle(MaterialTheme.typography.bodyMedium, content)
+            AppThemeContent(content)
         }
     }
 }

@@ -13,9 +13,12 @@ class AndroidConfigImporter(private val context: Context) : ConfigImporter {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = clipboard.primaryClip
         if (clip != null && clip.itemCount > 0) {
-            val text = clip.getItemAt(0).text?.toString()
+            val text = runCatching {
+                clip.getItemAt(0).coerceToText(context)?.toString()
+                    ?.let(ClipboardPayloadCodec::decodeOrOriginal)
+            }.getOrNull()
             if (text.isNullOrBlank()) {
-                Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Clipboard is empty or invalid", Toast.LENGTH_SHORT).show()
             }
             return text
         }
@@ -24,10 +27,16 @@ class AndroidConfigImporter(private val context: Context) : ConfigImporter {
     }
 
     override fun copyToClipboard(text: String) {
-        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newPlainText("Unified VPN locations", text)
-        clipboard.setPrimaryClip(clip)
-        Toast.makeText(context, "Config copied to clipboard", Toast.LENGTH_SHORT).show()
+        runCatching {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val payload = ClipboardPayloadCodec.encode(text)
+            val clip = ClipData.newPlainText("Unified VPN locations", payload)
+            clipboard.setPrimaryClip(clip)
+        }.onSuccess {
+            Toast.makeText(context, "Config copied to clipboard", Toast.LENGTH_SHORT).show()
+        }.onFailure {
+            Toast.makeText(context, "Config is too large for the clipboard", Toast.LENGTH_LONG).show()
+        }
     }
 
     override suspend fun readTextFromSource(source: Any): String? {
@@ -35,7 +44,7 @@ class AndroidConfigImporter(private val context: Context) : ConfigImporter {
             return try {
                 context.contentResolver.openInputStream(source)?.use { inputStream ->
                     BufferedReader(InputStreamReader(inputStream)).use { reader ->
-                        reader.readText()
+                        ClipboardPayloadCodec.decodeOrOriginal(reader.readText())
                     }
                 }
             } catch (e: Exception) {

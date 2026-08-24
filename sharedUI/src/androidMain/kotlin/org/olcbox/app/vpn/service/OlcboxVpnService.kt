@@ -1,11 +1,13 @@
 package org.olcbox.app.vpn.service
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -34,7 +36,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import mobile.LogWriter
 import mobile.Mobile
 import mobile.SocketProtector
 import org.olcbox.app.data.TUN2SOCKS_CONFIG_FILE_NAME
@@ -80,11 +81,13 @@ import kotlin.coroutines.coroutineContext
 class OlcboxVpnService : VpnService() {
 
     private external fun startTun2socksNative(configPath: String, fd: Int): Int
-    private external fun stopTun2socksNative()
+    private external fun stopTun2socksNative(): Boolean
+    private external fun isTun2socksRunningNative(): Boolean
     private external fun getTun2socksStatsNative(): LongArray
 
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Default + job)
+    private val olcRtcRuntime = Mobile.new_()
     private val tunnelMutex = Mutex()
     private val repository: LocationsRepository by lazy {
         LocationsRepositoryImpl(LocationsDataSourceImpl(applicationContext))
@@ -116,6 +119,7 @@ class OlcboxVpnService : VpnService() {
     private var lastJitsiStopCompletedAtMs = 0L
 
     private var vpnInterface: ParcelFileDescriptor? = null
+    @Volatile
     private var tun2socksThread: Thread? = null
     @Volatile
     private var tun2socksStarted = false
@@ -235,7 +239,7 @@ class OlcboxVpnService : VpnService() {
 
                 is VpnStatus.Reconnecting -> {
                     if (isBenignWifiRefresh(previousTransport, nextTransport) &&
-                        Mobile.isRunning() &&
+                        olcRtcRuntime.isRunning &&
                         canReconnectTransportInPlace()
                     ) {
                         setStatus(VpnStatus.Connected)
@@ -310,19 +314,10 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun installMobileCallbacks() {
-        Mobile.setProtector(object : SocketProtector {
+        olcRtcRuntime.setProtector(object : SocketProtector {
             override fun protect(fd: Long): Boolean {
                 if (connectionMode == AndroidConnectionMode.Proxy) return true
                 return this@OlcboxVpnService.protect(fd.toInt())
-            }
-        })
-        Mobile.setProviders()
-        Mobile.setLogWriter(object : LogWriter {
-            override fun writeLog(msg: String) {
-                val line = msg.trimEnd()
-                addLog("rtc: $line")
-                Log.v("olcrtc", line)
-                handleRtcLine(line)
             }
         })
     }
@@ -763,30 +758,20 @@ class OlcboxVpnService : VpnService() {
             }
             waitForJitsiRoomCleanup(config.bypassProvider)
             bindProcessToNetwork(upstream, "Bound to ${getNetName(upstream)}")
-            configureMobileTransport(config)
+            configureMobileRuntime(config, deviceId, targetSocksPort)
             addLog(
                 "Starting olcRTC provider=${config.bypassProvider}, " +
                     "transport=${config.transport}, room=${config.id}"
             )
             lastMobileProvider = config.bypassProvider
-            Mobile.startWithTransport(
-                config.bypassProvider,
-                config.transport,
-                config.id,
-                deviceId,
-                config.key,
-                targetSocksPort.toLong(),
-                socksUsername,
-                socksPassword
-            )
-            Mobile.waitReady(MOBILE_READY_TIMEOUT_MS)
+            olcRtcRuntime.start()
+            olcRtcRuntime.waitReady(MOBILE_READY_TIMEOUT_MS)
             if (requestedGeneration != generation) {
                 addLog("olcRTC start superseded")
                 return false
             }
             coroutineContext.ensureActive()
             addLog("olcRTC ready on $socksListenHost:$targetSocksPort")
-            addLog("username: $socksUsername, password: $socksPassword")
             markRtcConnected()
             if (keepProcessBound) {
                 addLog("Keeping olcRTC bound to ${getNetName(upstream)}")
@@ -815,7 +800,7 @@ class OlcboxVpnService : VpnService() {
             }
             false
         } finally {
-            if (!keepProcessBound || !Mobile.isRunning()) {
+            if (!keepProcessBound || !olcRtcRuntime.isRunning) {
                 unbindProcessFromNetwork()
             }
         }
@@ -832,18 +817,31 @@ class OlcboxVpnService : VpnService() {
         delay(waitMs)
     }
 
-    private fun configureMobileTransport(location: LocationConfig) {
+    private fun configureMobileRuntime(
+        location: LocationConfig,
+        deviceId: String,
+        socksPort: Int
+    ) {
         val config = location.normalized()
-        Mobile.setProviders()
-        Mobile.setTransport(config.transport)
-        Mobile.setDNS(config.dnsServer.ifBlank { DEFAULT_OLCRTC_DNS_SERVER })
-        Mobile.setSocksListenHost(socksListenHost)
-        Mobile.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
+        olcRtcRuntime.setProvider(config.bypassProvider)
+        olcRtcRuntime.setTransport(config.transport)
+        olcRtcRuntime.setRoom(config.id)
+        olcRtcRuntime.setKey(config.key)
+        olcRtcRuntime.setDeviceID(deviceId)
+        olcRtcRuntime.setDNS(resolveOlcRtcDnsServer(config.dnsServer))
+        olcRtcRuntime.setSocksListenHost(socksListenHost)
+        olcRtcRuntime.setSocksPort(socksPort.toLong())
+        olcRtcRuntime.setSocksCredentials(socksUsername, socksPassword)
+        olcRtcRuntime.setVP8Options(config.vp8Fps.toLong(), config.vp8Batch.toLong())
     }
 
     private fun startTun2socks(pfd: ParcelFileDescriptor): Boolean {
         return try {
-            if (tun2socksThread?.isAlive == true || tun2socksStarted) {
+            if (
+                tun2socksThread?.isAlive == true ||
+                tun2socksStarted ||
+                isNativeTun2socksActive()
+            ) {
                 addLog("Refusing to start a second tun2socks instance")
                 setStatus(VpnStatus.Error("Previous VPN tunnel is still stopping"))
                 updateNotification("Tunnel restart failed")
@@ -1026,7 +1024,7 @@ class OlcboxVpnService : VpnService() {
             while (isActive && OlcboxVpnState.status.value is VpnStatus.Connected) {
                 delay(WATCHDOG_INTERVAL_MS)
                 when {
-                    activeProfileType == VpnProfileConfig.TYPE_OLCRTC && !Mobile.isRunning() -> {
+                    activeProfileType == VpnProfileConfig.TYPE_OLCRTC && !olcRtcRuntime.isRunning -> {
                         addLog("Watchdog: olcRTC stopped")
                         requestTransportRecovery("olcRTC stopped", fullRestart = false)
                         return@launch
@@ -1152,9 +1150,9 @@ class OlcboxVpnService : VpnService() {
     }
 
     private suspend fun waitForTun2socksStopped(thread: Thread?): Boolean {
-        if (thread == null) return true
+        if (thread == null && !isNativeTun2socksActive()) return true
         val stopped = withTimeoutOrNull(TUN2SOCKS_STOP_WAIT_MS) {
-            while (thread.isAlive) {
+            while (thread?.isAlive == true || isNativeTun2socksActive()) {
                 delay(SOCKS_RELEASE_POLL_MS)
             }
             true
@@ -1191,16 +1189,26 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun stopTun2socks() {
-        if (nativeLibrariesLoaded && tun2socksStarted && !tun2socksStopRequested) {
+        if (
+            nativeLibrariesLoaded &&
+            (tun2socksStarted || isNativeTun2socksActive()) &&
+            !tun2socksStopRequested
+        ) {
             tun2socksStopRequested = true
             runCatching { stopTun2socksNative() }
+                .onFailure { addLog("tun2socks stop request failed: ${it.message}") }
         }
+    }
+
+    private fun isNativeTun2socksActive(): Boolean {
+        if (!nativeLibrariesLoaded) return false
+        return runCatching { isTun2socksRunningNative() }.getOrDefault(false)
     }
 
     private fun stopMobile() {
         val provider = lastMobileProvider
-        val wasRunning = Mobile.isRunning()
-        runCatching { Mobile.stop() }
+        val wasRunning = olcRtcRuntime.isRunning
+        runCatching { olcRtcRuntime.stop(MOBILE_STOP_TIMEOUT_MS) }
         if (wasRunning && provider == LocationConfig.PROVIDER_JITSI) {
             lastJitsiStopCompletedAtMs = System.currentTimeMillis()
         }
@@ -1246,6 +1254,32 @@ class OlcboxVpnService : VpnService() {
 
     private fun isLocalSocksPortOpen(port: Int): Boolean {
         return isLocalSocksPortOpen(port, socksConnectHost())
+    }
+
+    private fun resolveOlcRtcDnsServer(configuredDnsServer: String): String {
+        if (configuredDnsServer.isNotBlank()) {
+            addLog("Using configured DNS server $configuredDnsServer for olcRTC signaling")
+            return configuredDnsServer
+        }
+
+        val upstreamDnsServer = currentNetwork
+            ?.let(connectivityManager::getLinkProperties)
+            ?.dnsServers
+            ?.asSequence()
+            ?.filterNot { it.isAnyLocalAddress || it.isLoopbackAddress || it.isMulticastAddress }
+            ?.sortedBy { it.address.size }
+            ?.mapNotNull { it.hostAddress }
+            ?.map(::dnsEndpoint)
+            ?.firstOrNull()
+
+        val selectedDnsServer = upstreamDnsServer ?: DEFAULT_OLCRTC_DNS_SERVER
+        val source = if (upstreamDnsServer != null) "upstream" else "fallback"
+        addLog("Using $source DNS server $selectedDnsServer for olcRTC signaling")
+        return selectedDnsServer
+    }
+
+    private fun dnsEndpoint(address: String): String {
+        return if (':' in address) "[$address]:53" else "$address:53"
     }
 
     private fun isLocalSocksPortOpen(port: Int, host: String): Boolean {
@@ -1352,7 +1386,7 @@ class OlcboxVpnService : VpnService() {
         val txDelta = stats.txPackets - previous.txPackets
         val rxDelta = stats.rxPackets - previous.rxPackets
         val transportRunning = if (activeProfileType == VpnProfileConfig.TYPE_OLCRTC) {
-            Mobile.isRunning()
+            olcRtcRuntime.isRunning
         } else {
             externalEngine?.isRunning == true
         }
@@ -1494,7 +1528,7 @@ class OlcboxVpnService : VpnService() {
         return when (connectionMode) {
             AndroidConnectionMode.Tun -> {
                 val transportRunning = if (activeProfileType == VpnProfileConfig.TYPE_OLCRTC) {
-                    Mobile.isRunning()
+                    olcRtcRuntime.isRunning
                 } else {
                     externalEngine?.isRunning == true
                 }
@@ -1502,7 +1536,7 @@ class OlcboxVpnService : VpnService() {
             }
             AndroidConnectionMode.Proxy -> {
                 if (activeProfileType == VpnProfileConfig.TYPE_OLCRTC) {
-                    Mobile.isRunning()
+                    olcRtcRuntime.isRunning
                 } else {
                     externalEngine?.isRunning == true
                 }
@@ -1525,7 +1559,7 @@ class OlcboxVpnService : VpnService() {
             tun2socksThread != null ||
             socksProxy != null ||
             externalEngine != null ||
-            Mobile.isRunning()
+            olcRtcRuntime.isRunning
     }
 
     private fun registerNetworkMonitor() {
@@ -1656,11 +1690,19 @@ class OlcboxVpnService : VpnService() {
             .notify(NOTIFICATION_ID, buildNotification(status))
     }
 
-    private fun buildNotification(status: String) =
-        NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+    private fun buildNotification(status: String): Notification {
+        val smallIcon = resources.getIdentifier("ic_qs_tile", "mipmap", packageName)
+            .takeIf { it != 0 }
+            ?: android.R.drawable.ic_dialog_info
+        val largeIcon = runCatching {
+            BitmapFactory.decodeResource(resources, applicationInfo.icon)
+        }.getOrNull()
+
+        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Unified VPN")
             .setContentText(status)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(smallIcon)
+            .setLargeIcon(largeIcon)
             .setOngoing(true)
             .setContentIntent(getAppPendingIntent())
             .addAction(
@@ -1675,6 +1717,7 @@ class OlcboxVpnService : VpnService() {
             )
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
 
     private fun getAppPendingIntent(): PendingIntent {
         return PendingIntent.getActivity(
@@ -1895,6 +1938,7 @@ class OlcboxVpnService : VpnService() {
         private const val LOCAL_SOCKS_PORT_MAX = 10858
         private const val DEFAULT_OLCRTC_DNS_SERVER = "1.1.1.1:53"
         private const val MOBILE_READY_TIMEOUT_MS = 25_000L
+        private const val MOBILE_STOP_TIMEOUT_MS = 5_000L
         private const val JITSI_RESTART_SETTLE_MS = 2_000L
         private const val TUN2SOCKS_STOP_WAIT_MS = 10_000L
         private const val TUNNEL_HANDOFF_DELAY_MS = 300L

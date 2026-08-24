@@ -86,8 +86,6 @@ class DesktopProxyModeTest {
 
             assertEquals(listOf(binary.toString(), configPath.toString()), args)
             assertContains(yaml, "mode: cnc")
-            assertContains(yaml, "link: direct")
-            assertContains(yaml, "data: 'data'")
             assertContains(yaml, "provider: '${OlcRtcCommand.desktopProviderArg(provider)}'")
             assertContains(yaml, "transport: '$expectedTransport'")
             assertContains(yaml, "id: 'room-$provider'")
@@ -101,6 +99,8 @@ class DesktopProxyModeTest {
                 assertContains(yaml, "batch_size: 64")
             }
             assertTrue("client-id" !in yaml)
+            assertTrue("link:" !in yaml)
+            assertTrue("data:" !in yaml)
         }
     }
 
@@ -307,6 +307,8 @@ class DesktopProxyModeTest {
         assertContains(script, "ArgumentList = '--flag \"C:/Path With Space/data\"'")
         assertContains(script, "WorkingDirectory = 'C:/Olcbox Data'")
         assertContains(script, "Start-Process @startArgs")
+        assertContains(script, "-PassThru")
+        assertContains(script, "${'$'}process.Id")
     }
 
     @Test
@@ -358,5 +360,14 @@ class DesktopProxyModeTest {
         )
 
         assertEquals("wlan0", interfaceName)
+    }
+
+    @Test
+    fun windowsDnsResolverUsesPhysicalAdapterDnsAndSkipsLoopback() {
+        val dns = DesktopDnsResolver.selectWindowsDnsServer(
+            "127.0.0.1\r\n192.168.1.1\r\n"
+        )
+
+        assertEquals("192.168.1.1:53", dns)
     }
 }

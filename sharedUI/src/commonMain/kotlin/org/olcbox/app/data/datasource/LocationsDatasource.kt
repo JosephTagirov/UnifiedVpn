@@ -484,6 +484,12 @@ class LocationsRepositoryImpl(
         }
     }
 
+    private fun List<LocationEntry>.replaceEntry(entry: LocationEntry): List<LocationEntry> {
+        val index = indexOfFirst { it.storageId == entry.storageId }
+        if (index < 0) return this + entry
+        return toMutableList().also { it[index] = entry }
+    }
+
     override suspend fun saveLocation(storageId: String, location: LocationConfig) {
         mutationMutex.withLock {
             val normalizedId = storageId.ifBlank { location.storageSlug() }
@@ -495,8 +501,7 @@ class LocationsRepositoryImpl(
                 subscriptionUrl = current?.subscriptionUrl,
                 metadata = current?.metadata
             )
-            val locations = bundle.locations
-                .filterNot { it.storageId == entry.storageId } + entry
+            val locations = bundle.locations.replaceEntry(entry)
 
             saveBundleUnlocked(
                 bundle.copy(
@@ -504,6 +509,46 @@ class LocationsRepositoryImpl(
                     locations = locations
                 )
             )
+        }
+    }
+
+    override suspend fun saveProfile(storageId: String, profile: VpnProfileConfig) {
+        mutationMutex.withLock {
+            val normalizedProfile = profile.normalized()
+            val normalizedId = storageId.ifBlank {
+                "profile_${normalizedProfile.normalizedType}_${(100..999).random()}"
+            }
+            val bundle = getBundleUnlocked()
+            val current = bundle.locations.firstOrNull { it.storageId == normalizedId }
+            val entry = LocationEntry.fromProfile(
+                storageId = normalizedId,
+                profile = normalizedProfile,
+                subscriptionUrl = current?.subscriptionUrl,
+                metadata = current?.metadata
+            )
+
+            saveBundleUnlocked(
+                bundle.copy(
+                    activeLocationId = entry.storageId,
+                    locations = bundle.locations.replaceEntry(entry)
+                )
+            )
+        }
+    }
+
+    override suspend fun moveLocation(storageId: String, targetStorageId: String) {
+        if (storageId == targetStorageId) return
+        mutationMutex.withLock {
+            val bundle = getBundleUnlocked()
+            val currentIndex = bundle.locations.indexOfFirst { it.storageId == storageId }
+            val targetIndex = bundle.locations.indexOfFirst { it.storageId == targetStorageId }
+            if (currentIndex < 0 || targetIndex < 0) return@withLock
+
+            val reordered = bundle.locations.toMutableList()
+            val current = reordered[currentIndex]
+            reordered[currentIndex] = reordered[targetIndex]
+            reordered[targetIndex] = current
+            saveBundleUnlocked(bundle.copy(locations = reordered))
         }
     }
 

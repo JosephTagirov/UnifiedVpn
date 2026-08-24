@@ -12,6 +12,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -35,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -43,6 +46,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.abs
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.util.parseEmojiAndName
@@ -57,6 +62,7 @@ fun LocationRow(
     isError: Boolean = false,
     settingsEnabled: Boolean = true,
     onSettingsClick: () -> Unit = {},
+    onMoveRequested: (Int) -> Unit = {},
     onClick: () -> Unit
 ) {
     val bgColor by animateColorAsState(
@@ -77,6 +83,7 @@ fun LocationRow(
     )
     val borderWidth = if (isSelected) 2.dp else 1.dp
     val textColor = MaterialTheme.colorScheme.onSurface
+    val reorderThresholdPx = with(LocalDensity.current) { 44.dp.toPx() }
 
     val metadata = location.metadata
     val rawName = metadata?.name?.takeIf { it.isNotBlank() } ?: location.fullName
@@ -149,6 +156,34 @@ fun LocationRow(
         }
 
         Spacer(modifier = Modifier.width(12.dp))
+
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .size(40.dp)
+                .pointerInput(location.storageId) {
+                    var accumulatedDistance = 0f
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { accumulatedDistance = 0f },
+                        onDragCancel = { accumulatedDistance = 0f },
+                        onDragEnd = { accumulatedDistance = 0f },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            accumulatedDistance += dragAmount.y
+                            if (abs(accumulatedDistance) >= reorderThresholdPx) {
+                                onMoveRequested(if (accumulatedDistance > 0f) 1 else -1)
+                                accumulatedDistance = 0f
+                            }
+                        }
+                    )
+                }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.DragHandle,
+                contentDescription = "Hold and drag to reorder",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
 
         if (settingsEnabled) {
             IconButton(

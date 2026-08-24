@@ -25,7 +25,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MeetingRoom
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.Button
@@ -55,7 +57,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -63,10 +64,10 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.ui.components.PingButton
+import org.olcbox.app.ui.components.SensitiveValueVisibilityButton
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -119,43 +120,38 @@ fun LocationSettingsScreen(
         config.transport,
         config.bypassProvider
     )
-    val density = LocalDensity.current
-    val isKeyboardVisible = WindowInsets.ime.getBottom(density) > 0
-
     Scaffold(
         topBar = {
             LocationSettingsTopBar(
-                shareEnabled = viewModel.isFormValid && !isSaving,
+                shareEnabled = viewModel.isEditingOlcRtc && viewModel.isFormValid && !isSaving,
                 onBack = onBack,
                 onShare = { onShareLocationRequested(viewModel.editingConfig) }
             )
         },
         bottomBar = {
-            if (!isKeyboardVisible) {
-                Column {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    ActionsBar(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 24.dp, vertical = 16.dp),
-                        showDelete = viewModel.editingId != null,
-                        isSaving = isSaving,
-                        isFormValid = viewModel.isFormValid,
-                        onDelete = {
-                            viewModel.editingId?.let { id ->
-                                viewModel.deleteLocation(id) { onBack() }
-                            } ?: onBack()
-                        },
-                        onSave = {
-                            viewModel.saveEditing {
-                                homeViewModel.loadCurrentConfig()
-                                homeViewModel.restartVpnIfRunning()
-                                onBack()
-                            }
+            Column(modifier = Modifier.imePadding()) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                ActionsBar(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
+                    showDelete = viewModel.editingId != null,
+                    isSaving = isSaving,
+                    isFormValid = viewModel.isFormValid,
+                    onDelete = {
+                        viewModel.editingId?.let { id ->
+                            viewModel.deleteLocation(id) { onBack() }
+                        } ?: onBack()
+                    },
+                    onSave = {
+                        viewModel.saveEditing {
+                            homeViewModel.loadCurrentConfig()
+                            homeViewModel.restartVpnIfRunning()
+                            onBack()
                         }
-                    )
-                }
+                    }
+                )
             }
         }
     ) { innerPadding ->
@@ -182,105 +178,191 @@ fun LocationSettingsScreen(
                 )
             }
 
-            item {
-                ConnectionTypePicker(
-                    selectedProvider = config.bypassProvider,
-                    serviceProvider = viewModel.editingServiceProvider,
-                    enabled = !isSaving,
-                    onProviderSelected = viewModel::onBypassProviderChanged
-                )
-            }
-
-            if (!isJitsiProvider(config.bypassProvider)) {
+            if (viewModel.isEditingOlcRtc) {
                 item {
-                    ProviderPicker(
+                    ConnectionTypePicker(
                         selectedProvider = config.bypassProvider,
+                        serviceProvider = viewModel.editingServiceProvider,
                         enabled = !isSaving,
                         onProviderSelected = viewModel::onBypassProviderChanged
                     )
                 }
-            }
 
-            if (LocationConfig.supportedTransportsForProvider(config.bypassProvider).size > 1) {
+                if (!isJitsiProvider(config.bypassProvider)) {
+                    item {
+                        ProviderPicker(
+                            selectedProvider = config.bypassProvider,
+                            enabled = !isSaving,
+                            onProviderSelected = viewModel::onBypassProviderChanged
+                        )
+                    }
+                }
+
+                if (LocationConfig.supportedTransportsForProvider(config.bypassProvider).size > 1) {
+                    item {
+                        TransportPicker(
+                            selectedProvider = config.bypassProvider,
+                            selectedTransport = config.transport,
+                            enabled = !isSaving,
+                            onTransportSelected = viewModel::onTransportChanged
+                        )
+                    }
+                }
+
+                if (normalizedTransport == LocationConfig.TRANSPORT_VP8CHANNEL) {
+                    item {
+                        Vp8OptionsCard(
+                            fps = config.vp8Fps,
+                            batch = config.vp8Batch,
+                            enabled = !isSaving,
+                            onFpsChanged = viewModel::onVp8FpsChanged,
+                            onBatchChanged = viewModel::onVp8BatchChanged
+                        )
+                    }
+                }
+
                 item {
-                    TransportPicker(
-                        selectedProvider = config.bypassProvider,
-                        selectedTransport = config.transport,
+                    SettingsTextField(
+                        value = config.id,
+                        onValueChange = viewModel::onServerChanged,
+                        label = roomIdLabel(config.bypassProvider),
+                        placeholder = roomIdPlaceholder(config.bypassProvider),
                         enabled = !isSaving,
-                        onTransportSelected = viewModel::onTransportChanged
+                        isError = viewModel.serverError != null,
+                        supportingText = viewModel.serverError,
+                        leadingIcon = Icons.Rounded.MeetingRoom,
+                        onClear = { viewModel.onServerChanged("") },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = roomKeyboardType(config.bypassProvider),
+                            imeAction = ImeAction.Next
+                        )
+                    )
+                }
+
+                item {
+                    SettingsTextField(
+                        value = config.key,
+                        onValueChange = viewModel::onPasswordChanged,
+                        label = "Encryption key",
+                        placeholder = "64 hex characters",
+                        enabled = !isSaving,
+                        isError = viewModel.keyError != null,
+                        supportingText = viewModel.keyError,
+                        leadingIcon = Icons.Rounded.Key,
+                        onClear = { viewModel.onPasswordChanged("") },
+                        sensitive = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        )
+                    )
+                }
+
+                item {
+                    SettingsTextField(
+                        value = config.dnsServer,
+                        onValueChange = viewModel::onDnsServerChanged,
+                        label = "DNS server (optional)",
+                        placeholder = "Auto, or 1.1.1.1:53",
+                        enabled = !isSaving,
+                        isError = viewModel.dnsError != null,
+                        supportingText = viewModel.dnsError,
+                        leadingIcon = Icons.Rounded.Public,
+                        onClear = { viewModel.onDnsServerChanged("") },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Done
+                        )
+                    )
+                }
+
+                item {
+                    PingButton(
+                        homeViewModel = homeViewModel,
+                        configGetter = { viewModel.editingConfig }
+                    )
+                }
+            } else {
+                item {
+                    ProfileTypePicker(
+                        selectedType = viewModel.editingProfile.normalizedType,
+                        enabled = !isSaving,
+                        onTypeSelected = viewModel::onProfileTypeChanged
+                    )
+                }
+                item {
+                    SettingsTextField(
+                        value = viewModel.editingProfile.uri.orEmpty(),
+                        onValueChange = viewModel::onProfileUriChanged,
+                        label = "Profile URI (optional)",
+                        placeholder = "vless://, awg://, or vpn://",
+                        enabled = !isSaving,
+                        isError = false,
+                        supportingText = null,
+                        leadingIcon = Icons.Rounded.Link,
+                        onClear = { viewModel.onProfileUriChanged("") },
+                        sensitive = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Next
+                        )
+                    )
+                }
+                item {
+                    SettingsTextField(
+                        value = viewModel.editingProfile.rawConfig.orEmpty(),
+                        onValueChange = viewModel::onProfileRawConfigChanged,
+                        label = "Raw configuration (optional)",
+                        placeholder = "Paste the complete profile configuration",
+                        enabled = !isSaving,
+                        isError = viewModel.profileError != null,
+                        supportingText = viewModel.profileError,
+                        leadingIcon = Icons.Rounded.Code,
+                        onClear = { viewModel.onProfileRawConfigChanged("") },
+                        sensitive = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        singleLine = false,
+                        minLines = 5
+                    )
+                }
+                item {
+                    SettingsTextField(
+                        value = viewModel.editingProfile.localSocksHost.orEmpty(),
+                        onValueChange = viewModel::onLocalSocksHostChanged,
+                        label = "Local SOCKS host (optional)",
+                        placeholder = "127.0.0.1",
+                        enabled = !isSaving,
+                        isError = false,
+                        supportingText = null,
+                        leadingIcon = Icons.Rounded.Public,
+                        onClear = { viewModel.onLocalSocksHostChanged("") },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Next
+                        )
+                    )
+                }
+                item {
+                    SettingsTextField(
+                        value = viewModel.editingLocalSocksPort,
+                        onValueChange = viewModel::onLocalSocksPortChanged,
+                        label = "Local SOCKS port (optional)",
+                        placeholder = "1080",
+                        enabled = !isSaving,
+                        isError = viewModel.localSocksPortError != null,
+                        supportingText = viewModel.localSocksPortError,
+                        leadingIcon = Icons.Rounded.Public,
+                        onClear = { viewModel.onLocalSocksPortChanged("") },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done
+                        )
                     )
                 }
             }
 
-            if (normalizedTransport == LocationConfig.TRANSPORT_VP8CHANNEL) {
-                item {
-                    Vp8OptionsCard(
-                        fps = config.vp8Fps,
-                        batch = config.vp8Batch,
-                        enabled = !isSaving,
-                        onFpsChanged = viewModel::onVp8FpsChanged,
-                        onBatchChanged = viewModel::onVp8BatchChanged
-                    )
-                }
-            }
-
             item {
-                SettingsTextField(
-                    value = config.id,
-                    onValueChange = viewModel::onServerChanged,
-                    label = roomIdLabel(config.bypassProvider),
-                    placeholder = roomIdPlaceholder(config.bypassProvider),
-                    enabled = !isSaving,
-                    isError = viewModel.serverError != null,
-                    supportingText = viewModel.serverError,
-                    leadingIcon = Icons.Rounded.MeetingRoom,
-                    onClear = { viewModel.onServerChanged("") },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = roomKeyboardType(config.bypassProvider),
-                        imeAction = ImeAction.Next
-                    )
-                )
-            }
-
-            item {
-                SettingsTextField(
-                    value = config.key,
-                    onValueChange = viewModel::onPasswordChanged,
-                    label = "Encryption key",
-                    placeholder = "64 hex characters",
-                    enabled = !isSaving,
-                    isError = viewModel.keyError != null,
-                    supportingText = viewModel.keyError,
-                    leadingIcon = Icons.Rounded.Key,
-                    onClear = { viewModel.onPasswordChanged("") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
-                )
-            }
-
-            item {
-                SettingsTextField(
-                    value = config.dnsServer,
-                    onValueChange = viewModel::onDnsServerChanged,
-                    label = "DNS server (optional)",
-                    placeholder = "Auto, or 1.1.1.1:53",
-                    enabled = !isSaving,
-                    isError = viewModel.dnsError != null,
-                    supportingText = viewModel.dnsError,
-                    leadingIcon = Icons.Rounded.Public,
-                    onClear = { viewModel.onDnsServerChanged("") },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Uri,
-                        imeAction = ImeAction.Done
-                    )
-                )
-            }
-
-            item {
-                PingButton(
-                    homeViewModel = homeViewModel,
-                    configGetter = { viewModel.editingConfig }
-                )
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -379,6 +461,27 @@ private fun ProviderPicker(
         enabled = enabled,
         onValueSelected = onProviderSelected,
         valueLabel = LocationConfig::providerDisplayName
+    )
+}
+
+@Composable
+private fun ProfileTypePicker(
+    selectedType: String,
+    enabled: Boolean,
+    onTypeSelected: (String) -> Unit
+) {
+    val options = listOf(
+        VpnProfileConfig.TYPE_VLESS,
+        VpnProfileConfig.TYPE_AMNEZIA_WG,
+        VpnProfileConfig.TYPE_AMNEZIA_VPN
+    )
+    SettingsDropdown(
+        label = "Profile type",
+        selectedValue = selectedType,
+        options = options,
+        enabled = enabled,
+        onValueSelected = onTypeSelected,
+        valueLabel = { VpnProfileConfig(type = it).typeLabel() }
     )
 }
 
@@ -514,8 +617,12 @@ private fun SettingsTextField(
     onClear: () -> Unit,
     keyboardOptions: KeyboardOptions,
     keyboardActions: KeyboardActions = KeyboardActions(),
-    visualTransformation: VisualTransformation = VisualTransformation.None
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    sensitive: Boolean = false,
+    singleLine: Boolean = true,
+    minLines: Int = 1
 ) {
+    var sensitiveValueVisible by remember(sensitive, label) { mutableStateOf(false) }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -523,17 +630,32 @@ private fun SettingsTextField(
         placeholder = { Text(placeholder) },
         enabled = enabled,
         isError = isError,
-        singleLine = true,
+        singleLine = singleLine,
+        minLines = minLines,
         leadingIcon = { Icon(leadingIcon, contentDescription = null) },
         supportingText = supportingText?.let { { Text(it) } },
-        visualTransformation = visualTransformation,
+        visualTransformation = if (sensitive && !sensitiveValueVisible) {
+            PasswordVisualTransformation()
+        } else {
+            visualTransformation
+        },
         keyboardOptions = keyboardOptions,
         keyboardActions = keyboardActions,
         modifier = Modifier.fillMaxWidth(),
         trailingIcon = {
-            if (value.isNotEmpty() && enabled) {
-                IconButton(onClick = onClear) {
-                    Icon(Icons.Default.Close, contentDescription = "Clear")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (sensitive) {
+                    SensitiveValueVisibilityButton(
+                        visible = sensitiveValueVisible,
+                        onVisibilityChanged = { sensitiveValueVisible = it },
+                        valueLabel = label,
+                        enabled = enabled && value.isNotEmpty()
+                    )
+                }
+                if (value.isNotEmpty() && enabled) {
+                    IconButton(onClick = onClear) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear")
+                    }
                 }
             }
         }

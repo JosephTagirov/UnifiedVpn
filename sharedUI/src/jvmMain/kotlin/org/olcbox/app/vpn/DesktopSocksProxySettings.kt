@@ -38,9 +38,9 @@ enum class DesktopRoutingMode {
     internal fun resolveForCurrentPlatform(): DesktopRoutingMode {
         if (this != Auto) return this
         return when (DesktopPaths.os) {
-            DesktopOs.Linux,
-            DesktopOs.Windows -> Tun
-            DesktopOs.MacOS -> SystemProxy
+            DesktopOs.Linux -> Tun
+            DesktopOs.MacOS,
+            DesktopOs.Windows -> SystemProxy
             DesktopOs.Other -> LocalSocks
         }
     }

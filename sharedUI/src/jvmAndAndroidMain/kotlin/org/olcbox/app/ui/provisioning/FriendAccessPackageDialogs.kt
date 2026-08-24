@@ -1,5 +1,7 @@
 package org.olcbox.app.ui.provisioning
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -40,6 +43,7 @@ import org.olcbox.app.data.share.FriendAmneziaServer
 import org.olcbox.app.provisioning.SelfHostedProvisioner
 import org.olcbox.app.provisioning.SelfHostedServer
 import org.olcbox.app.provisioning.SshHostIdentity
+import org.olcbox.app.ui.components.SensitiveValueVisibilityButton
 
 @Composable
 fun FriendAccessPackageCreatorDialog(
@@ -55,6 +59,10 @@ fun FriendAccessPackageCreatorDialog(
     var password by remember { mutableStateOf("") }
     var packagePassword by remember { mutableStateOf("") }
     var packagePasswordConfirmation by remember { mutableStateOf("") }
+    var vlessUriVisible by remember { mutableStateOf(false) }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var packagePasswordVisible by remember { mutableStateOf(false) }
+    var packagePasswordConfirmationVisible by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var operation by remember { mutableStateOf<Job?>(null) }
@@ -65,6 +73,10 @@ fun FriendAccessPackageCreatorDialog(
         password = ""
         packagePassword = ""
         packagePasswordConfirmation = ""
+        vlessUriVisible = false
+        passwordVisible = false
+        packagePasswordVisible = false
+        packagePasswordConfirmationVisible = false
         onDismiss()
     }
 
@@ -74,7 +86,9 @@ fun FriendAccessPackageCreatorDialog(
         title = { Text("Package for a friend") },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
@@ -88,7 +102,20 @@ fun FriendAccessPackageCreatorDialog(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !isWorking,
                     singleLine = true,
-                    label = { Text("VLESS link for this friend") }
+                    label = { Text("VLESS link for this friend") },
+                    visualTransformation = if (vlessUriVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        SensitiveValueVisibilityButton(
+                            visible = vlessUriVisible,
+                            onVisibilityChanged = { vlessUriVisible = it },
+                            valueLabel = "VLESS link",
+                            enabled = !isWorking && vlessUri.isNotEmpty()
+                        )
+                    }
                 )
                 OutlinedTextField(
                     value = host,
@@ -122,8 +149,20 @@ fun FriendAccessPackageCreatorDialog(
                     enabled = !isWorking,
                     singleLine = true,
                     label = { Text("SSH password") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    visualTransformation = if (passwordVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        SensitiveValueVisibilityButton(
+                            visible = passwordVisible,
+                            onVisibilityChanged = { passwordVisible = it },
+                            valueLabel = "SSH password",
+                            enabled = !isWorking && password.isNotEmpty()
+                        )
+                    }
                 )
                 OutlinedTextField(
                     value = packagePassword,
@@ -132,8 +171,20 @@ fun FriendAccessPackageCreatorDialog(
                     enabled = !isWorking,
                     singleLine = true,
                     label = { Text("Package password (12+ characters)") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    visualTransformation = if (packagePasswordVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        SensitiveValueVisibilityButton(
+                            visible = packagePasswordVisible,
+                            onVisibilityChanged = { packagePasswordVisible = it },
+                            valueLabel = "package password",
+                            enabled = !isWorking && packagePassword.isNotEmpty()
+                        )
+                    }
                 )
                 OutlinedTextField(
                     value = packagePasswordConfirmation,
@@ -142,8 +193,20 @@ fun FriendAccessPackageCreatorDialog(
                     enabled = !isWorking,
                     singleLine = true,
                     label = { Text("Repeat package password") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    visualTransformation = if (packagePasswordConfirmationVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        SensitiveValueVisibilityButton(
+                            visible = packagePasswordConfirmationVisible,
+                            onVisibilityChanged = { packagePasswordConfirmationVisible = it },
+                            valueLabel = "repeated package password",
+                            enabled = !isWorking && packagePasswordConfirmation.isNotEmpty()
+                        )
+                    }
                 )
                 progress?.let {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -200,6 +263,10 @@ fun FriendAccessPackageCreatorDialog(
                             password = ""
                             packagePassword = ""
                             packagePasswordConfirmation = ""
+                            vlessUriVisible = false
+                            passwordVisible = false
+                            packagePasswordVisible = false
+                            packagePasswordConfirmationVisible = false
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (failure: Exception) {
@@ -237,11 +304,13 @@ fun FriendAccessPackageInstallDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var operation by remember { mutableStateOf<Job?>(null) }
     var packagePassword by remember { mutableStateOf("") }
+    var packagePasswordVisible by remember { mutableStateOf(false) }
     val isWorking = progress != null
 
     fun close() {
         operation?.cancel()
         packagePassword = ""
+        packagePasswordVisible = false
         onDismiss()
     }
 
@@ -251,7 +320,9 @@ fun FriendAccessPackageInstallDialog(
         title = { Text("Encrypted friend package") },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
@@ -266,8 +337,20 @@ fun FriendAccessPackageInstallDialog(
                     enabled = !isWorking,
                     singleLine = true,
                     label = { Text("Package password") },
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
+                    visualTransformation = if (packagePasswordVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        SensitiveValueVisibilityButton(
+                            visible = packagePasswordVisible,
+                            onVisibilityChanged = { packagePasswordVisible = it },
+                            valueLabel = "package password",
+                            enabled = !isWorking && packagePassword.isNotEmpty()
+                        )
+                    }
                 )
                 Text(
                     "A separate AmneziaWG key and address will be created for this device. The SSH password is not saved after setup.",
@@ -295,6 +378,7 @@ fun FriendAccessPackageInstallDialog(
                                 FriendAccessPackageSecurity.decrypt(encryptedPackage, packagePassword)
                             ) ?: error("Friend package is damaged or unsupported")
                             packagePassword = ""
+                            packagePasswordVisible = false
                             val server = packageValue.amnezia
                             progress = "Preparing AmneziaWG"
                             val config = provisioner.provisionAmneziaWg(
@@ -319,6 +403,7 @@ fun FriendAccessPackageInstallDialog(
                             error = failure.message ?: "Could not decrypt or install the friend package"
                         } finally {
                             packagePassword = ""
+                            packagePasswordVisible = false
                             progress = null
                         }
                     }

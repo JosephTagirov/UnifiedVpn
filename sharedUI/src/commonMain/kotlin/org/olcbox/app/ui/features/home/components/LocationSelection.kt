@@ -45,7 +45,8 @@ fun LocationSelectorScreen(
     selectedLocationId: String?,
     pingsState: PingsState,
     onLocationSelected: (String) -> Unit,
-    onLocationSettingsClick: (String) -> Unit
+    onLocationSettingsClick: (String) -> Unit,
+    onMoveLocation: (String, Int) -> Unit
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         val subscriptionLocations = locations.filter { !it.subscriptionUrl.isNullOrBlank() }
@@ -100,7 +101,8 @@ fun LocationSelectorScreen(
                                 selectedLocationId = selectedLocationId,
                                 pingsState = pingsState,
                                 onLocationSelected = onLocationSelected,
-                                onLocationSettingsClick = onLocationSettingsClick
+                                onLocationSettingsClick = onLocationSettingsClick,
+                                onMoveLocation = onMoveLocation
                             )
                         }
                     }
@@ -142,7 +144,8 @@ fun LocationSelectorScreen(
                                 selectedLocationId = selectedLocationId,
                                 pingsState = pingsState,
                                 onLocationSelected = onLocationSelected,
-                                onLocationSettingsClick = onLocationSettingsClick
+                                onLocationSettingsClick = onLocationSettingsClick,
+                                onMoveLocation = onMoveLocation
                             )
                         }
                     }
@@ -349,7 +352,8 @@ private fun LocationSelectorRow(
     selectedLocationId: String?,
     pingsState: PingsState,
     onLocationSelected: (String) -> Unit,
-    onLocationSettingsClick: (String) -> Unit
+    onLocationSettingsClick: (String) -> Unit,
+    onMoveLocation: (String, Int) -> Unit
 ) {
     val pingMs = pingsState.pingFor(location.storageId)
     val isLoading = pingsState.isChecking(location.storageId)
@@ -361,9 +365,12 @@ private fun LocationSelectorRow(
         isLoading = isLoading,
         isError = isOffline,
         pingMs = pingMs,
-        settingsEnabled = location.profile.isOlcRtc(),
+        settingsEnabled = true,
         onSettingsClick = {
             onLocationSettingsClick(location.storageId)
+        },
+        onMoveRequested = { offset ->
+            onMoveLocation(location.storageId, offset)
         },
         onClick = {
             onLocationSelected(location.storageId)

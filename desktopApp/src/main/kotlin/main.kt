@@ -69,6 +69,7 @@ import java.awt.Desktop
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.net.URI
 import java.security.SecureRandom
 import kotlin.math.min
@@ -123,6 +124,7 @@ import org.olcbox.app.vpn.JvmDesktopSocksProxySettingsStore
 import org.olcbox.app.vpn.desktop.verifyDesktopNativeAssets
 
 private class DesktopAppDependencies {
+    private val closed = AtomicBoolean(false)
     private val locationsDataSource = JvmLocationsDataSourceImpl()
     val configImporter = JvmConfigImporter()
 
@@ -149,7 +151,9 @@ private class DesktopAppDependencies {
     val locationViewModel = LocationViewModel(locationsRepository)
 
     fun close() {
-        vpnManager.close()
+        if (closed.compareAndSet(false, true)) {
+            vpnManager.close()
+        }
     }
 }
 
@@ -288,6 +292,14 @@ private fun runDesktopApplication(args: Array<String>) = application {
         }
     }
 
+    fun quitDesktopApplication() {
+        try {
+            dependencies.close()
+        } finally {
+            exitApplication()
+        }
+    }
+
     fun openUpstreamRelease(info: UpstreamReleaseInfo) {
         runCatching {
             check(Desktop.isDesktopSupported())
@@ -358,10 +370,7 @@ private fun runDesktopApplication(args: Array<String>) = application {
 
 		Item(
 			text = "Quit Unified VPN",
-			onClick = {
-				dependencies.close()
-				exitApplication()
-			}
+			onClick = ::quitDesktopApplication
 		)
 	}
     )
@@ -371,9 +380,7 @@ private fun runDesktopApplication(args: Array<String>) = application {
         icon = painterResource("LinuxIcon.png"),
         visible = isWindowVisible,
         state = rememberWindowState(width = 430.dp, height = 780.dp),
-        onCloseRequest = {
-            isWindowVisible = false
-        },
+        onCloseRequest = ::quitDesktopApplication,
     ) {
         window.minimumSize = Dimension(350, 600)
 

@@ -1,6 +1,7 @@
 package org.olcbox.app.ui.features.home
 
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -181,6 +182,7 @@ fun HomeScreen(
                 onLocationSettingsClick = { id ->
                     onOpenLocationSettings(id)
                 },
+                onMoveLocation = locationViewModel::moveLocation,
                 onAddLocationClick = {
                     onAddLocation()
                 }
@@ -283,7 +285,10 @@ fun HomeScreen(
                 },
                 title = { Text("Import link or URI") },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                         OutlinedTextField(
                             value = manualImportText,
                             onValueChange = { manualImportText = it },

@@ -123,7 +123,7 @@ val generatedNativeResources = layout.buildDirectory.dir("generated/desktopNativ
 val hevSocks5TunnelSourceDir = rootProject.layout.projectDirectory.dir("androidApp/src/main/jni/hev-socks5-tunnel")
 val currentBuildOs = OperatingSystem.current()
 val desktopPackageName = "UnifiedVPN"
-val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("0.0.5").get()
+val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("0.0.6").get()
 val tun2SocksVersion = "2.6.0"
 val wintunVersion = "0.14.1"
 val currentBuildTargetFormats = when {
@@ -274,6 +274,9 @@ val buildOlcRtcLibWindowsAmd64 = registerOlcRtcLibraryBuildTask(
 
 val copyOlcRtcDataAssets = tasks.register<Copy>("copyOlcRtcDataAssets") {
     from(olcrtcRepoDir.map { it.resolve("data") }) {
+        include("names", "surnames")
+    }
+    from(olcrtcRepoDir.map { it.resolve("internal/names/data") }) {
         include("names", "surnames")
     }
     into(generatedNativeResources.map { it.dir("olcrtc-data") })

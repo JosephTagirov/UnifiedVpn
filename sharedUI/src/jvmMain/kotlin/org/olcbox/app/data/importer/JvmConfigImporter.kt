@@ -12,13 +12,15 @@ class JvmConfigImporter : ConfigImporter {
         return runCatching {
             val clipboard = Toolkit.getDefaultToolkit().systemClipboard
             if (!clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)) return null
-            clipboard.getData(DataFlavor.stringFlavor) as? String
+            (clipboard.getData(DataFlavor.stringFlavor) as? String)
+                ?.let(ClipboardPayloadCodec::decodeOrOriginal)
         }.getOrNull()?.ifBlank { null }
     }
 
     override fun copyToClipboard(text: String) {
         runCatching {
-            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+            val payload = ClipboardPayloadCodec.encode(text)
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(payload), null)
         }
     }
 
@@ -29,6 +31,8 @@ class JvmConfigImporter : ConfigImporter {
             is String -> Path.of(source)
             else -> return null
         }
-        return runCatching { Files.readString(path) }.getOrNull()
+        return runCatching {
+            ClipboardPayloadCodec.decodeOrOriginal(Files.readString(path))
+        }.getOrNull()
     }
 }

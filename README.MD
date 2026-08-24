@@ -6,14 +6,17 @@ engine and adds a unified profile layer for `olcrtc`, VLESS, and Amnezia
 profiles.
 
 <p align="center">
-  <img src="docs/screenshots/unified-vpn-home.png" alt="Unified VPN 0.0.4 home screen" width="260">
-  <img src="docs/screenshots/unified-vpn-settings.png" alt="Unified VPN 0.0.4 application settings" width="260">
-  <img src="docs/screenshots/unified-vpn-sharing.png" alt="Unified VPN 0.0.4 secure sharing screen" width="260">
+  <img src="docs/screenshots/unified-vpn-home.png" alt="Unified VPN home screen" width="260">
+  <img src="docs/screenshots/unified-vpn-settings.png" alt="Unified VPN application settings" width="260">
+  <img src="docs/screenshots/unified-vpn-sharing.png" alt="Unified VPN secure sharing screen" width="260">
 </p>
 
 ## Status
 Alpha version.
 Not intended for production use.
+
+Published and supported release targets are Android and Windows (x86-64) only.
+iOS, macOS, and Linux packages are not currently supported or published.
 
 Release history is maintained in [CHANGELOG.md](CHANGELOG.md).
 
@@ -82,10 +85,7 @@ VLESS, provisions a separate AWG peer, and adds all three profiles.
 | Platform | Modes | Runtime |
 | --- | --- | --- |
 | Android | TUN, proxy | `VpnService`, `hev-socks5-tunnel`, local `olcrtc` SOCKS5, optional `sing-box` VLESS SOCKS |
-| iOS | Proxy | local `olcrtc` SOCKS5 hosted by a Swift shell |
-| macOS | Proxy | local `olcrtc` SOCKS5 with OS PAC settings |
-| Windows | TUN | local `olcrtc` SOCKS5, `hev-socks5-tunnel`, Wintun |
-| Linux | TUN | local `olcrtc` SOCKS5, `hev-socks5-tunnel`, policy routes |
+| Windows x86-64 | system proxy, local SOCKS, optional TUN | bundled `olcrtc`, `sing-box`, `hev-socks5-tunnel`, and Wintun runtimes |
 
 ## Requirements
 
@@ -95,8 +95,7 @@ VLESS, provisions a separate AWG peer, and adds all three profiles.
 | Android | Android Studio, Android SDK, Android NDK |
 | Android olcRTC | Go, `gomobile`, and local `olcrtc` fork |
 | Android VLESS | Packaged `sing-box` executable as `jniLibs/<abi>/libsing-box.so` |
-| Desktop native assets | Go and local `olcrtc` fork |
-| Linux TUN | `iproute2`, `/dev/net/tun`, root/Polkit/sudo privileges |
+| Windows native assets | Go and local `olcrtc` fork |
 | Windows TUN | UAC elevation when TUN starts and bundled Wintun runtime |
 
 Default local `olcrtc` path:
@@ -107,16 +106,6 @@ Default local `olcrtc` path:
 
 Override it with `OLCRTC_REPO`:
 
-```bash
-OLCRTC_REPO=/path/to/olcrtc ./gradlew :desktopApp:run
-```
-
-Relative `OLCRTC_REPO` values are resolved from the `olcbox` project root:
-
-```bash
-OLCRTC_REPO=../olcrtc-ansible-deploy/olcrtc ./gradlew :androidApp:assembleRelease
-```
-
 ```powershell
 $env:OLCRTC_REPO="C:\path\to\olcrtc"
 .\gradlew.bat :desktopApp:run
@@ -126,38 +115,28 @@ $env:OLCRTC_REPO="C:\path\to\olcrtc"
 
 | Task | Command |
 | --- | --- |
-| Android debug APK | `./gradlew :androidApp:assembleDebug` |
-| Install Android debug APK | `./gradlew :androidApp:installDebug` |
-| iOS simulator app | `xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -sdk iphonesimulator -configuration Debug build` |
-| Run desktop app | `./gradlew :desktopApp:run` |
-| Run desktop app with hot reload | `./gradlew :desktopApp:hotRun --auto` |
-| Build desktop native assets | `./gradlew :desktopApp:buildDesktopNativeAssets` |
-| Package current host OS | `./gradlew :desktopApp:packageReleaseDistributionForCurrentOS` |
-| Main checks | `./gradlew :sharedUI:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug` |
-| JVM tests | `./gradlew :sharedUI:jvmTest` |
+| Android debug APK | `.\gradlew.bat :androidApp:assembleDebug` |
+| Install Android debug APK | `.\gradlew.bat :androidApp:installDebug` |
+| Run Windows desktop app | `.\gradlew.bat :desktopApp:run` |
+| Build Windows native assets | `.\gradlew.bat :desktopApp:buildDesktopNativeAssets` |
+| Windows EXE installer | `.\gradlew.bat :desktopApp:packageReleaseExe` |
+| Main checks | `.\gradlew.bat :sharedUI:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug` |
+| JVM tests | `.\gradlew.bat :sharedUI:jvmTest` |
 
 ## Build Outputs
 
 | Target | Command | Output |
 | --- | --- | --- |
-| Android debug | `./gradlew :androidApp:assembleDebug` | `androidApp/build/outputs/apk/debug/androidApp-debug.apk` |
-| Android release | `./gradlew :androidApp:assembleRelease` | `androidApp/build/outputs/apk/release/androidApp-release.apk` |
-| iOS simulator | `xcodebuild -project iosApp/iosApp.xcodeproj -scheme iosApp -sdk iphonesimulator -configuration Debug build` | Xcode DerivedData app product |
-| macOS DMG | `./gradlew :desktopApp:packageReleaseDmg` | `desktopApp/build/compose/binaries/main-release/dmg/UnifiedVPN-<version>.dmg` |
+| Android debug | `.\gradlew.bat :androidApp:assembleDebug` | `androidApp\build\outputs\apk\debug\androidApp-debug.apk` |
+| Android release | `.\gradlew.bat :androidApp:assembleRelease` | `androidApp\build\outputs\apk\release\androidApp-release.apk` |
 | Windows EXE | `.\gradlew.bat :desktopApp:packageReleaseExe` | `desktopApp\build\compose\binaries\main-release\exe\UnifiedVPN-<version>.exe` |
 | Windows MSI | `.\gradlew.bat :desktopApp:packageReleaseMsi` | `desktopApp\build\compose\binaries\main-release\msi\UnifiedVPN-<version>.msi` |
-| Linux AppImage | `./gradlew :desktopApp:packageReleaseLinuxAppImage` | `desktopApp/build/compose/binaries/main-release/appimage/UnifiedVPN-<version>-amd64.AppImage` |
 
 ## Native Assets
 
 | Asset | Path |
 | --- | --- |
-| macOS `olcrtc` | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-darwin-arm64` |
-| Linux `olcrtc` | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-linux-amd64` |
-| Linux `olcrtc` ARM | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-linux-arm64` |
 | Windows `olcrtc` | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-windows-amd64.exe` |
-| Linux `hev-socks5-tunnel` | `desktopApp/build/generated/desktopNativeResources/native/hev-socks5-tunnel-linux-amd64` |
-| Linux `hev-socks5-tunnel` ARM | `desktopApp/build/generated/desktopNativeResources/native/hev-socks5-tunnel-linux-arm64` |
 | Windows `hev-socks5-tunnel` | `desktopApp/build/generated/desktopNativeResources/native/hev-socks5-tunnel-windows-amd64.exe` |
 | Windows Wintun runtime | `desktopApp/build/generated/desktopNativeResources/native/wintun.dll` |
 
@@ -165,10 +144,7 @@ $env:OLCRTC_REPO="C:\path\to\olcrtc"
 
 - Android native ABIs: `armeabi-v7a`, `arm64-v8a`, `x86_64`.
 - Android release builds require `keystore.properties` in the repository root.
-- macOS DMG output is not notarized unless signing/notarization is configured separately.
 - Windows installers must be built on Windows with `jpackage` and WiX available.
-- Linux TUN interface: `olcbox0`.
-- Linux stop removes policy routes and reverts `systemd-resolved` settings when `resolvectl` is available.
 
 `keystore.properties`:
 
@@ -177,11 +153,4 @@ storeFile=/absolute/path/to/release.keystore
 storePassword=...
 keyAlias=...
 keyPassword=...
-```
-
-Linux privilege override:
-
-```bash
-OLCBOX_LINUX_PRIVILEGE=sudo ./gradlew :desktopApp:run
-OLCBOX_LINUX_PRIVILEGE=pkexec ./gradlew :desktopApp:run
 ```

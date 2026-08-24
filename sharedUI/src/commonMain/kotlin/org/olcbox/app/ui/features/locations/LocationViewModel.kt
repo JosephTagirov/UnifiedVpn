@@ -70,6 +70,10 @@ class LocationViewModel(
     private val providerDrafts = mutableMapOf<String, ProviderDraft>()
 
     var editingConfig by mutableStateOf(LocationConfig())
+    var editingProfile by mutableStateOf(VpnProfileConfig.olcRtc())
+        private set
+    var editingLocalSocksPort by mutableStateOf("")
+        private set
     var editingName by mutableStateOf("")
     var editingId by mutableStateOf<String?>(null)
     var editingServiceProvider by mutableStateOf(LocationConfig.DEFAULT_BYPASS_PROVIDER)
@@ -90,14 +94,31 @@ class LocationViewModel(
     var dnsError by mutableStateOf<String?>(null)
         private set
 
+    var profileError by mutableStateOf<String?>(null)
+        private set
+
+    var localSocksPortError by mutableStateOf<String?>(null)
+        private set
+
+    val isEditingOlcRtc: Boolean
+        get() = editingProfile.isOlcRtc()
+
     val isFormValid: Boolean
-        get() = nameError == null &&
+        get() = if (isEditingOlcRtc) {
+            nameError == null &&
                 serverError == null &&
                 keyError == null &&
                 dnsError == null &&
                 editingName.isNotBlank() &&
                 editingConfig.id.isNotBlank() &&
                 editingConfig.key.isNotBlank()
+        } else {
+            nameError == null &&
+                profileError == null &&
+                localSocksPortError == null &&
+                editingName.isNotBlank() &&
+                editingExternalProfile().isCompleteFor()
+        }
 
     init {
         loadLocations()
@@ -329,17 +350,23 @@ class LocationViewModel(
         serverError = null
         keyError = null
         dnsError = null
+        profileError = null
+        localSocksPortError = null
         isSaving = false
         providerDrafts.clear()
 
         if (id == null) {
             editingId = null
             editingConfig = LocationConfig()
+            editingProfile = VpnProfileConfig.olcRtc()
+            editingLocalSocksPort = ""
             editingName = ""
         } else {
             val location = locations.find { it.storageId == id }
             editingId = id
             editingConfig = location?.config?.normalized() ?: LocationConfig()
+            editingProfile = location?.profile?.normalized() ?: VpnProfileConfig.olcRtc()
+            editingLocalSocksPort = editingProfile.localSocksPort?.toString().orEmpty()
             editingName = location?.fullName ?: editingConfig.displayName()
         }
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
@@ -357,6 +384,38 @@ class LocationViewModel(
     fun onNameChanged(value: String) {
         editingName = value
         validateName(value)
+        if (!isEditingOlcRtc) validateExternalProfile()
+    }
+
+    fun onProfileTypeChanged(value: String) {
+        editingProfile = editingProfile.copy(type = VpnProfileConfig.normalizeType(value))
+        validateExternalProfile()
+    }
+
+    fun onProfileUriChanged(value: String) {
+        editingProfile = editingProfile.copy(uri = value)
+        validateExternalProfile()
+    }
+
+    fun onProfileRawConfigChanged(value: String) {
+        editingProfile = editingProfile.copy(rawConfig = value)
+        validateExternalProfile()
+    }
+
+    fun onLocalSocksHostChanged(value: String) {
+        editingProfile = editingProfile.copy(
+            localSocksHost = value.replace("\r", "").replace("\n", "")
+        )
+    }
+
+    fun onLocalSocksPortChanged(value: String) {
+        editingLocalSocksPort = value.filter(Char::isDigit).take(5)
+        localSocksPortError = when {
+            editingLocalSocksPort.isBlank() -> null
+            editingLocalSocksPort.toIntOrNull() !in 1..65535 -> "Port must be between 1 and 65535"
+            else -> null
+        }
+        validateExternalProfile()
     }
 
     fun onServerChanged(value: String) {
@@ -466,11 +525,37 @@ class LocationViewModel(
         }
     }
 
+    private fun editingExternalProfile(): VpnProfileConfig {
+        return editingProfile.copy(
+            name = editingName,
+            localSocksPort = editingLocalSocksPort.toIntOrNull()
+        ).normalized()
+    }
+
+    private fun validateExternalProfile() {
+        val profile = editingExternalProfile()
+        profileError = if (profile.isCompleteFor()) {
+            null
+        } else {
+            when (profile.normalizedType) {
+                VpnProfileConfig.TYPE_VLESS -> "Enter a VLESS URI, raw configuration, or local SOCKS port"
+                VpnProfileConfig.TYPE_AMNEZIA_WG -> "Enter an AWG URI or raw AmneziaWG configuration"
+                VpnProfileConfig.TYPE_AMNEZIA_VPN -> "Enter an Amnezia URI or raw configuration"
+                else -> "Enter a profile URI, raw configuration, or local SOCKS port"
+            }
+        }
+    }
+
     fun saveEditing(onComplete: () -> Unit) {
         validateName(editingName)
-        validateServer(editingConfig.id)
-        validateKey(editingConfig.key)
-        validateDnsServer(editingConfig.dnsServer)
+        if (isEditingOlcRtc) {
+            validateServer(editingConfig.id)
+            validateKey(editingConfig.key)
+            validateDnsServer(editingConfig.dnsServer)
+        } else {
+            onLocalSocksPortChanged(editingLocalSocksPort)
+            validateExternalProfile()
+        }
 
         if (!isFormValid || isSaving) return
 
@@ -478,9 +563,12 @@ class LocationViewModel(
             isSaving = true
             try {
                 val id = editingId ?: "custom_${(100..999).random()}"
-                val finalConfig = editingConfig.copy(name = editingName).normalized()
-
-                locationsRepository.saveLocation(id, finalConfig)
+                if (isEditingOlcRtc) {
+                    val finalConfig = editingConfig.copy(name = editingName).normalized()
+                    locationsRepository.saveLocation(id, finalConfig)
+                } else {
+                    locationsRepository.saveProfile(id, editingExternalProfile())
+                }
                 locationsRepository.setActiveLocationId(id)
 
                 loadLocations()
@@ -491,6 +579,21 @@ class LocationViewModel(
             } finally {
                 isSaving = false
             }
+        }
+    }
+
+    fun moveLocation(id: String, offset: Int) {
+        if (offset == 0) return
+        val current = locations.firstOrNull { it.storageId == id } ?: return
+        val subscriptionUrl = current.subscriptionUrl?.trim().orEmpty()
+        val peers = locations.filter {
+            it.subscriptionUrl?.trim().orEmpty() == subscriptionUrl
+        }
+        val currentIndex = peers.indexOfFirst { it.storageId == id }
+        val target = peers.getOrNull(currentIndex + offset) ?: return
+        viewModelScope.launch {
+            locationsRepository.moveLocation(id, target.storageId)
+            loadLocations()
         }
     }
 
