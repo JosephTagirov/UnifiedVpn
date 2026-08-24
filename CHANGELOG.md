@@ -2,6 +2,21 @@
 
 Все существенные изменения Unified VPN / Olcbox фиксируются в этом файле.
 
+## [0.0.7] - 2026-08-24
+
+### Исправлено
+
+- Android-приложение снова включает Java-классы и native-библиотеки актуального `olcRTC` gomobile AAR; устранён вылет `NoClassDefFoundError: mobile.Mobile` сразу после запуска VPN-сервиса.
+- Сборка Android автоматически проверяет итоговые debug- и release-APK на наличие определений `mobile.Mobile`, `mobile.Runtime` и `mobile.SocketProtector`, поэтому неполный APK теперь завершает сборку ошибкой.
+- Удалена регистрация отсутствующего `CaptchaActivity`, а проверенная legacy-ветка Quick Settings корректно отмечена для Android Lint.
+- Тестовый debug receiver запуска VPN теперь принимает команды только от `adb`/системных процессов с разрешением `android.permission.DUMP`.
+- Windows packaging больше не переиспользует runtime image предыдущей версии: версия участвует в Gradle inputs и сверяется с `UnifiedVPN.cfg` до создания EXE/MSI.
+- Windows-сборка использует один совместимый набор словарей olcRTC, проверяет наличие встроенной JVM и запускает app-image с изолированными данными до создания EXE, MSI или portable ZIP.
+- README указывает проверенный portable ZIP и фактически используемый Windows `tun2socks` вместо отсутствующего `hev-socks5-tunnel`.
+- Android- и Windows-сборки проверяют, что `OLCRTC_REPO` находится точно на чистом commit `f616f57bb3a90740f1755922ffeaa7acc5cfe4ed`, и не позволяют пометить старый бинарник новым SHA.
+- Gradle отслеживает исходники и pinned SHA для desktop olcRTC EXE, поэтому смена commit обязательно пересобирает native-бинарник.
+- Финальные Android и Windows native-файлы пересобраны из `f616f57` с record layer `OLC2`; Android `gomobile` автоматически получает SDK из `local.properties`.
+
 ## [0.0.6] - 2026-08-24
 
 ### Добавлено

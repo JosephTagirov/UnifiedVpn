@@ -14,6 +14,7 @@ import org.gradle.internal.os.OperatingSystem
 import org.gradle.api.tasks.bundling.Zip
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import java.net.URI
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 
 plugins {
@@ -112,6 +113,89 @@ abstract class VerifyNativeResourcesTask : DefaultTask() {
     }
 }
 
+abstract class VerifyDesktopPackageVersionTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val configFile: RegularFileProperty
+
+    @get:Input
+    abstract val expectedVersion: Property<String>
+
+    @TaskAction
+    fun verify() {
+        val config = configFile.get().asFile
+        val expectedOption = "java-options=-Djpackage.app-version=${expectedVersion.get()}"
+        val hasExpectedVersion = config.useLines { lines ->
+            lines.any { line -> line.trim() == expectedOption }
+        }
+
+        check(hasExpectedVersion) {
+            "${config.absolutePath} does not contain the expected package version ${expectedVersion.get()}"
+        }
+        logger.lifecycle("Verified Windows package version ${expectedVersion.get()} in ${config.name}")
+    }
+}
+
+abstract class VerifyDesktopAppImageTask : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val appImageDir: DirectoryProperty
+
+    @get:Input
+    abstract val launcherName: Property<String>
+
+    @get:Input
+    abstract val timeoutSeconds: Property<Long>
+
+    @TaskAction
+    fun verify() {
+        val appImage = appImageDir.get().asFile
+        val launcher = appImage.resolve(launcherName.get())
+        val requiredFiles = listOf(
+            launcher,
+            appImage.resolve("app/${launcherName.get().substringBeforeLast('.')}.cfg"),
+            appImage.resolve("runtime/bin/java.dll"),
+            appImage.resolve("runtime/bin/server/jvm.dll"),
+        )
+        val missing = requiredFiles.filterNot { it.isFile && it.length() > 0L }
+        check(missing.isEmpty()) {
+            "Incomplete Windows app image:\n" +
+                    missing.joinToString(separator = "\n") { "- ${it.absolutePath}" }
+        }
+        check(appImage.resolve("app").listFiles().orEmpty().any { it.isFile && it.extension == "jar" }) {
+            "Windows app image does not contain application JARs: ${appImage.absolutePath}"
+        }
+
+        val smokeRoot = temporaryDir.resolve("isolated-user-data")
+        val outputFile = temporaryDir.resolve("launcher-smoke.log")
+        val process = ProcessBuilder(launcher.absolutePath, "--verify-native-assets")
+            .directory(appImage)
+            .redirectErrorStream(true)
+            .redirectOutput(outputFile)
+            .also { builder ->
+                builder.environment()["APPDATA"] = smokeRoot.resolve("Roaming").absolutePath
+                builder.environment()["LOCALAPPDATA"] = smokeRoot.resolve("Local").absolutePath
+                builder.environment()["JPACKAGE_DEBUG"] = "true"
+            }
+            .start()
+
+        if (!process.waitFor(timeoutSeconds.get(), TimeUnit.SECONDS)) {
+            process.toHandle().descendants().forEach { it.destroyForcibly() }
+            process.destroyForcibly()
+            error("Windows launcher smoke test timed out after ${timeoutSeconds.get()} seconds")
+        }
+        val output = outputFile.takeIf { it.isFile }?.readText().orEmpty().trim()
+        check(process.exitValue() == 0) {
+            buildString {
+                append("Windows launcher failed its JVM/native-assets smoke test with code ")
+                append(process.exitValue())
+                if (output.isNotBlank()) append(":\n").append(output)
+            }
+        }
+        logger.lifecycle("Verified Windows JVM launch and bundled native assets in ${appImage.name}")
+    }
+}
+
 val defaultOlcRtcRepo = rootProject.layout.projectDirectory.asFile.parentFile
     .resolve("olcrtc")
     .absolutePath
@@ -119,11 +203,13 @@ val olcrtcRepo = providers.gradleProperty("OLCRTC_REPO")
     .orElse(providers.environmentVariable("OLCRTC_REPO"))
     .orElse(defaultOlcRtcRepo)
 val olcrtcRepoDir = olcrtcRepo.map { rootProject.file(it) }
+val expectedOlcrtcCommit = providers.gradleProperty("olcbox.olcrtcSha")
+    .orElse(providers.environmentVariable("OLCBOX_OLCRTC_SHA"))
 val generatedNativeResources = layout.buildDirectory.dir("generated/desktopNativeResources")
 val hevSocks5TunnelSourceDir = rootProject.layout.projectDirectory.dir("androidApp/src/main/jni/hev-socks5-tunnel")
 val currentBuildOs = OperatingSystem.current()
 val desktopPackageName = "UnifiedVPN"
-val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("0.0.6").get()
+val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("0.0.7").get()
 val tun2SocksVersion = "2.6.0"
 val wintunVersion = "0.14.1"
 val currentBuildTargetFormats = when {
@@ -151,7 +237,13 @@ fun registerOlcRtcBuildTask(
 ) = tasks.register<Exec>(taskName) {
     val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
 
+    inputs.dir(olcrtcRepoDir.map { it.resolve("cmd/olcrtc") })
+    inputs.dir(olcrtcRepoDir.map { it.resolve("internal") })
+    inputs.dir(olcrtcRepoDir.map { it.resolve("pkg") })
+    inputs.files(olcrtcRepoDir.map { it.resolve("go.mod") }, olcrtcRepoDir.map { it.resolve("go.sum") })
+    inputs.property("olcrtcCommit", expectedOlcrtcCommit)
     outputs.file(outputFile)
+    dependsOn(":verifyOlcRtcSource")
     workingDir = olcrtcRepoDir.get()
     environment("GOOS", goos)
     environment("GOARCH", goarch)
@@ -180,7 +272,13 @@ fun registerOlcRtcLibraryBuildTask(
 ) = tasks.register<Exec>(taskName) {
     val outputFile = generatedNativeResources.map { it.file("native/$outputName") }
 
+    inputs.dir(olcrtcRepoDir.map { it.resolve("cmd/olcrtc-cgo") })
+    inputs.dir(olcrtcRepoDir.map { it.resolve("internal") })
+    inputs.dir(olcrtcRepoDir.map { it.resolve("pkg") })
+    inputs.files(olcrtcRepoDir.map { it.resolve("go.mod") }, olcrtcRepoDir.map { it.resolve("go.sum") })
+    inputs.property("olcrtcCommit", expectedOlcrtcCommit)
     outputs.file(outputFile)
+    dependsOn(":verifyOlcRtcSource")
     workingDir = olcrtcRepoDir.get()
     environment("GOOS", goos)
     environment("GOARCH", goarch)
@@ -272,14 +370,31 @@ val buildOlcRtcLibWindowsAmd64 = registerOlcRtcLibraryBuildTask(
     outputName = "olcrtc-windows-amd64.dll"
 )
 
-val copyOlcRtcDataAssets = tasks.register<Copy>("copyOlcRtcDataAssets") {
-    from(olcrtcRepoDir.map { it.resolve("data") }) {
-        include("names", "surnames")
-    }
-    from(olcrtcRepoDir.map { it.resolve("internal/names/data") }) {
+val olcRtcRuntimeDataDir = olcrtcRepoDir.map { repository ->
+    listOf(
+        repository.resolve("data"),
+        repository.resolve("internal/names/data"),
+    ).firstOrNull { candidate ->
+        candidate.resolve("names").isFile && candidate.resolve("surnames").isFile
+    } ?: repository.resolve("internal/names/data")
+}
+val copyOlcRtcDataAssets = tasks.register<Sync>("copyOlcRtcDataAssets") {
+    dependsOn(":verifyOlcRtcSource")
+    from(olcRtcRuntimeDataDir) {
         include("names", "surnames")
     }
     into(generatedNativeResources.map { it.dir("olcrtc-data") })
+
+    doFirst {
+        val sourceDir = olcRtcRuntimeDataDir.get()
+        val missing = listOf("names", "surnames")
+            .map(sourceDir::resolve)
+            .filterNot { it.isFile && it.length() > 0L }
+        require(missing.isEmpty()) {
+            "olcRTC runtime data is missing:\n" +
+                    missing.joinToString(separator = "\n") { "- ${it.absolutePath}" }
+        }
+    }
 }
 
 val desktopNativeAssetTasks = mutableListOf<Any>(
@@ -449,6 +564,49 @@ sourceSets {
 
 if (currentBuildOs.isWindows) {
     val jpackageAppRootDir = layout.buildDirectory.dir("compose/binaries/main-release/app")
+    val desktopAppImageDir = jpackageAppRootDir.map { it.dir(desktopPackageName) }
+    val desktopPackageConfigFile = jpackageAppRootDir.map { root ->
+        root.file("$desktopPackageName/app/$desktopPackageName.cfg")
+    }
+
+    listOf("createRuntimeImage", "createReleaseDistributable").forEach { taskName ->
+        tasks.matching { task -> task.name == taskName }.configureEach {
+            inputs.property("unifiedVpnPackageVersion", desktopPackageVersion)
+        }
+    }
+
+    val verifyDesktopPackageVersion = tasks.register<VerifyDesktopPackageVersionTask>(
+        "verifyDesktopPackageVersion"
+    ) {
+        group = "verification"
+        description = "Verifies the version embedded in the Windows jpackage app image."
+        dependsOn("createReleaseDistributable")
+        configFile.set(desktopPackageConfigFile)
+        expectedVersion.set(desktopPackageVersion)
+    }
+
+    val verifyDesktopAppImage = tasks.register<VerifyDesktopAppImageTask>(
+        "verifyDesktopAppImage"
+    ) {
+        group = "verification"
+        description = "Launches the packaged Windows app with isolated data and verifies its JVM and native assets."
+        dependsOn(verifyDesktopPackageVersion)
+        appImageDir.set(desktopAppImageDir)
+        launcherName.set("$desktopPackageName.exe")
+        timeoutSeconds.set(30L)
+    }
+
+    listOf(
+        "packageReleaseDistributionForCurrentOS",
+        "packageReleaseExe",
+        "packageReleaseMsi",
+        "packageReleasePortableZip",
+    ).forEach { taskName ->
+        tasks.matching { task -> task.name == taskName }.configureEach {
+            dependsOn(verifyDesktopAppImage)
+            inputs.property("unifiedVpnPackageVersion", desktopPackageVersion)
+        }
+    }
 
     tasks.register<Zip>("packageReleasePortableZip") {
         group = "distribution"

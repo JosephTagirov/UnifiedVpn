@@ -6,6 +6,7 @@ import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -33,7 +34,16 @@ val olcrtcAndroidAar = layout.buildDirectory.file("generated/olcrtc/olcrtc.aar")
 val olcrtcAndroidAarFile = olcrtcAndroidAar.get().asFile
 val olcrtcIosXcframework = layout.buildDirectory.dir("generated/olcrtc/ios/OlcRtcMobile.xcframework")
 val olcrtcIosXcframeworkDir = olcrtcIosXcframework.get().asFile
-val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.6")
+val localProperties = Properties().apply {
+    rootProject.file("local.properties")
+        .takeIf { it.isFile }
+        ?.inputStream()
+        ?.use { input -> load(input) }
+}
+val androidSdkPath = providers.environmentVariable("ANDROID_HOME")
+    .orElse(providers.environmentVariable("ANDROID_SDK_ROOT"))
+    .orElse(providers.provider { localProperties.getProperty("sdk.dir").orEmpty() })
+val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.7")
 val awgCoreCommitSha = providers.gradleProperty("olcbox.awgCoreSha").orElse("unknown")
 val olcboxVersionValue = olcboxVersion.get()
 val generatedAppInfoDir = layout.buildDirectory.dir("generated/source/olcboxAppInfo/commonMain")
@@ -79,6 +89,7 @@ olcrtcAndroidAarFile.parentFile.mkdirs()
 val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds olcrtc Android AAR from OLCRTC_REPO using gomobile."
+    dependsOn(":verifyOlcRtcSource")
 
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
     inputs.dir(olcrtcRepoDir.resolve("internal"))
@@ -86,6 +97,15 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
     outputs.file(olcrtcAndroidAar)
 
     workingDir = olcrtcRepoDir
+    environment("ANDROID_HOME", androidSdkPath.get())
+    environment("ANDROID_SDK_ROOT", androidSdkPath.get())
+
+    doFirst {
+        val sdkDir = rootProject.file(androidSdkPath.get())
+        require(androidSdkPath.get().isNotBlank() && sdkDir.isDirectory) {
+            "Android SDK was not found. Set sdk.dir in local.properties or ANDROID_HOME."
+        }
+    }
     commandLine(
         "gomobile",
         "bind",
@@ -105,6 +125,7 @@ val olcrtcAndroidAarDependency = files(olcrtcAndroidAarFile).builtBy(buildOlcrtc
 val buildOlcrtcIosXcframework by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds olcrtc iOS XCFramework from OLCRTC_REPO using gomobile."
+    dependsOn(":verifyOlcRtcSource")
 
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
     inputs.dir(olcrtcRepoDir.resolve("internal"))

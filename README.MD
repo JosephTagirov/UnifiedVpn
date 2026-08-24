@@ -85,7 +85,7 @@ VLESS, provisions a separate AWG peer, and adds all three profiles.
 | Platform | Modes | Runtime |
 | --- | --- | --- |
 | Android | TUN, proxy | `VpnService`, `hev-socks5-tunnel`, local `olcrtc` SOCKS5, optional `sing-box` VLESS SOCKS |
-| Windows x86-64 | system proxy, local SOCKS, optional TUN | bundled `olcrtc`, `sing-box`, `hev-socks5-tunnel`, and Wintun runtimes |
+| Windows x86-64 | system proxy, local SOCKS, optional TUN | bundled `olcrtc`, `sing-box`, `tun2socks`, and Wintun runtimes |
 
 ## Requirements
 
@@ -111,6 +111,9 @@ $env:OLCRTC_REPO="C:\path\to\olcrtc"
 .\gradlew.bat :desktopApp:run
 ```
 
+The checkout must be clean and match the full `olcbox.olcrtcSha` pinned in
+`gradle.properties`; Gradle rejects a different or unversioned source tree.
+
 ## Commands
 
 | Task | Command |
@@ -120,6 +123,7 @@ $env:OLCRTC_REPO="C:\path\to\olcrtc"
 | Run Windows desktop app | `.\gradlew.bat :desktopApp:run` |
 | Build Windows native assets | `.\gradlew.bat :desktopApp:buildDesktopNativeAssets` |
 | Windows EXE installer | `.\gradlew.bat :desktopApp:packageReleaseExe` |
+| Windows portable ZIP | `.\gradlew.bat :desktopApp:packageReleasePortableZip` |
 | Main checks | `.\gradlew.bat :sharedUI:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug` |
 | JVM tests | `.\gradlew.bat :sharedUI:jvmTest` |
 
@@ -131,13 +135,14 @@ $env:OLCRTC_REPO="C:\path\to\olcrtc"
 | Android release | `.\gradlew.bat :androidApp:assembleRelease` | `androidApp\build\outputs\apk\release\androidApp-release.apk` |
 | Windows EXE | `.\gradlew.bat :desktopApp:packageReleaseExe` | `desktopApp\build\compose\binaries\main-release\exe\UnifiedVPN-<version>.exe` |
 | Windows MSI | `.\gradlew.bat :desktopApp:packageReleaseMsi` | `desktopApp\build\compose\binaries\main-release\msi\UnifiedVPN-<version>.msi` |
+| Windows portable ZIP | `.\gradlew.bat :desktopApp:packageReleasePortableZip` | `desktopApp\build\compose\binaries\main-release\portable\UnifiedVPN-<version>-windows-amd64-portable.zip` |
 
 ## Native Assets
 
 | Asset | Path |
 | --- | --- |
 | Windows `olcrtc` | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-windows-amd64.exe` |
-| Windows `hev-socks5-tunnel` | `desktopApp/build/generated/desktopNativeResources/native/hev-socks5-tunnel-windows-amd64.exe` |
+| Windows `tun2socks` | `desktopApp/build/generated/desktopNativeResources/native/tun2socks-windows-amd64.exe` |
 | Windows Wintun runtime | `desktopApp/build/generated/desktopNativeResources/native/wintun.dll` |
 
 ## Notes

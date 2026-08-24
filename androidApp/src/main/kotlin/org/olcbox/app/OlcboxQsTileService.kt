@@ -1,5 +1,6 @@
 package org.olcbox.app
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
@@ -98,6 +99,7 @@ class OlcboxQsTileService : TileService() {
         startService(intent)
     }
 
+    @SuppressLint("StartActivityAndCollapseDeprecated")
     private fun openMainApp() {
         val intent = Intent(applicationContext, AppActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP

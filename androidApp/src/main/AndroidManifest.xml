@@ -57,12 +57,6 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
-        <activity
-            android:name="org.olcbox.app.vpn.service.CaptchaActivity"
-            android:theme="@android:style/Theme.DeviceDefault.Light.Dialog"
-            android:excludeFromRecents="true"
-            android:exported="false" />
-
         <service
             android:name="org.olcbox.app.vpn.service.OlcboxVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
