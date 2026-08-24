@@ -212,8 +212,9 @@ private fun runDesktopApplication(args: Array<String>) = application {
             if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
             updateMessage = "Checking Unified VPN and upstream releases..."
-            val result = dependencies.updateService.check(previousSettings.channel)
-            val upstreamResults = dependencies.upstreamUpdateService.checkAll()
+            val proxy = dependencies.vpnManager.subscriptionFetchProxy()
+            val result = dependencies.updateService.check(previousSettings.channel, proxy)
+            val upstreamResults = dependencies.upstreamUpdateService.checkAll(proxy)
             val checkedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             val checkedSettings = previousSettings.copy(lastCheckAtEpochMs = checkedAt).normalized()
             saveUpdateSettings(checkedSettings)
@@ -246,7 +247,7 @@ private fun runDesktopApplication(args: Array<String>) = application {
                 upstreamNotices = (upstreamNotices + unseen).distinctBy { it.identity() }
                 statusParts += unseen.joinToString { "${it.project.displayName} updated on GitHub" }
             } else if (manual && upstreamInfos.isNotEmpty()) {
-                statusParts += "Original olcbox and Amnezia VPN releases are up to date"
+                statusParts += "Original olcbox and Amnezia VPN GitHub versions are up to date"
             }
             if (manual) {
                 upstreamResults.mapNotNull { it.exceptionOrNull()?.message }.forEach(statusParts::add)
@@ -255,14 +256,26 @@ private fun runDesktopApplication(args: Array<String>) = application {
         }
     }
 
+    fun quitDesktopApplication() {
+        try {
+            dependencies.close()
+        } finally {
+            exitApplication()
+        }
+    }
+
     fun downloadUpdate(info: AppUpdateInfo) {
         scope.launch {
             updateProgress = 0f
             updateMessage = "Downloading ${info.asset.name}..."
-            val result = dependencies.updateInstaller.downloadAndOpen(info.asset) { progress ->
+            val result = dependencies.updateInstaller.downloadAndOpen(
+                info = info,
+                proxy = dependencies.vpnManager.subscriptionFetchProxy()
+            ) { progress ->
                 updateProgress = progress
             }
-            updateMessage = result.getOrElse { error ->
+            val launchResult = result.getOrNull()
+            updateMessage = launchResult?.message ?: result.exceptionOrNull()?.let { error ->
                 "Download failed: ${error.message ?: "unknown error"}"
             }
             if (result.isSuccess) {
@@ -275,6 +288,10 @@ private fun runDesktopApplication(args: Array<String>) = application {
                 updateOffer = null
             }
             updateProgress = null
+            if (launchResult?.shouldExitApplication == true) {
+                delay(500)
+                quitDesktopApplication()
+            }
         }
     }
 
@@ -289,14 +306,6 @@ private fun runDesktopApplication(args: Array<String>) = application {
         scope.launch {
             saveUpdateSettings(updateSettings.withSeen(info))
             upstreamNotices = upstreamNotices.filterNot { it.identity() == info.identity() }
-        }
-    }
-
-    fun quitDesktopApplication() {
-        try {
-            dependencies.close()
-        } finally {
-            exitApplication()
         }
     }
 

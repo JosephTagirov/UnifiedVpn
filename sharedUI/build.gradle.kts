@@ -43,7 +43,7 @@ val localProperties = Properties().apply {
 val androidSdkPath = providers.environmentVariable("ANDROID_HOME")
     .orElse(providers.environmentVariable("ANDROID_SDK_ROOT"))
     .orElse(providers.provider { localProperties.getProperty("sdk.dir").orEmpty() })
-val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.7")
+val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.8")
 val awgCoreCommitSha = providers.gradleProperty("olcbox.awgCoreSha").orElse("unknown")
 val olcboxVersionValue = olcboxVersion.get()
 val generatedAppInfoDir = layout.buildDirectory.dir("generated/source/olcboxAppInfo/commonMain")

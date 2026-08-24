@@ -16,6 +16,7 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
+import java.security.MessageDigest
 
 class AndroidUpdateInstaller(
     context: Context,
@@ -114,6 +115,8 @@ class AndroidUpdateInstaller(
         }
         val fileName = asset.name.substringAfterLast('/').ifBlank { "olcbox-update.apk" }
         val target = File(directory, fileName)
+        val partial = File(directory, "$fileName.part")
+        partial.delete()
         val connection = if (proxy == null) {
             URL(asset.downloadUrl).openConnection()
         } else {
@@ -121,29 +124,53 @@ class AndroidUpdateInstaller(
                 Proxy(Proxy.Type.SOCKS, InetSocketAddress(proxy.host, proxy.port))
             )
         } as HttpURLConnection
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 60_000
-        val total = connection.contentLengthLong.takeIf { it > 0L } ?: asset.sizeBytes ?: -1L
-        connection.inputStream.use { input ->
-            target.outputStream().use { output ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var copied = 0L
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    output.write(buffer, 0, read)
-                    copied += read
-                    if (total > 0L) {
-                        reportProgress(
-                            (copied.toDouble() / total.toDouble()).toFloat().coerceIn(0f, 1f),
-                            onProgress
-                        )
+        try {
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 60_000
+            val status = connection.responseCode
+            require(status in 200..299) {
+                "Update download failed with HTTP $status"
+            }
+            val total = connection.contentLengthLong.takeIf { it > 0L } ?: asset.sizeBytes ?: -1L
+            val sha256 = MessageDigest.getInstance("SHA-256")
+            var copied = 0L
+            connection.inputStream.use { input ->
+                partial.outputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        sha256.update(buffer, 0, read)
+                        copied += read
+                        if (total > 0L) {
+                            reportProgress(
+                                (copied.toDouble() / total.toDouble()).toFloat().coerceIn(0f, 1f),
+                                onProgress
+                            )
+                        }
                     }
                 }
             }
+            asset.sizeBytes?.let { expectedSize ->
+                require(copied == expectedSize) {
+                    "Downloaded update size mismatch: expected $expectedSize bytes, got $copied"
+                }
+            }
+            verifySha256(asset.digest, sha256.digest())
+            if (target.exists()) {
+                require(target.delete()) { "Cannot replace the previous downloaded update" }
+            }
+            require(partial.renameTo(target)) { "Cannot finalize the downloaded update" }
+            reportProgress(1f, onProgress)
+            target
+        } catch (error: Throwable) {
+            partial.delete()
+            throw error
+        } finally {
+            connection.disconnect()
         }
-        reportProgress(1f, onProgress)
-        target
     }
 
     private suspend fun reportProgress(progress: Float, onProgress: (Float) -> Unit) {
@@ -156,6 +183,18 @@ class AndroidUpdateInstaller(
         return when {
             name.endsWith(".apk", ignoreCase = true) -> "application/vnd.android.package-archive"
             else -> "application/octet-stream"
+        }
+    }
+
+    private fun verifySha256(expectedDigest: String?, actualBytes: ByteArray) {
+        if (expectedDigest.isNullOrBlank()) return
+        val parts = expectedDigest.trim().split(':', limit = 2)
+        require(parts.size == 2 && parts[0].equals("sha256", ignoreCase = true)) {
+            "Unsupported update digest: ${parts.firstOrNull().orEmpty()}"
+        }
+        val actual = actualBytes.joinToString(separator = "") { byte -> "%02x".format(byte) }
+        require(actual.equals(parts[1], ignoreCase = true)) {
+            "Downloaded update SHA-256 mismatch"
         }
     }
 }

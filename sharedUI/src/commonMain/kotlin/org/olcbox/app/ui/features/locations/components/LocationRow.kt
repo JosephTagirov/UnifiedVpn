@@ -8,10 +8,9 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,7 +51,6 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.util.parseEmojiAndName
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun LocationRow(
     location: LocationItem,
@@ -101,12 +99,23 @@ fun LocationRow(
             .clip(RoundedCornerShape(16.dp))
             .background(bgColor)
             .border(borderWidth, borderColor, RoundedCornerShape(16.dp))
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = {
-                    if (settingsEnabled) onSettingsClick()
-                }
-            )
+            .pointerInput(location.storageId) {
+                var accumulatedDistance = 0f
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { accumulatedDistance = 0f },
+                    onDragCancel = { accumulatedDistance = 0f },
+                    onDragEnd = { accumulatedDistance = 0f },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        accumulatedDistance += dragAmount.y
+                        if (abs(accumulatedDistance) >= reorderThresholdPx) {
+                            onMoveRequested(if (accumulatedDistance > 0f) 1 else -1)
+                            accumulatedDistance = 0f
+                        }
+                    }
+                )
+            }
+            .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 8.dp)
     ) {
         if (emoji.isNotEmpty()) {
@@ -161,22 +170,6 @@ fun LocationRow(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .size(40.dp)
-                .pointerInput(location.storageId) {
-                    var accumulatedDistance = 0f
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = { accumulatedDistance = 0f },
-                        onDragCancel = { accumulatedDistance = 0f },
-                        onDragEnd = { accumulatedDistance = 0f },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            accumulatedDistance += dragAmount.y
-                            if (abs(accumulatedDistance) >= reorderThresholdPx) {
-                                onMoveRequested(if (accumulatedDistance > 0f) 1 else -1)
-                                accumulatedDistance = 0f
-                            }
-                        }
-                    )
-                }
         ) {
             Icon(
                 imageVector = Icons.Rounded.DragHandle,

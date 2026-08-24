@@ -180,7 +180,7 @@ private fun IosApp(
                 upstreamNotices = (upstreamNotices + unseen).distinctBy { it.identity() }
                 statusParts += unseen.joinToString { "${it.project.displayName} updated on GitHub" }
             } else if (manual && upstreamInfos.isNotEmpty()) {
-                statusParts += "Original olcbox and Amnezia VPN releases are up to date"
+                statusParts += "Original olcbox and Amnezia VPN GitHub versions are up to date"
             }
             if (manual) {
                 upstreamResults.mapNotNull { it.exceptionOrNull()?.message }.forEach(statusParts::add)

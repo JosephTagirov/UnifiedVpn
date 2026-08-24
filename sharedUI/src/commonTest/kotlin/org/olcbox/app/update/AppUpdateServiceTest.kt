@@ -3,6 +3,7 @@ package org.olcbox.app.update
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.test.runTest
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import kotlin.test.Test
@@ -73,7 +74,42 @@ class AppUpdateServiceTest {
             platform = UpdatePlatform("windows", "amd64")
         )
 
-        assertEquals("Olcbox-1.0.0-windows-amd64.msi", selected?.name)
+        assertEquals("Olcbox-1.0.0-windows-amd64-portable.zip", selected?.name)
+    }
+
+    @Test
+    fun upstreamWithoutReleasesFallsBackToLatestCommit() = runTest {
+        val engine = MockEngine { request ->
+            when {
+                request.url.encodedPath.endsWith("/releases/latest") -> respond(
+                    content = "{\"message\":\"Not Found\"}",
+                    status = HttpStatusCode.NotFound
+                )
+                request.url.encodedPath.endsWith("/commits/HEAD") -> respond(
+                    """
+                    {
+                      "sha": "1234567890abcdef1234567890abcdef12345678",
+                      "html_url": "https://github.com/example/project/commit/1234567890abcdef",
+                      "commit": {
+                        "committer": { "date": "2026-08-24T12:00:00Z" }
+                      }
+                    }
+                    """.trimIndent()
+                )
+                else -> error("Unexpected request: ${request.url}")
+            }
+        }
+        val service = UpstreamUpdateService(
+            httpClient = HttpClient(engine),
+            deviceIdentityProvider = StaticIdentityProvider("hwid"),
+            projects = listOf(UpstreamProject.Olcbox)
+        )
+
+        val info = service.checkAll().single().getOrThrow()
+
+        assertEquals("1234567890ab", info.version)
+        assertEquals("2026-08-24T12:00:00Z", info.publishedAt)
+        assertTrue(info.htmlUrl.endsWith("/commit/1234567890abcdef"))
     }
 
     @Test

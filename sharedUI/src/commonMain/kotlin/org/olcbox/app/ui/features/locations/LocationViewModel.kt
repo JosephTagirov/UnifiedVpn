@@ -591,8 +591,16 @@ class LocationViewModel(
         }
         val currentIndex = peers.indexOfFirst { it.storageId == id }
         val target = peers.getOrNull(currentIndex + offset) ?: return
+        val sourceListIndex = locations.indexOfFirst { it.storageId == current.storageId }
+        val targetListIndex = locations.indexOfFirst { it.storageId == target.storageId }
+        if (sourceListIndex < 0 || targetListIndex < 0) return
+
+        locations[sourceListIndex] = target
+        locations[targetListIndex] = current
         viewModelScope.launch {
-            locationsRepository.moveLocation(id, target.storageId)
+            runCatching {
+                locationsRepository.moveLocation(id, target.storageId)
+            }
             loadLocations()
         }
     }

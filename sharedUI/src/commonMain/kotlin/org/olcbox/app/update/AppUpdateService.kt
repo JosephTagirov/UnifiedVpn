@@ -41,7 +41,8 @@ data class AppUpdateAsset(
     val name: String,
     val downloadUrl: String,
     val sizeBytes: Long?,
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    val digest: String? = null
 )
 
 data class AppUpdateInfo(
@@ -114,6 +115,9 @@ class UpstreamUpdateService(
                 append("x-hwid", hwid)
             }
         }
+        if (response.status.value == 404) {
+            return fetchLatestCommit(client, project, hwid)
+        }
         if (response.status.value !in 200..299) {
             error("${project.displayName} release check failed with HTTP ${response.status.value}")
         }
@@ -124,6 +128,33 @@ class UpstreamUpdateService(
             version = release.tagName.removePrefix("v"),
             htmlUrl = release.htmlUrl,
             publishedAt = release.publishedAt
+        )
+    }
+
+    private suspend fun fetchLatestCommit(
+        client: HttpClient,
+        project: UpstreamProject,
+        hwid: String
+    ): UpstreamReleaseInfo {
+        val response = client.get(
+            "https://api.github.com/repos/${project.ownerRepo}/commits/HEAD"
+        ) {
+            headers {
+                append(HttpHeaders.Accept, "application/vnd.github+json")
+                append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
+                append("x-hwid", hwid)
+            }
+        }
+        if (response.status.value !in 200..299) {
+            error("${project.displayName} GitHub check failed with HTTP ${response.status.value}")
+        }
+
+        val commit = json.decodeFromString(GithubCommit.serializer(), response.bodyAsText())
+        return UpstreamReleaseInfo(
+            project = project,
+            version = commit.sha.take(12),
+            htmlUrl = commit.htmlUrl,
+            publishedAt = commit.commit.committer?.date
         )
     }
 }
@@ -218,7 +249,8 @@ class AppUpdateService(
                     name = it.name,
                     downloadUrl = it.browserDownloadUrl,
                     sizeBytes = it.size,
-                    updatedAt = it.updatedAt
+                    updatedAt = it.updatedAt,
+                    digest = it.digest
                 )
             }
         }
@@ -334,7 +366,7 @@ data class UpdatePlatform(
 
     val preferredExtensions: List<String>
         get() = when (os) {
-            "windows" -> listOf(".msi", ".exe", ".zip")
+            "windows" -> listOf(".zip", ".msi", ".exe")
             "macos" -> listOf(".dmg")
             "linux" -> listOf(".appimage")
             "android" -> listOf(".apk")
@@ -376,7 +408,26 @@ data class GithubReleaseAsset(
     val browserDownloadUrl: String,
     val size: Long? = null,
     @SerialName("updated_at")
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    val digest: String? = null
+)
+
+@Serializable
+private data class GithubCommit(
+    val sha: String,
+    @SerialName("html_url")
+    val htmlUrl: String,
+    val commit: GithubCommitDetails
+)
+
+@Serializable
+private data class GithubCommitDetails(
+    val committer: GithubCommitAuthor? = null
+)
+
+@Serializable
+private data class GithubCommitAuthor(
+    val date: String? = null
 )
 
 private val json = Json {

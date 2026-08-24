@@ -141,7 +141,7 @@ fun UpstreamUpdateNoticeSheet(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Release ${info.version}",
+                    text = "GitHub version ${info.version}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
