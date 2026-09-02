@@ -32,11 +32,15 @@ internal object VpnProfileReachability {
 
         when (normalized.normalizedType) {
             VpnProfileConfig.TYPE_VLESS -> tcpPing(endpoint)
+                ?: systemPing(endpoint.host)
                 ?: hostPing(endpoint.host)
             VpnProfileConfig.TYPE_AMNEZIA_WG,
-            VpnProfileConfig.TYPE_AMNEZIA_VPN -> hostPing(endpoint.host)
+            VpnProfileConfig.TYPE_AMNEZIA_VPN -> systemPing(endpoint.host)
+                ?: hostPing(endpoint.host)
                 ?: tcpPing(endpoint)
-            else -> tcpPing(endpoint) ?: hostPing(endpoint.host)
+            else -> tcpPing(endpoint)
+                ?: systemPing(endpoint.host)
+                ?: hostPing(endpoint.host)
         }
     }
 
@@ -82,6 +86,49 @@ internal object VpnProfileReachability {
             val reachable = InetAddress.getByName(host).isReachable(HOST_PING_TIMEOUT_MS)
             if (reachable) elapsedMillis(startedAt) else null
         }.getOrNull()
+    }
+
+    private fun systemPing(host: String): Long? {
+        val command = if (System.getProperty("os.name").orEmpty().contains("win", ignoreCase = true)) {
+            listOf("ping.exe", "-n", "1", "-w", SYSTEM_PING_TIMEOUT_MS.toString(), host)
+        } else {
+            listOf("ping", "-n", "-c", "1", "-W", SYSTEM_PING_TIMEOUT_SECONDS.toString(), host)
+        }
+        val startedAt = System.nanoTime()
+        val process = runCatching {
+            ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .start()
+        }.getOrNull() ?: return null
+
+        val exitCode = waitForProcess(process, SYSTEM_PING_PROCESS_TIMEOUT_MS) ?: return null
+        val output = runCatching {
+            process.inputStream.bufferedReader().use { reader ->
+                reader.readText().take(MAX_PING_OUTPUT_LENGTH)
+            }
+        }.getOrDefault("")
+        if (exitCode != 0) return null
+
+        val reportedLatency = SYSTEM_PING_LATENCY
+            .find(output)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toDoubleOrNull()
+            ?.toLong()
+        return reportedLatency ?: elapsedMillis(startedAt)
+    }
+
+    private fun waitForProcess(process: Process, timeoutMs: Long): Int? {
+        val deadline = System.nanoTime() + timeoutMs * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            try {
+                return process.exitValue()
+            } catch (_: IllegalThreadStateException) {
+                Thread.sleep(PROCESS_POLL_INTERVAL_MS)
+            }
+        }
+        process.destroy()
+        return null
     }
 
     private fun elapsedMillis(startedAt: Long): Long {
@@ -216,6 +263,15 @@ internal object VpnProfileReachability {
 
     private const val TCP_CONNECT_TIMEOUT_MS = 3_000
     private const val HOST_PING_TIMEOUT_MS = 3_000
+    private const val SYSTEM_PING_TIMEOUT_MS = 3_000
+    private const val SYSTEM_PING_TIMEOUT_SECONDS = 3
+    private const val SYSTEM_PING_PROCESS_TIMEOUT_MS = 5_000L
+    private const val PROCESS_POLL_INTERVAL_MS = 25L
+    private const val MAX_PING_OUTPUT_LENGTH = 16 * 1024
     private const val MAX_DECOMPRESSED_PROFILE_SIZE = 4 * 1024 * 1024
     private const val MAX_NESTED_PROFILE_DEPTH = 12
+    private val SYSTEM_PING_LATENCY = Regex(
+        pattern = "time[=<]\\s*([0-9]+(?:\\.[0-9]+)?)\\s*ms",
+        option = RegexOption.IGNORE_CASE
+    )
 }

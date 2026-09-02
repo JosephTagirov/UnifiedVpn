@@ -1,9 +1,11 @@
 package org.olcbox.app.ui.features.locations.components
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -34,13 +36,20 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,25 +72,36 @@ fun LocationRow(
     onMoveRequested: (Int) -> Unit = {},
     onClick: () -> Unit
 ) {
+    var isDragging by remember(location.storageId) { mutableStateOf(false) }
+    val rowShape = RoundedCornerShape(16.dp)
     val bgColor by animateColorAsState(
-        targetValue = if (isSelected) {
-            MaterialTheme.colorScheme.surfaceContainerHigh
-        } else {
-            MaterialTheme.colorScheme.surfaceContainer
+        targetValue = when {
+            isDragging -> MaterialTheme.colorScheme.tertiaryContainer
+            isSelected -> MaterialTheme.colorScheme.surfaceContainerHigh
+            else -> MaterialTheme.colorScheme.surfaceContainer
         },
         label = "locationRowContainer"
     )
     val borderColor by animateColorAsState(
-        targetValue = if (isSelected) {
-            MaterialTheme.colorScheme.primary
-        } else {
-            MaterialTheme.colorScheme.outlineVariant
+        targetValue = when {
+            isDragging -> MaterialTheme.colorScheme.tertiary
+            isSelected -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.outlineVariant
         },
         label = "locationRowBorder"
     )
-    val borderWidth = if (isSelected) 2.dp else 1.dp
+    val dragScale by animateFloatAsState(
+        targetValue = if (isDragging) 1.025f else 1f,
+        label = "locationRowDragScale"
+    )
+    val dragElevation by animateDpAsState(
+        targetValue = if (isDragging) 10.dp else 0.dp,
+        label = "locationRowDragElevation"
+    )
+    val borderWidth = if (isSelected || isDragging) 2.dp else 1.dp
     val textColor = MaterialTheme.colorScheme.onSurface
     val reorderThresholdPx = with(LocalDensity.current) { 44.dp.toPx() }
+    val currentOnMoveRequested by rememberUpdatedState(onMoveRequested)
 
     val metadata = location.metadata
     val rawName = metadata?.name?.takeIf { it.isNotBlank() } ?: location.fullName
@@ -96,25 +116,15 @@ fun LocationRow(
         modifier = Modifier
             .fillMaxWidth()
             .height(76.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(bgColor)
-            .border(borderWidth, borderColor, RoundedCornerShape(16.dp))
-            .pointerInput(location.storageId) {
-                var accumulatedDistance = 0f
-                detectDragGesturesAfterLongPress(
-                    onDragStart = { accumulatedDistance = 0f },
-                    onDragCancel = { accumulatedDistance = 0f },
-                    onDragEnd = { accumulatedDistance = 0f },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        accumulatedDistance += dragAmount.y
-                        if (abs(accumulatedDistance) >= reorderThresholdPx) {
-                            onMoveRequested(if (accumulatedDistance > 0f) 1 else -1)
-                            accumulatedDistance = 0f
-                        }
-                    }
-                )
+            .zIndex(if (isDragging) 1f else 0f)
+            .graphicsLayer {
+                scaleX = dragScale
+                scaleY = dragScale
             }
+            .shadow(dragElevation, rowShape, clip = false)
+            .clip(rowShape)
+            .background(bgColor)
+            .border(borderWidth, borderColor, rowShape)
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 8.dp)
     ) {
@@ -170,11 +180,52 @@ fun LocationRow(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .size(40.dp)
+                .background(
+                    color = if (isDragging) {
+                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f)
+                    } else {
+                        Color.Transparent
+                    },
+                    shape = CircleShape
+                )
+                .pointerInput(location.storageId, reorderThresholdPx) {
+                    var accumulatedDistance = 0f
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = {
+                            accumulatedDistance = 0f
+                            isDragging = true
+                        },
+                        onDragCancel = {
+                            accumulatedDistance = 0f
+                            isDragging = false
+                        },
+                        onDragEnd = {
+                            accumulatedDistance = 0f
+                            isDragging = false
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            accumulatedDistance += dragAmount.y
+                            if (abs(accumulatedDistance) >= reorderThresholdPx) {
+                                currentOnMoveRequested(if (accumulatedDistance > 0f) 1 else -1)
+                                accumulatedDistance = 0f
+                            }
+                        }
+                    )
+                }
         ) {
             Icon(
                 imageVector = Icons.Rounded.DragHandle,
-                contentDescription = "Hold and drag to reorder",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                contentDescription = if (isDragging) {
+                    "Reordering profile"
+                } else {
+                    "Hold and drag to reorder"
+                },
+                tint = if (isDragging) {
+                    MaterialTheme.colorScheme.tertiary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
             )
         }
 

@@ -28,8 +28,10 @@ import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopDnsResolver
 import org.olcbox.app.vpn.desktop.DesktopProxyController
 import org.olcbox.app.vpn.desktop.DesktopSingBoxConfig
+import org.olcbox.app.vpn.desktop.DesktopXrayConfig
 import org.olcbox.app.vpn.desktop.LinuxPrivilege
 import org.olcbox.app.vpn.desktop.LinuxTunController
+import org.olcbox.app.vpn.desktop.LocalPortAllocator
 import org.olcbox.app.vpn.desktop.OlcRtcCommand
 import org.olcbox.app.vpn.desktop.PacServer
 import org.olcbox.app.vpn.desktop.WindowsTunController
@@ -77,6 +79,7 @@ class DesktopVpnManager private constructor(
     private var tunProcess: Process? = null
     private var olcRtcConfigPath: Path? = null
     private var activeDesktopMode: DesktopMode? = null
+    private var activeSocksProxySettings: DesktopSocksProxySettings? = null
     private var generation = 0L
     private val linuxTunController = LinuxTunController(::addLog)
     private val windowsTunController = WindowsTunController(::addLog)
@@ -146,7 +149,7 @@ class DesktopVpnManager private constructor(
             return null
         }
 
-        val socks = _socksProxySettings.value.normalized()
+        val socks = activeSocksProxySettings ?: _socksProxySettings.value.normalized()
         return SubscriptionFetchProxy(
             host = socks.host,
             port = socks.port,
@@ -205,24 +208,47 @@ class DesktopVpnManager private constructor(
         val profile = active.profile.normalized()
         val isAmneziaProfile = profile.normalizedType == VpnProfileConfig.TYPE_AMNEZIA_WG ||
             profile.normalizedType == VpnProfileConfig.TYPE_AMNEZIA_VPN
-        if (!profile.isOlcRtc() && !(isAmneziaProfile && DesktopPaths.os == DesktopOs.Windows)) {
+        val isVlessXhttpProfile = profile.normalizedType == VpnProfileConfig.TYPE_VLESS &&
+            runCatching { DesktopXrayConfig.supports(profile) }.getOrDefault(false)
+        val isSupportedWindowsProfile = DesktopPaths.os == DesktopOs.Windows &&
+            (isAmneziaProfile || isVlessXhttpProfile)
+        if (!profile.isOlcRtc() && !isSupportedWindowsProfile) {
             val message = "${profile.typeLabel()} profiles are not supported by the desktop engine"
             setStatus(VpnStatus.Error(message))
             addLog(message)
             return
         }
         val location = active.location.normalized()
+        if (profile.isOlcRtc() && !location.hasValidCryptoKey()) {
+            val message = "olcRTC key must be 64 hexadecimal characters"
+            setStatus(VpnStatus.Error(message))
+            addLog(message)
+            return
+        }
         val engineName = if (profile.isOlcRtc()) "olcRTC" else profile.typeLabel()
 
         try {
-            val bypassHosts = if (isAmneziaProfile) {
-                listOf(DesktopSingBoxConfig.endpointHost(profile))
-            } else {
-                emptyList()
+            val bypassHosts = when {
+                isAmneziaProfile -> listOf(DesktopSingBoxConfig.endpointHost(profile))
+                isVlessXhttpProfile -> listOf(DesktopXrayConfig.endpointHost(profile))
+                else -> emptyList()
             }
             val ready = CompletableDeferred<Unit>()
             val startupFailure = CompletableDeferred<String>()
-            val socksSettings = _socksProxySettings.value.normalized()
+            val configuredSocksSettings = _socksProxySettings.value.normalized()
+            val selectedSocksPort = LocalPortAllocator.select(
+                host = configuredSocksSettings.host,
+                preferredPort = configuredSocksSettings.port,
+                excludedPorts = setOf(PacServer.PAC_PORT)
+            )
+            val socksSettings = configuredSocksSettings.copy(port = selectedSocksPort)
+            activeSocksProxySettings = socksSettings
+            if (selectedSocksPort != configuredSocksSettings.port) {
+                addLog(
+                    "Local SOCKS port ${configuredSocksSettings.port} is occupied; " +
+                        "using $selectedSocksPort for this connection"
+                )
+            }
             val desktopMode = DesktopMode.from(socksSettings.routingMode)
             activeDesktopMode = desktopMode
 
@@ -230,8 +256,8 @@ class DesktopVpnManager private constructor(
                 windowsTunController.ensureAdministratorOrRequestRestart()
             }
 
-            process = if (profile.isOlcRtc()) {
-                startOlcRtcProcessWithFallback(
+            process = when {
+                profile.isOlcRtc() -> startOlcRtcProcessWithFallback(
                     location = location,
                     socksSettings = socksSettings,
                     ready = ready,
@@ -239,8 +265,13 @@ class DesktopVpnManager private constructor(
                     logOutput = true,
                     privileged = desktopMode == DesktopMode.LinuxTun
                 )
-            } else {
-                startSingBoxProcess(
+                isVlessXhttpProfile -> startXrayProcess(
+                    profile = profile,
+                    socksSettings = socksSettings,
+                    startupFailure = startupFailure,
+                    logOutput = true
+                )
+                else -> startSingBoxProcess(
                     profile = profile,
                     socksSettings = socksSettings,
                     startupFailure = startupFailure,
@@ -255,7 +286,8 @@ class DesktopVpnManager private constructor(
                 startupFailure = startupFailure,
                 socksPort = socksSettings.port,
                 requestGeneration = requestGeneration,
-                engineName = engineName
+                engineName = engineName,
+                requireReadySignal = profile.isOlcRtc()
             )
 
             if (requestGeneration != generation) {
@@ -359,6 +391,9 @@ class DesktopVpnManager private constructor(
             socksUsername = socksSettings.username,
             socksPassword = socksSettings.password
         )
+        pacServer.boundPort?.takeIf { it != PacServer.PAC_PORT }?.let { port ->
+            addLog("PAC port ${PacServer.PAC_PORT} is occupied; using $port")
+        }
         proxyController.enable(pacServer.url)
 
         if (requestGeneration != generation) {
@@ -398,7 +433,9 @@ class DesktopVpnManager private constructor(
         privileged: Boolean
     ): Process {
         val binaries = DesktopNativeAssets.resolveOlcRtcBinaryCandidates()
-        val dnsServer = location.dnsServer.ifBlank { DesktopDnsResolver.current() }
+        val dnsServer = normalizeOlcRtcDnsEndpoint(
+            location.dnsServer.ifBlank { DesktopDnsResolver.current() }
+        )
         var lastException: Exception? = null
 
         addLog("Using DNS server $dnsServer for olcRTC")
@@ -430,6 +467,7 @@ class DesktopVpnManager private constructor(
     private suspend fun stopDesktopMode(finalStatus: Boolean) {
         if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null) {
             cancelProcessJobs()
+            activeSocksProxySettings = null
             return
         }
 
@@ -469,6 +507,7 @@ class DesktopVpnManager private constructor(
             pacServer.stop()
         }
         activeDesktopMode = null
+        activeSocksProxySettings = null
 
         stopProcess(process)
         process = null
@@ -566,9 +605,7 @@ class DesktopVpnManager private constructor(
                             ready.complete(Unit)
                         }
 
-                        if (isFatalOlcRtcStartupLine(line)) {
-                            startupFailure.complete(line)
-                        }
+                        desktopOlcRtcStartupFailure(line)?.let(startupFailure::complete)
                     }
                 }
             } catch (_: IOException) {
@@ -591,8 +628,9 @@ class DesktopVpnManager private constructor(
         logOutput: Boolean
     ): Process {
         val binary = DesktopNativeAssets.resolveSingBoxBinary()
-        val configPath = writeSingBoxClientConfig(
-            DesktopSingBoxConfig.build(profile, socksSettings)
+        val configPath = writeEngineClientConfig(
+            prefix = "sing-box",
+            config = DesktopSingBoxConfig.build(profile, socksSettings)
         )
         val command = listOf(
             binary.toAbsolutePath().toString(),
@@ -601,7 +639,54 @@ class DesktopVpnManager private constructor(
             configPath.toAbsolutePath().toString()
         )
 
-        addLog("Starting ${profile.typeLabel()} with sing-box on port ${socksSettings.port}")
+        return startNativeProxyProcess(
+            command = command,
+            profile = profile,
+            engineName = "sing-box",
+            configPath = configPath,
+            startupFailure = startupFailure,
+            logOutput = logOutput
+        )
+    }
+
+    private fun startXrayProcess(
+        profile: VpnProfileConfig,
+        socksSettings: DesktopSocksProxySettings,
+        startupFailure: CompletableDeferred<String>,
+        logOutput: Boolean
+    ): Process {
+        val binary = DesktopNativeAssets.resolveXrayBinary()
+        val configPath = writeEngineClientConfig(
+            prefix = "xray",
+            config = DesktopXrayConfig.build(profile, socksSettings)
+        )
+        val command = listOf(
+            binary.toAbsolutePath().toString(),
+            "run",
+            "-config",
+            configPath.toAbsolutePath().toString()
+        )
+
+        return startNativeProxyProcess(
+            command = command,
+            profile = profile,
+            engineName = "xray",
+            configPath = configPath,
+            startupFailure = startupFailure,
+            logOutput = logOutput
+        )
+    }
+
+    private fun startNativeProxyProcess(
+        command: List<String>,
+        profile: VpnProfileConfig,
+        engineName: String,
+        configPath: Path,
+        startupFailure: CompletableDeferred<String>,
+        logOutput: Boolean
+    ): Process {
+
+        addLog("Starting ${profile.typeLabel()} with $engineName")
 
         val processBuilder = ProcessBuilder(command).redirectErrorStream(true)
         processBuilder.environment()["NO_PROXY"] = "127.0.0.1,localhost"
@@ -623,12 +708,15 @@ class DesktopVpnManager private constructor(
                         if (!isActive) break
 
                         if (logOutput) {
-                            val message = "sing-box: $line"
+                            val message = "$engineName: $line"
                             addLog(message)
                             println(message)
                         }
 
-                        if (line.contains("FATAL", ignoreCase = true)) {
+                        if (
+                            line.contains("FATAL", ignoreCase = true) ||
+                            line.contains("failed to start", ignoreCase = true)
+                        ) {
                             startupFailure.complete(line)
                         }
                     }
@@ -656,10 +744,10 @@ class DesktopVpnManager private constructor(
         return path
     }
 
-    private fun writeSingBoxClientConfig(config: String): Path {
+    private fun writeEngineClientConfig(prefix: String, config: String): Path {
         val runtimeDir = DesktopPaths.appDataDir().resolve("runtime")
         Files.createDirectories(runtimeDir)
-        val path = Files.createTempFile(runtimeDir, "sing-box-", ".json")
+        val path = Files.createTempFile(runtimeDir, "$prefix-", ".json")
         Files.writeString(path, config, StandardCharsets.UTF_8)
         deleteOlcRtcConfig()
         olcRtcConfigPath = path
@@ -788,7 +876,8 @@ class DesktopVpnManager private constructor(
         startupFailure: CompletableDeferred<String>,
         socksPort: Int,
         requestGeneration: Long? = null,
-        engineName: String = "olcRTC"
+        engineName: String = "olcRTC",
+        requireReadySignal: Boolean = true
     ) {
         val deadline = System.currentTimeMillis() + OLC_READY_TIMEOUT_MS
 
@@ -801,7 +890,13 @@ class DesktopVpnManager private constructor(
                 error("$engineName failed before desktop proxy was enabled: ${startupFailure.await()}")
             }
 
-            if (ready.isCompleted || canConnectToSocks(socksPort)) {
+            if (
+                isDesktopEngineReady(
+                    readinessSignalReceived = ready.isCompleted,
+                    portAcceptsConnections = !requireReadySignal && canConnectToSocks(socksPort),
+                    requireReadinessSignal = requireReadySignal
+                )
+            ) {
                 waitForOlcRtcStartupStability(
                     process,
                     startupFailure,
@@ -898,12 +993,26 @@ class DesktopVpnManager private constructor(
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
 
-        internal fun isFatalOlcRtcStartupLine(line: String): Boolean {
-            val text = line.lowercase()
-            return "failed to connect link" in text ||
-                    "join room failed" in text ||
-                    "get room token" in text && "failed" in text ||
-                    "transport connect" in text && "failed" in text
-        }
+    }
+}
+
+internal fun isDesktopEngineReady(
+    readinessSignalReceived: Boolean,
+    portAcceptsConnections: Boolean,
+    requireReadinessSignal: Boolean
+): Boolean {
+    return readinessSignalReceived || (!requireReadinessSignal && portAcceptsConnections)
+}
+
+internal fun desktopOlcRtcStartupFailure(line: String): String? {
+    val text = line.lowercase()
+    val friendlyMessage = friendlyOlcRtcFailure(line)
+    return when {
+        friendlyMessage != line -> friendlyMessage
+        "failed to connect link" in text ||
+            "join room failed" in text ||
+            "get room token" in text && "failed" in text ||
+            "transport connect" in text && "failed" in text -> line
+        else -> null
     }
 }

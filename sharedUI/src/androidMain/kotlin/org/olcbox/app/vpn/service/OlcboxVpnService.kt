@@ -54,6 +54,8 @@ import org.olcbox.app.vpn.UpstreamCandidate
 import org.olcbox.app.vpn.UpstreamNetworkSelector
 import org.olcbox.app.vpn.UpstreamTransport
 import org.olcbox.app.vpn.VpnStatus
+import org.olcbox.app.vpn.friendlyOlcRtcFailure
+import org.olcbox.app.vpn.selectOlcRtcDnsEndpoint
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_EXTERNAL_BYPASS_APPS
@@ -142,6 +144,7 @@ class OlcboxVpnService : VpnService() {
     private var splitTunnelProfiles = AndroidSplitTunnelProfiles()
     private var socksProxy: AuthenticatedSocksProxy? = null
     private var externalEngine: SocksBackedVpnEngine? = null
+    private var tunSocksBridge: SocksBackedVpnEngine? = null
     private var activeProfileType = VpnProfileConfig.TYPE_OLCRTC
 
     private data class StartOptions(
@@ -498,6 +501,14 @@ class OlcboxVpnService : VpnService() {
                     }
 
                     val profile = active.profile
+                    if (profile.isOlcRtc() && !active.location.hasValidCryptoKey()) {
+                        val message = "olcRTC key must be 64 hexadecimal characters"
+                        addLog(message)
+                        setStatus(VpnStatus.Error(message))
+                        updateNotification("Fix the olcRTC profile key")
+                        stopTransportProcesses(closeTun = true, waitForSocksPort = false)
+                        return@withLock
+                    }
                     applySplitTunnelSettings(
                         if (profile.isOlcRtc()) splitTunnelProfiles.olcRtc else splitTunnelProfiles.external
                     )
@@ -596,7 +607,7 @@ class OlcboxVpnService : VpnService() {
 
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) {
-            stopExternalEngine()
+            stopSupersededTunnelStart()
             return
         }
 
@@ -613,12 +624,17 @@ class OlcboxVpnService : VpnService() {
             return
         }
 
+        if (!startTunSocksBridge()) {
+            stopTransportProcesses(closeTun = true, waitForSocksPort = true)
+            return
+        }
+
         delay(TUNNEL_HANDOFF_DELAY_MS)
         coroutineContext.ensureActive()
 
         val pfd = establishSystemVpnTunnel()
         if (pfd == null) {
-            stopMobileAndWait()
+            stopTransportProcesses(closeTun = true, waitForSocksPort = true)
             return
         }
 
@@ -630,7 +646,7 @@ class OlcboxVpnService : VpnService() {
 
         coroutineContext.ensureActive()
         if (requestedGeneration != generation) {
-            stopExternalEngine()
+            stopSupersededTunnelStart()
             return
         }
 
@@ -639,6 +655,37 @@ class OlcboxVpnService : VpnService() {
         updateNotification(connectedNotificationText())
         addLog("VPN tunnel established")
         startWatchdog()
+    }
+
+    private suspend fun startTunSocksBridge(): Boolean {
+        if (!requiresTunSocksBridge()) return true
+
+        val bridge = createTunSocksBridge(
+            context = applicationContext,
+            profileType = activeProfileType,
+            upstreamSocksHost = socksConnectHost(),
+            upstreamSocksPort = socksListenPort,
+            bridgeSocksPort = allocateLocalSocksPort(),
+            username = socksUsername,
+            password = socksPassword,
+            log = ::addLog
+        )
+        tunSocksBridge = bridge
+
+        return try {
+            bridge.start()
+            true
+        } catch (e: CancellationException) {
+            stopTunSocksBridge()
+            throw e
+        } catch (e: Exception) {
+            val message = e.message ?: "TUN DNS bridge start failed"
+            addLog("TUN DNS bridge start failed: $message")
+            setStatus(VpnStatus.Error(message))
+            updateNotification("Tunnel failed")
+            stopTunSocksBridge()
+            false
+        }
     }
 
     private suspend fun startExternalProfile(
@@ -705,7 +752,10 @@ class OlcboxVpnService : VpnService() {
         }
 
         coroutineContext.ensureActive()
-        if (requestedGeneration != generation) return
+        if (requestedGeneration != generation) {
+            stopSupersededTunnelStart()
+            return
+        }
 
         if (connectionMode == AndroidConnectionMode.Proxy) {
             setStatus(VpnStatus.Connected)
@@ -716,9 +766,14 @@ class OlcboxVpnService : VpnService() {
             return
         }
 
+        if (!startTunSocksBridge()) {
+            stopTransportProcesses(closeTun = true, waitForSocksPort = false)
+            return
+        }
+
         val pfd = establishSystemVpnTunnel()
         if (pfd == null) {
-            stopExternalEngine()
+            stopTransportProcesses(closeTun = true, waitForSocksPort = false)
             return
         }
 
@@ -729,7 +784,10 @@ class OlcboxVpnService : VpnService() {
         }
 
         coroutineContext.ensureActive()
-        if (requestedGeneration != generation) return
+        if (requestedGeneration != generation) {
+            stopSupersededTunnelStart()
+            return
+        }
 
         setStatus(VpnStatus.Connected)
         resetRecoveryState()
@@ -767,8 +825,7 @@ class OlcboxVpnService : VpnService() {
             olcRtcRuntime.start()
             olcRtcRuntime.waitReady(MOBILE_READY_TIMEOUT_MS)
             if (requestedGeneration != generation) {
-                addLog("olcRTC start superseded")
-                return false
+                throw CancellationException("olcRTC start superseded")
             }
             coroutineContext.ensureActive()
             addLog("olcRTC ready on $socksListenHost:$targetSocksPort")
@@ -786,7 +843,7 @@ class OlcboxVpnService : VpnService() {
             throw e
         } catch (e: Exception) {
             val staleRequest = requestedGeneration != generation
-            val message = e.message ?: "Transport failed"
+            val message = friendlyOlcRtcFailure(e.message ?: "Transport failed")
             if (staleRequest) {
                 addLog("olcRTC start canceled: $message")
             } else {
@@ -887,7 +944,7 @@ class OlcboxVpnService : VpnService() {
                 .setMtu(TUN_MTU)
                 .addAddress(TUN_IPV4_ADDRESS, IPV4_PREFIX_LENGTH)
                 .addRoute("0.0.0.0", 0)
-                .addDnsServer(MAPDNS_ADDRESS)
+                .addDnsServer(TUN_DNS_SERVER)
                 .setBlocking(true)
 
             if (!applySplitTunneling(builder)) return null
@@ -987,19 +1044,14 @@ class OlcboxVpnService : VpnService() {
               ipv4: $TUN_IPV4_ADDRESS
 
             socks5:
-              address: ${socksConnectHost()}
-              port: $socksListenPort
-              udp: 'tcp'
+              address: ${tun2SocksHost()}
+              port: ${tun2SocksPort()}
+              # Standard SOCKS5 UDP ASSOCIATE is supported by sing-box and Xray.
+              # The tcp mode uses hev's private command 5, which these cores reject.
+              udp: 'udp'
               pipeline: false
               username: '$socksUsername'
               password: '$socksPassword'
-
-            mapdns:
-              address: $MAPDNS_ADDRESS
-              port: 53
-              network: $MAPDNS_NETWORK
-              netmask: $MAPDNS_NETMASK
-              cache-size: 10000
 
             misc:
               task-stack-size: 24576
@@ -1027,6 +1079,14 @@ class OlcboxVpnService : VpnService() {
                     activeProfileType == VpnProfileConfig.TYPE_OLCRTC && !olcRtcRuntime.isRunning -> {
                         addLog("Watchdog: olcRTC stopped")
                         requestTransportRecovery("olcRTC stopped", fullRestart = false)
+                        return@launch
+                    }
+
+                    mode == AndroidConnectionMode.Tun &&
+                        requiresTunSocksBridge() &&
+                        tunSocksBridge?.isRunning != true -> {
+                        addLog("Watchdog: TUN DNS bridge stopped")
+                        requestTransportRecovery("TUN DNS bridge stopped", fullRestart = true)
                         return@launch
                     }
 
@@ -1088,6 +1148,7 @@ class OlcboxVpnService : VpnService() {
             tun2socksThread == null &&
             socksProxy == null &&
             externalEngine == null &&
+            tunSocksBridge == null &&
             cleanupJob?.isActive != true
         ) {
             if (stopService) stopSelf()
@@ -1145,6 +1206,7 @@ class OlcboxVpnService : VpnService() {
         if (tunStopped && tun2socksThread == tunThread) {
             tun2socksThread = null
         }
+        stopTunSocksBridge()
         unbindProcessFromNetwork()
         return tunStopped
     }
@@ -1177,6 +1239,7 @@ class OlcboxVpnService : VpnService() {
         if (tunStopped && tun2socksThread == tunThread) {
             tun2socksThread = null
         }
+        stopTunSocksBridge()
         if (waitForSocksPort) {
             stopMobileAndWait()
         } else {
@@ -1186,6 +1249,11 @@ class OlcboxVpnService : VpnService() {
             unbindProcessFromNetwork()
         }
         return tunStopped
+    }
+
+    private suspend fun stopSupersededTunnelStart() {
+        addLog("VPN start superseded; stopping partial tunnel")
+        stopTransportProcesses(closeTun = true, waitForSocksPort = true)
     }
 
     private fun stopTun2socks() {
@@ -1224,6 +1292,11 @@ class OlcboxVpnService : VpnService() {
         externalEngine = null
     }
 
+    private fun stopTunSocksBridge() {
+        tunSocksBridge?.stop()
+        tunSocksBridge = null
+    }
+
     private suspend fun stopMobileAndWait() {
         val socksPort = socksListenPort
         stopMobile()
@@ -1257,29 +1330,13 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun resolveOlcRtcDnsServer(configuredDnsServer: String): String {
-        if (configuredDnsServer.isNotBlank()) {
-            addLog("Using configured DNS server $configuredDnsServer for olcRTC signaling")
-            return configuredDnsServer
-        }
-
-        val upstreamDnsServer = currentNetwork
-            ?.let(connectivityManager::getLinkProperties)
-            ?.dnsServers
-            ?.asSequence()
-            ?.filterNot { it.isAnyLocalAddress || it.isLoopbackAddress || it.isMulticastAddress }
-            ?.sortedBy { it.address.size }
-            ?.mapNotNull { it.hostAddress }
-            ?.map(::dnsEndpoint)
-            ?.firstOrNull()
-
-        val selectedDnsServer = upstreamDnsServer ?: DEFAULT_OLCRTC_DNS_SERVER
-        val source = if (upstreamDnsServer != null) "upstream" else "fallback"
+        val selectedDnsServer = selectOlcRtcDnsEndpoint(
+            configuredValue = configuredDnsServer,
+            fallbackValue = DEFAULT_OLCRTC_DNS_SERVER
+        )
+        val source = if (configuredDnsServer.isBlank()) "default" else "configured"
         addLog("Using $source DNS server $selectedDnsServer for olcRTC signaling")
         return selectedDnsServer
-    }
-
-    private fun dnsEndpoint(address: String): String {
-        return if (':' in address) "[$address]:53" else "$address:53"
     }
 
     private fun isLocalSocksPortOpen(port: Int, host: String): Boolean {
@@ -1295,6 +1352,19 @@ class OlcboxVpnService : VpnService() {
 
     private fun socksConnectHost(): String {
         return AndroidSocksProxySettings.connectHost(socksListenHost)
+    }
+
+    private fun tun2SocksHost(): String {
+        return tunSocksBridge?.socksHost ?: socksConnectHost()
+    }
+
+    private fun tun2SocksPort(): Int {
+        return tunSocksBridge?.socksPort ?: socksListenPort
+    }
+
+    private fun requiresTunSocksBridge(): Boolean {
+        return activeProfileType == VpnProfileConfig.TYPE_OLCRTC ||
+            activeProfileType == VpnProfileConfig.TYPE_VLESS
     }
 
     private fun handleRtcLine(line: String) {
@@ -1385,11 +1455,13 @@ class OlcboxVpnService : VpnService() {
 
         val txDelta = stats.txPackets - previous.txPackets
         val rxDelta = stats.rxPackets - previous.rxPackets
-        val transportRunning = if (activeProfileType == VpnProfileConfig.TYPE_OLCRTC) {
+        val coreRunning = if (activeProfileType == VpnProfileConfig.TYPE_OLCRTC) {
             olcRtcRuntime.isRunning
         } else {
             externalEngine?.isRunning == true
         }
+        val transportRunning = coreRunning &&
+            (!requiresTunSocksBridge() || tunSocksBridge?.isRunning == true)
 
         if (txDelta >= WATCHDOG_STALLED_TX_PACKET_DELTA && rxDelta <= 0L && transportRunning) {
             watchdogStalledSamples++
@@ -1532,7 +1604,11 @@ class OlcboxVpnService : VpnService() {
                 } else {
                     externalEngine?.isRunning == true
                 }
-                vpnInterface != null && tun2socksThread?.isAlive == true && transportRunning
+                val bridgeRunning = !requiresTunSocksBridge() || tunSocksBridge?.isRunning == true
+                vpnInterface != null &&
+                    tun2socksThread?.isAlive == true &&
+                    transportRunning &&
+                    bridgeRunning
             }
             AndroidConnectionMode.Proxy -> {
                 if (activeProfileType == VpnProfileConfig.TYPE_OLCRTC) {
@@ -1559,6 +1635,7 @@ class OlcboxVpnService : VpnService() {
             tun2socksThread != null ||
             socksProxy != null ||
             externalEngine != null ||
+            tunSocksBridge != null ||
             olcRtcRuntime.isRunning
     }
 
@@ -1918,7 +1995,6 @@ class OlcboxVpnService : VpnService() {
                     true
                 } else {
                     try {
-                        System.loadLibrary("hev-socks5-tunnel")
                         System.loadLibrary("olcbox_tun2socks")
                         nativeLibrariesLoaded = true
                         true
@@ -1965,9 +2041,7 @@ class OlcboxVpnService : VpnService() {
         private const val TUN_MTU = 1500
         private const val TUN_IPV4_ADDRESS = "10.0.88.88"
         private const val IPV4_PREFIX_LENGTH = 24
-        private const val MAPDNS_ADDRESS = "1.1.1.1"
-        private const val MAPDNS_NETWORK = "100.64.0.0"
-        private const val MAPDNS_NETMASK = "255.192.0.0"
+        private const val TUN_DNS_SERVER = "1.1.1.1"
         private const val INTERNAL_SOCKS_USERNAME = "unifiedvpn"
         private const val INTERNAL_SOCKS_PASSWORD = "unifiedvpn"
         private const val NOTIFICATION_CHANNEL_ID = "olcbox_vpn"

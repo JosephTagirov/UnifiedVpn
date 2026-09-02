@@ -3,7 +3,11 @@ package org.olcbox.app.vpn.desktop
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.vpn.DesktopRoutingMode
 import org.olcbox.app.vpn.DesktopSocksProxySettings
+import org.olcbox.app.vpn.desktopOlcRtcStartupFailure
+import org.olcbox.app.vpn.isDesktopEngineReady
 import org.olcbox.app.vpn.olcRtcNativeLibrarySpec
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -47,6 +51,81 @@ class DesktopProxyModeTest {
         assertTrue("SOCKS5 127.0.0.1:10808" !in pac)
 
         server.stop()
+    }
+
+    @Test
+    fun localPortAllocatorSkipsAnOccupiedPreferredPort() {
+        ServerSocket().use { occupied ->
+            occupied.bind(InetSocketAddress(PacServer.LOCAL_SOCKS_HOST, 0))
+
+            val selected = LocalPortAllocator.select(
+                host = PacServer.LOCAL_SOCKS_HOST,
+                preferredPort = occupied.localPort
+            )
+
+            assertTrue(selected != occupied.localPort)
+            assertTrue(LocalPortAllocator.canBind(PacServer.LOCAL_SOCKS_HOST, selected))
+        }
+    }
+
+    @Test
+    fun olcRtcReadinessIgnoresAnUnrelatedOpenSocksPort() {
+        assertTrue(
+            !isDesktopEngineReady(
+                readinessSignalReceived = false,
+                portAcceptsConnections = true,
+                requireReadinessSignal = true
+            )
+        )
+        assertTrue(
+            isDesktopEngineReady(
+                readinessSignalReceived = true,
+                portAcceptsConnections = false,
+                requireReadinessSignal = true
+            )
+        )
+        assertTrue(
+            isDesktopEngineReady(
+                readinessSignalReceived = false,
+                portAcceptsConnections = true,
+                requireReadinessSignal = false
+            )
+        )
+    }
+
+    @Test
+    fun olcRtcHandshakeTimeoutExplainsTheServerSideProblem() {
+        val message = desktopOlcRtcStartupFailure(
+            "client: handshake: handshake client: read welcome: handshake: read hdr: timeout"
+        )
+
+        assertContains(message.orEmpty(), "server did not answer")
+        assertContains(message.orEmpty(), "same olcRTC protocol version")
+        assertEquals(null, desktopOlcRtcStartupFailure("[ice] INFO: connection state connected"))
+    }
+
+    @Test
+    fun pacServerFallsBackWhenItsPreferredPortIsOccupied() {
+        ServerSocket().use { occupied ->
+            occupied.bind(InetSocketAddress(PacServer.PAC_HOST, 0))
+            val server = PacServer(port = occupied.localPort)
+            try {
+                server.start(PacServer.LOCAL_SOCKS_HOST, 10810)
+
+                assertTrue(server.boundPort != occupied.localPort)
+                assertContains(server.url, ":${server.boundPort}/proxy.pac")
+            } finally {
+                server.stop()
+            }
+        }
+    }
+
+    @Test
+    fun olcRtcCryptoKeyRequiresExactly64HexCharacters() {
+        assertTrue(LocationConfig.isValidCryptoKey("a".repeat(64)))
+        assertTrue(LocationConfig.isValidCryptoKey("A1".repeat(32)))
+        assertTrue(!LocationConfig.isValidCryptoKey("a".repeat(63)))
+        assertTrue(!LocationConfig.isValidCryptoKey("z".repeat(64)))
     }
 
     @Test

@@ -174,9 +174,11 @@ fun HomeScreen(
                 selectedLocationId = locationViewModel.selectedLocationId,
                 pingsState = pingsState,
                 onLocationSelected = { id ->
+                    val restartAfterSelection = viewModel.shouldRestartVpnAfterProfileSelection()
                     locationViewModel.selectLocation(id) {
-                        viewModel.loadCurrentConfig()
-                        viewModel.restartVpnIfRunning()
+                        viewModel.loadCurrentConfig {
+                            viewModel.restartVpnIfRunning(force = restartAfterSelection)
+                        }
                     }
                 },
                 onLocationSettingsClick = { id ->

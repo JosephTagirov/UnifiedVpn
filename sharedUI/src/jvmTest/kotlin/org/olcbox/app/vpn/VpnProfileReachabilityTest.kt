@@ -77,6 +77,29 @@ class VpnProfileReachabilityTest {
         }
     }
 
+    @Test
+    fun measuresSystemPingForAwgEndpoint() {
+        val config = """
+            [Interface]
+            PrivateKey = test
+
+            [Peer]
+            PublicKey = test
+            Endpoint = 127.0.0.1:51820
+        """.trimIndent()
+
+        runBlocking {
+            assertNotNull(
+                VpnProfileReachability.ping(
+                    VpnProfileConfig(
+                        type = VpnProfileConfig.TYPE_AMNEZIA_WG,
+                        rawConfig = config
+                    )
+                )
+            )
+        }
+    }
+
     private fun compressedAwgUri(value: String): String {
         val deflater = Deflater()
         val output = ByteArrayOutputStream()

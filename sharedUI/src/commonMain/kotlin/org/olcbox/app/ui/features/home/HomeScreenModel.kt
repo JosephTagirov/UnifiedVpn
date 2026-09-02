@@ -186,32 +186,30 @@ class HomeScreenViewModel(
         }
     }
 
-    fun restartVpnIfRunning() {
-        when (vpnManager.status.value) {
-            VpnStatus.Connected,
-            VpnStatus.Connecting,
-            VpnStatus.Reconnecting -> viewModelScope.launch {
-                _state.update { it.copy(isVpnLoading = true) }
-                val active = locationsRepository.getActiveLocation()
-                if (active == null || !active.isComplete()) {
-                    vpnManager.stopVpn()
-                    loadCurrentConfigNow()
-                    _state.update {
-                        it.copy(
-                            isVpnConnected = false,
-                            isVpnLoading = false,
-                            canStartVpn = false,
-                            startBlockedReason = "Add a valid location first"
-                        )
-                    }
-                } else {
-                    vpnManager.startVpn()
-                }
-            }
+    fun shouldRestartVpnAfterProfileSelection(): Boolean {
+        return vpnManager.status.value.shouldRestartAfterProfileSelection()
+    }
 
-            VpnStatus.Disconnected,
-            VpnStatus.Stopping,
-            is VpnStatus.Error -> Unit
+    fun restartVpnIfRunning(force: Boolean = false) {
+        if (!force && !vpnManager.status.value.shouldRestartAfterProfileSelection()) return
+
+        viewModelScope.launch {
+            _state.update { it.copy(isVpnLoading = true) }
+            val active = locationsRepository.getActiveLocation()
+            if (active == null || !active.isComplete()) {
+                vpnManager.stopVpn()
+                loadCurrentConfigNow()
+                _state.update {
+                    it.copy(
+                        isVpnConnected = false,
+                        isVpnLoading = false,
+                        canStartVpn = false,
+                        startBlockedReason = "Add a valid location first"
+                    )
+                }
+            } else {
+                vpnManager.startVpn()
+            }
         }
     }
     private fun updateLocationConfig(block: (LocationConfig) -> LocationConfig) {
@@ -488,3 +486,9 @@ data class HomeScreenState(
 
 private const val MIN_SUBSCRIPTION_REFRESH_WAIT_MS = 1_000L
 private const val IDLE_SUBSCRIPTION_REFRESH_WAIT_MS = 24L * 60L * 60L * 1_000L
+
+internal fun VpnStatus.shouldRestartAfterProfileSelection(): Boolean {
+    return this is VpnStatus.Connected ||
+        this is VpnStatus.Connecting ||
+        this is VpnStatus.Reconnecting
+}

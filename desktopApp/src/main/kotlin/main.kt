@@ -116,6 +116,7 @@ import org.olcbox.app.update.identity
 import org.olcbox.app.update.isDownloaded
 import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
+import org.olcbox.app.update.updateStatusMessage
 import org.olcbox.app.update.withSeen
 import org.olcbox.app.vpn.DesktopSocksProxySettings
 import org.olcbox.app.vpn.DesktopRoutingMode
@@ -222,16 +223,10 @@ private fun runDesktopApplication(args: Array<String>) = application {
             result.fold(
                 onSuccess = { info ->
                     if (manual || info.shouldShowOffer(previousSettings, checkedAt)) {
-                        if (info.isDownloaded(checkedSettings)) {
-                            updateOffer = null
-                            statusParts += "Unified VPN ${info.version} is already downloaded"
-                        } else if (info.isUpdateAvailable) {
-                            updateOffer = info
-                            statusParts += "Unified VPN update available: ${info.version}"
-                        } else {
-                            updateOffer = null
-                            statusParts += "Unified VPN is up to date"
+                        updateOffer = info.takeIf {
+                            it.isUpdateAvailable && !it.isDownloaded(checkedSettings)
                         }
+                        statusParts += info.updateStatusMessage(checkedSettings)
                     } else {
                         updateOffer = null
                     }

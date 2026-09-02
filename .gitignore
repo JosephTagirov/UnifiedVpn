@@ -16,6 +16,8 @@ Pods/
 *yarn.lock
 dist/
 .downloads/
+private-test-profiles/
+**/private-test-profiles/
 *.log
 logs/
 .env

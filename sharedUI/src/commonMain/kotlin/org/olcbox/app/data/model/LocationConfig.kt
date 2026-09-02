@@ -48,6 +48,8 @@ data class LocationConfig(
 
     fun isComplete(): Boolean = id.isNotBlank() && key.isNotBlank()
 
+    fun hasValidCryptoKey(): Boolean = isValidCryptoKey(key)
+
     fun displayName(): String = name.ifBlank { id }
 
     fun providerName(): String = providerDisplayName(bypassProvider)
@@ -69,6 +71,7 @@ data class LocationConfig(
         const val DEFAULT_VP8_FPS = 60
         const val DEFAULT_VP8_BATCH = 64
         const val MAX_DNS_SERVER_LENGTH = 255
+        const val CRYPTO_KEY_HEX_LENGTH = 64
 
         val supportedBypassProviders = listOf(
             PROVIDER_JAZZ,
@@ -157,6 +160,13 @@ data class LocationConfig(
         fun sanitizeVp8Fps(value: Int): Int = value.coerceIn(1, 120)
 
         fun sanitizeVp8Batch(value: Int): Int = value.coerceIn(1, 64)
+
+        fun isValidCryptoKey(value: String): Boolean {
+            val key = value.trim()
+            return key.length == CRYPTO_KEY_HEX_LENGTH && key.all { char ->
+                char in '0'..'9' || char in 'a'..'f' || char in 'A'..'F'
+            }
+        }
 
         fun isValidDnsServer(value: String): Boolean {
             val endpoint = value.trim()

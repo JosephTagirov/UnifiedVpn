@@ -60,6 +60,7 @@ internal object DesktopSingBoxConfig {
             put("tag", AMNEZIA_WIREGUARD_TAG)
             put("address", JsonArray(outbound.addresses.map(::JsonPrimitive)))
             put("private_key", outbound.privateKey)
+            put("domain_resolver", BOOTSTRAP_DNS_TAG)
             put("peers", buildJsonArray { add(peer) })
             outbound.mtu?.let { put("mtu", it) }
             if (outbound.amneziaWireGuardFields.isNotEmpty()) {
@@ -68,6 +69,7 @@ internal object DesktopSingBoxConfig {
         }
         val root = buildJsonObject {
             put("log", buildJsonObject { put("level", "warn") })
+            put("dns", buildDnsConfig(outbound.dnsServers, outbound.addresses))
             put("inbounds", buildJsonArray { add(inbound) })
             put("endpoints", buildJsonArray { add(endpoint) })
             put(
@@ -90,11 +92,64 @@ internal object DesktopSingBoxConfig {
                             )
                         }
                     )
+                    put("default_domain_resolver", "${TUNNEL_DNS_TAG_PREFIX}0")
                     put("final", AMNEZIA_WIREGUARD_TAG)
                 }
             )
         }
         return json.encodeToString(JsonElement.serializer(), root)
+    }
+
+    private fun buildDnsConfig(
+        configuredServers: List<String>,
+        interfaceAddresses: List<String>
+    ): JsonObject {
+        val tunnelServers = configuredServers
+            .mapNotNull(::parseDnsEndpoint)
+            .distinct()
+            .take(MAX_DNS_SERVERS)
+            .ifEmpty { DEFAULT_DNS_SERVERS.mapNotNull(::parseDnsEndpoint) }
+        val bootstrap = DEFAULT_DNS_SERVERS.first().let(::parseDnsEndpoint)
+            ?: error("Invalid built-in DNS endpoint")
+        return buildJsonObject {
+            put(
+                "servers",
+                buildJsonArray {
+                    add(
+                        buildJsonObject {
+                            put("type", "udp")
+                            put("tag", BOOTSTRAP_DNS_TAG)
+                            put("server", bootstrap.host)
+                            put("server_port", bootstrap.port)
+                        }
+                    )
+                    tunnelServers.forEachIndexed { index, server ->
+                        add(
+                            buildJsonObject {
+                                put("type", "tcp")
+                                put("tag", "$TUNNEL_DNS_TAG_PREFIX$index")
+                                put("server", server.host)
+                                put("server_port", server.port)
+                                put("detour", AMNEZIA_WIREGUARD_TAG)
+                            }
+                        )
+                    }
+                }
+            )
+            put("final", "${TUNNEL_DNS_TAG_PREFIX}0")
+            put("strategy", dnsStrategy(interfaceAddresses))
+        }
+    }
+
+    private fun dnsStrategy(interfaceAddresses: List<String>): String {
+        val hosts = interfaceAddresses.map { it.substringBefore('/').trim() }
+        val hasIpv4 = hosts.any { '.' in it }
+        val hasIpv6 = hosts.any { ':' in it }
+        return when {
+            hasIpv4 && hasIpv6 -> "prefer_ipv4"
+            hasIpv6 -> "ipv6_only"
+            else -> "ipv4_only"
+        }
     }
 
     fun endpointHost(profile: VpnProfileConfig): String {
@@ -200,6 +255,7 @@ internal object DesktopSingBoxConfig {
             privateKey = parsed.interfaceConfig["privatekey"]
                 ?: throw IllegalArgumentException("WireGuard private key is missing"),
             addresses = parsed.interfaceConfig["address"].orEmpty().splitCsv(),
+            dnsServers = parsed.interfaceConfig["dns"].orEmpty().splitCsv(),
             mtu = parsed.interfaceConfig["mtu"]?.toIntOrNull(),
             peerPublicKey = peer["publickey"]
                 ?: throw IllegalArgumentException("WireGuard peer public key is missing"),
@@ -267,12 +323,44 @@ internal object DesktopSingBoxConfig {
         return HostPort(host, port)
     }
 
+    private fun parseDnsEndpoint(endpoint: String): HostPort? {
+        val value = endpoint.trim()
+        if (value.isBlank() || value.startsWith('$')) return null
+        if (value.startsWith('[')) {
+            val closing = value.indexOf(']')
+            if (closing <= 0) return null
+            val host = value.substring(1, closing)
+            val port = value.substring(closing + 1).removePrefix(":").toIntOrNull() ?: 53
+            return HostPort(host, port).takeIf { it.port in 1..65535 && it.host.isIpLiteral() }
+        }
+        if (value.count { it == ':' } > 1) {
+            return HostPort(value, 53).takeIf { it.host.isIpLiteral() }
+        }
+        val separator = value.lastIndexOf(':')
+        if (separator <= 0) return HostPort(value, 53).takeIf { it.host.isIpLiteral() }
+        val port = value.substring(separator + 1).toIntOrNull() ?: return null
+        return HostPort(value.substring(0, separator), port)
+            .takeIf { it.port in 1..65535 && it.host.isIpLiteral() }
+    }
+
+    private fun String.isIpLiteral(): Boolean {
+        if (':' in this) {
+            return isNotBlank() && all {
+                it.isDigit() || it.lowercaseChar() in 'a'..'f' || it in ":.%"
+            }
+        }
+        val octets = split('.')
+        return octets.size == 4 && octets.all { octet ->
+            val number = octet.toIntOrNull()
+            octet.isNotEmpty() && octet.length <= 3 && number != null && number in 0..255
+        }
+    }
+
     private fun looksLikeWireGuardConfig(config: String): Boolean {
-        val lower = config.lowercase()
-        return lower.contains("[interface]") &&
-            lower.contains("[peer]") &&
-            lower.contains("privatekey") &&
-            lower.contains("publickey")
+        return WIREGUARD_INTERFACE_SECTION.containsMatchIn(config) &&
+            WIREGUARD_PEER_SECTION.containsMatchIn(config) &&
+            WIREGUARD_PRIVATE_KEY.containsMatchIn(config) &&
+            WIREGUARD_PUBLIC_KEY.containsMatchIn(config)
     }
 
     private fun String.splitCsv(): List<String> = split(',').map(String::trim).filter(String::isNotBlank)
@@ -295,6 +383,7 @@ internal object DesktopSingBoxConfig {
     private data class WireGuardOutbound(
         val privateKey: String,
         val addresses: List<String>,
+        val dnsServers: List<String>,
         val mtu: Int?,
         val peerPublicKey: String,
         val preSharedKey: String?,
@@ -309,7 +398,27 @@ internal object DesktopSingBoxConfig {
 
     private const val LOCAL_SOCKS_TAG = "local-socks"
     private const val AMNEZIA_WIREGUARD_TAG = "amnezia-wireguard"
+    private const val BOOTSTRAP_DNS_TAG = "dns-bootstrap"
+    private const val TUNNEL_DNS_TAG_PREFIX = "dns-tunnel-"
+    private const val MAX_DNS_SERVERS = 3
+    private val DEFAULT_DNS_SERVERS = listOf("1.1.1.1:53", "8.8.8.8:53")
     private const val MAX_DECOMPRESSED_PROFILE_SIZE = 4 * 1024 * 1024
+    private val WIREGUARD_INTERFACE_SECTION = Regex(
+        """^\s*\[\s*interface\s*]\s*$""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
+    )
+    private val WIREGUARD_PEER_SECTION = Regex(
+        """^\s*\[\s*peer\s*]\s*$""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
+    )
+    private val WIREGUARD_PRIVATE_KEY = Regex(
+        """^\s*privatekey\s*=""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
+    )
+    private val WIREGUARD_PUBLIC_KEY = Regex(
+        """^\s*publickey\s*=""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
+    )
     private val AMNEZIA_WG_INTEGER_FIELDS = setOf(
         "jc", "jmin", "jmax", "s1", "s2", "s3", "s4"
     )

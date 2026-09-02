@@ -37,6 +37,7 @@ import org.olcbox.app.update.identity
 import org.olcbox.app.update.isDownloaded
 import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
+import org.olcbox.app.update.updateStatusMessage
 import org.olcbox.app.update.withSeen
 import org.olcbox.app.ui.OlcboxAppContent
 import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
@@ -52,6 +53,7 @@ import org.olcbox.app.vpn.AndroidSplitTunnelList
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
 import org.olcbox.app.vpn.AndroidSplitTunnelProfile
 import org.olcbox.app.vpn.AndroidVpnManager
+import org.olcbox.app.vpn.service.OlcboxVpnState
 
 @Composable
 fun AndroidMainScreen(
@@ -192,17 +194,9 @@ fun AndroidMainScreen(
         updateSettingsStore.save(normalized)
     }
 
-    fun showUpdateResult(info: AppUpdateInfo): String {
-        if (info.isDownloaded(updateSettings)) {
-            updateOffer = null
-            return "Unified VPN ${info.version} is already downloaded"
-        } else if (info.isUpdateAvailable) {
-            updateOffer = info
-            return "Unified VPN update available: ${info.version}"
-        } else {
-            updateOffer = null
-            return "Unified VPN is up to date"
-        }
+    fun showUpdateResult(info: AppUpdateInfo, settings: AppUpdateSettings): String {
+        updateOffer = info.takeIf { it.isUpdateAvailable && !it.isDownloaded(settings) }
+        return info.updateStatusMessage(settings)
     }
 
     fun checkUpdate(manual: Boolean) {
@@ -228,7 +222,7 @@ fun AndroidMainScreen(
             result?.fold(
                 onSuccess = { info ->
                     if (manual || info.shouldShowOffer(previousSettings, checkedAt)) {
-                        statusParts += showUpdateResult(info)
+                        statusParts += showUpdateResult(info, checkedSettings)
                     } else {
                         updateOffer = null
                     }
@@ -375,18 +369,34 @@ fun AndroidMainScreen(
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
+        ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let {
+        if (uri == null) {
+            OlcboxVpnState.addLog("Config file selection canceled")
+        } else {
+            OlcboxVpnState.addLog("Config file selected")
             viewModel.readImportTextFromSource(
-                source = it,
+                source = uri,
                 onText = { text ->
+                    OlcboxVpnState.addLog("Config file read (${text.length} characters)")
                     importOrOpenFriendPackage(
                         rawText = text,
-                        onComplete = { reloadLocationsAfterImport() }
+                        onComplete = {
+                            reloadLocationsAfterImport {
+                                OlcboxVpnState.addLog("Configuration imported")
+                                Toast.makeText(context, "Configuration imported", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        onError = { message ->
+                            OlcboxVpnState.addLog("Config import failed: $message")
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
                     )
                 },
-                onError = { message -> Toast.makeText(context, message, Toast.LENGTH_LONG).show() }
+                onError = { message ->
+                    OlcboxVpnState.addLog("Config file read failed: $message")
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                }
             )
         }
     }
@@ -455,7 +465,7 @@ fun AndroidMainScreen(
             }
         },
         onImportFileRequested = {
-            filePickerLauncher.launch("*/*")
+            filePickerLauncher.launch(arrayOf("*/*"))
         },
         onImportFromClipboardRequested = { onImported, onError ->
             viewModel.readImportTextFromClipboard(

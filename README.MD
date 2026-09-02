@@ -37,7 +37,7 @@ The author does not support or encourage such use.
 ## Features
 - One Android `VpnService` with selectable profile types.
 - Imports `olcrtc://`, VLESS `vless://`, VLESS base64 subscriptions, AmneziaWG `.conf`, `awg://`, and Amnezia `vpn://`.
-- VLESS runtime adapter through packaged `sing-box`; see `docs/ENGINES.md`.
+- VLESS runtime through packaged `sing-box`, with XHTTP/SplitHTTP profiles handled by the packaged Xray core; see `docs/ENGINES.md`.
 - Self-hosted Amnezia WireGuard runtime through the packaged `sing-box` path; AmneziaWG obfuscation requires an AWG-capable core.
 - One-tap tunnel start/stop with live relay status.
 - Saved connection profiles with active location selection.
@@ -84,8 +84,8 @@ VLESS, provisions a separate AWG peer, and adds all three profiles.
 
 | Platform | Modes | Runtime |
 | --- | --- | --- |
-| Android | TUN, proxy | `VpnService`, `hev-socks5-tunnel`, local `olcrtc` SOCKS5, optional `sing-box` VLESS SOCKS |
-| Windows x86-64 | system proxy, local SOCKS, optional TUN | bundled `olcrtc`, `sing-box`, `tun2socks`, and Wintun runtimes |
+| Android | TUN, proxy | `VpnService`, `hev-socks5-tunnel`, local `olcrtc`, `sing-box`, and Xray SOCKS5 runtimes |
+| Windows x86-64 | system proxy, local SOCKS, optional TUN | bundled `olcrtc`, `sing-box`, Xray, `tun2socks`, and Wintun runtimes |
 
 ## Requirements
 
@@ -94,7 +94,7 @@ VLESS, provisions a separate AWG peer, and adds all three profiles.
 | JVM | JDK 17+ |
 | Android | Android Studio, Android SDK, Android NDK |
 | Android olcRTC | Go, `gomobile`, and local `olcrtc` fork |
-| Android VLESS | Packaged `sing-box` executable as `jniLibs/<abi>/libsing-box.so` |
+| Android VLESS | Packaged `sing-box` and Xray executables as `jniLibs/<abi>/libsing-box.so` and `libxray.so` |
 | Windows native assets | Go and local `olcrtc` fork |
 | Windows TUN | UAC elevation when TUN starts and bundled Wintun runtime |
 
@@ -122,7 +122,7 @@ The checkout must be clean and match the full `olcbox.olcrtcSha` pinned in
 | Install Android debug APK | `.\gradlew.bat :androidApp:installDebug` |
 | Run Windows desktop app | `.\gradlew.bat :desktopApp:run` |
 | Build Windows native assets | `.\gradlew.bat :desktopApp:buildDesktopNativeAssets` |
-| Windows EXE installer | `.\gradlew.bat :desktopApp:packageReleaseExe` |
+| Windows EXE installer | `.\gradlew.bat :desktopApp:packageReleaseExe --no-daemon` |
 | Windows portable ZIP | `.\gradlew.bat :desktopApp:packageReleasePortableZip` |
 | Main checks | `.\gradlew.bat :sharedUI:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug` |
 | JVM tests | `.\gradlew.bat :sharedUI:jvmTest` |
@@ -133,8 +133,8 @@ The checkout must be clean and match the full `olcbox.olcrtcSha` pinned in
 | --- | --- | --- |
 | Android debug | `.\gradlew.bat :androidApp:assembleDebug` | `androidApp\build\outputs\apk\debug\androidApp-debug.apk` |
 | Android release | `.\gradlew.bat :androidApp:assembleRelease` | `androidApp\build\outputs\apk\release\androidApp-release.apk` |
-| Windows EXE | `.\gradlew.bat :desktopApp:packageReleaseExe` | `desktopApp\build\compose\binaries\main-release\exe\UnifiedVPN-<version>.exe` |
-| Windows MSI | `.\gradlew.bat :desktopApp:packageReleaseMsi` | `desktopApp\build\compose\binaries\main-release\msi\UnifiedVPN-<version>.msi` |
+| Windows EXE | `.\gradlew.bat :desktopApp:packageReleaseExe --no-daemon` | `desktopApp\build\compose\binaries\main-release\exe\UnifiedVPN-<version>.exe` |
+| Windows MSI | `.\gradlew.bat :desktopApp:packageReleaseMsi --no-daemon` | `desktopApp\build\compose\binaries\main-release\msi\UnifiedVPN-<version>.msi` |
 | Windows portable ZIP | `.\gradlew.bat :desktopApp:packageReleasePortableZip` | `desktopApp\build\compose\binaries\main-release\portable\UnifiedVPN-<version>-windows-amd64-portable.zip` |
 
 ## Native Assets
@@ -144,6 +144,8 @@ The checkout must be clean and match the full `olcbox.olcrtcSha` pinned in
 | Windows `olcrtc` | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-windows-amd64.exe` |
 | Windows `tun2socks` | `desktopApp/build/generated/desktopNativeResources/native/tun2socks-windows-amd64.exe` |
 | Windows Wintun runtime | `desktopApp/build/generated/desktopNativeResources/native/wintun.dll` |
+| Windows AWG `sing-box` | `desktopApp/build/generated/desktopNativeResources/native/sing-box-awg-windows-amd64.exe` |
+| Windows Xray | `desktopApp/build/generated/desktopNativeResources/native/xray-windows-amd64.exe` |
 
 ## Notes
 

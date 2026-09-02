@@ -43,8 +43,10 @@ val localProperties = Properties().apply {
 val androidSdkPath = providers.environmentVariable("ANDROID_HOME")
     .orElse(providers.environmentVariable("ANDROID_SDK_ROOT"))
     .orElse(providers.provider { localProperties.getProperty("sdk.dir").orEmpty() })
-val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.8")
+val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.10")
 val awgCoreCommitSha = providers.gradleProperty("olcbox.awgCoreSha").orElse("unknown")
+val xrayCoreVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("unknown")
+val xrayCoreCommitSha = providers.gradleProperty("olcbox.xraySha").orElse("unknown")
 val olcboxVersionValue = olcboxVersion.get()
 val generatedAppInfoDir = layout.buildDirectory.dir("generated/source/olcboxAppInfo/commonMain")
 
@@ -58,6 +60,12 @@ abstract class GenerateAppInfoTask : DefaultTask() {
     @get:Input
     abstract val awgCoreSha: Property<String>
 
+    @get:Input
+    abstract val xrayVersion: Property<String>
+
+    @get:Input
+    abstract val xraySha: Property<String>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -68,6 +76,8 @@ abstract class GenerateAppInfoTask : DefaultTask() {
         val escapedVersion = version.get().replace("\\", "\\\\").replace("\"", "\\\"")
         val escapedOlcrtcSha = olcrtcSha.get().replace("\\", "\\\\").replace("\"", "\\\"")
         val escapedAwgCoreSha = awgCoreSha.get().replace("\\", "\\\\").replace("\"", "\\\"")
+        val escapedXrayVersion = xrayVersion.get().replace("\\", "\\\\").replace("\"", "\\\"")
+        val escapedXraySha = xraySha.get().replace("\\", "\\\\").replace("\"", "\\\"")
         packageDir.resolve("GeneratedAppInfo.kt").writeText(
             """
             package org.olcbox.app
@@ -78,6 +88,8 @@ abstract class GenerateAppInfoTask : DefaultTask() {
                 const val SOURCE_ATTRIBUTION: String = "Based on Olcbox from GitHub"
                 const val OLCRTC_SHA: String = "$escapedOlcrtcSha"
                 const val AWG_CORE_SHA: String = "$escapedAwgCoreSha"
+                const val XRAY_VERSION: String = "$escapedXrayVersion"
+                const val XRAY_SHA: String = "$escapedXraySha"
             }
             """.trimIndent() + "\n"
         )
@@ -94,6 +106,8 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
     inputs.dir(olcrtcRepoDir.resolve("internal"))
     inputs.files(olcrtcRepoDir.resolve("go.mod"), olcrtcRepoDir.resolve("go.sum"))
+    inputs.property("olcrtcRepositoryPath", olcrtcRepoDir.canonicalPath)
+    inputs.property("olcrtcCommit", olcrtcCommitSha)
     outputs.file(olcrtcAndroidAar)
 
     workingDir = olcrtcRepoDir
@@ -130,6 +144,8 @@ val buildOlcrtcIosXcframework by tasks.registering(Exec::class) {
     inputs.dir(olcrtcRepoDir.resolve("mobile"))
     inputs.dir(olcrtcRepoDir.resolve("internal"))
     inputs.files(olcrtcRepoDir.resolve("go.mod"), olcrtcRepoDir.resolve("go.sum"))
+    inputs.property("olcrtcRepositoryPath", olcrtcRepoDir.canonicalPath)
+    inputs.property("olcrtcCommit", olcrtcCommitSha)
     outputs.dir(olcrtcIosXcframework)
 
     workingDir = olcrtcRepoDir
@@ -155,6 +171,8 @@ val generateAppInfo by tasks.registering(GenerateAppInfoTask::class) {
     version.set(olcboxVersionValue)
     olcrtcSha.set(olcrtcCommitSha)
     awgCoreSha.set(awgCoreCommitSha)
+    xrayVersion.set(xrayCoreVersion)
+    xraySha.set(xrayCoreCommitSha)
     outputDir.set(generatedAppInfoDir)
 }
 

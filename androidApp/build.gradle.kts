@@ -1,5 +1,7 @@
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -15,6 +17,9 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val apkDirectory: DirectoryProperty
 
+    @get:Input
+    abstract val requiredAbis: ListProperty<String>
+
     @TaskAction
     fun verifyBindings() {
         val apkFiles = apkDirectory.get().asFile
@@ -27,6 +32,19 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
         }
 
         apkFiles.forEach { apk ->
+            val missingNativeEngines = ZipFile(apk).use { archive ->
+                requiredAbis.get().flatMap { abi ->
+                    REQUIRED_NATIVE_ENGINES.mapNotNull { library ->
+                        val path = "lib/$abi/$library"
+                        val entry = archive.getEntry(path)
+                        path.takeIf { entry == null || entry.size <= 0L }
+                    }
+                }
+            }
+            check(missingNativeEngines.isEmpty()) {
+                "${apk.name} is missing native VPN engines: ${missingNativeEngines.sorted().joinToString()}."
+            }
+
             val definedClasses = ZipFile(apk).use { archive ->
                 archive.entries().asSequence()
                     .filter { entry -> DEX_ENTRY.matches(entry.name) }
@@ -43,7 +61,7 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
                 "${apk.name} is missing olcRTC bindings: ${missingClasses.sorted().joinToString()}. " +
                     "The generated olcrtc.aar must be packaged directly into androidApp."
             }
-            logger.lifecycle("Verified olcRTC bindings in ${apk.name}")
+            logger.lifecycle("Verified olcRTC bindings and native VPN engines in ${apk.name}")
         }
     }
 
@@ -130,6 +148,12 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
             "Lmobile/Runtime;",
             "Lmobile/SocketProtector;",
         )
+        private val REQUIRED_NATIVE_ENGINES = listOf(
+            "libhev-socks5-tunnel.so",
+            "libolcbox_tun2socks.so",
+            "libsing-box.so",
+            "libxray.so",
+        )
 
         private const val UINT_SIZE = 4
         private const val DEX_HEADER_SIZE = 0x70
@@ -162,7 +186,7 @@ val hasReleaseKeystore =
     keystorePropertiesFile.exists() &&
         listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
             .all { key -> !keystoreProperties.getProperty(key).isNullOrBlank() }
-val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.8")
+val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.10")
 val olcboxVersionCode = providers.gradleProperty("olcbox.versionCode")
     .map { it.toInt() }
     .orElse(1)
@@ -285,6 +309,7 @@ listOf("debug", "release").forEach { buildType ->
         group = "verification"
         description = "Verifies that the $buildType APK contains the olcRTC gomobile bindings."
         apkDirectory.set(layout.buildDirectory.dir("outputs/apk/$buildType"))
+        requiredAbis.set(androidAbiFilters)
     }
 
     tasks.matching { task -> task.name == "assemble$buildTypeName" }.configureEach {

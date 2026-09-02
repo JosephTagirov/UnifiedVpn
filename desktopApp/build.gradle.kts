@@ -13,6 +13,7 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.internal.os.OperatingSystem
 import org.gradle.api.tasks.bundling.Zip
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 import java.net.URI
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
@@ -209,9 +210,10 @@ val generatedNativeResources = layout.buildDirectory.dir("generated/desktopNativ
 val hevSocks5TunnelSourceDir = rootProject.layout.projectDirectory.dir("androidApp/src/main/jni/hev-socks5-tunnel")
 val currentBuildOs = OperatingSystem.current()
 val desktopPackageName = "UnifiedVPN"
-val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("0.0.8").get()
+val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("0.0.10").get()
 val tun2SocksVersion = "2.6.0"
 val wintunVersion = "0.14.1"
+val xrayVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("26.3.27").get()
 val currentBuildTargetFormats = when {
     currentBuildOs.isMacOsX -> arrayOf(TargetFormat.Dmg)
     currentBuildOs.isWindows -> arrayOf(TargetFormat.Exe, TargetFormat.Msi)
@@ -229,6 +231,30 @@ fun shellQuote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
 
 val hostDesktopArch = desktopArchName(System.getProperty("os.arch"))
 
+fun verifyOlcRtcBinaryVcsMetadata(binary: File) {
+    val process = ProcessBuilder("go", "version", "-m", binary.absolutePath)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }
+    check(process.waitFor() == 0) {
+        "Cannot read Go VCS metadata from ${binary.absolutePath}: ${output.trim()}"
+    }
+    val revision = Regex("""\bvcs\.revision=([0-9a-f]{40})\b""")
+        .find(output)
+        ?.groupValues
+        ?.get(1)
+    val modified = Regex("""\bvcs\.modified=(true|false)\b""")
+        .find(output)
+        ?.groupValues
+        ?.get(1)
+    val expected = expectedOlcrtcCommit.get().trim().lowercase()
+    check(revision == expected && modified == "false") {
+        "olcRTC binary VCS metadata mismatch for ${binary.absolutePath}: " +
+            "expected revision=$expected modified=false, found revision=$revision modified=$modified"
+    }
+    logger.lifecycle("Verified olcRTC binary VCS metadata $expected in ${binary.name}")
+}
+
 fun registerOlcRtcBuildTask(
     taskName: String,
     goos: String,
@@ -241,6 +267,7 @@ fun registerOlcRtcBuildTask(
     inputs.dir(olcrtcRepoDir.map { it.resolve("internal") })
     inputs.dir(olcrtcRepoDir.map { it.resolve("pkg") })
     inputs.files(olcrtcRepoDir.map { it.resolve("go.mod") }, olcrtcRepoDir.map { it.resolve("go.sum") })
+    inputs.property("olcrtcRepositoryPath", olcrtcRepoDir.map { it.canonicalPath })
     inputs.property("olcrtcCommit", expectedOlcrtcCommit)
     outputs.file(outputFile)
     dependsOn(":verifyOlcRtcSource")
@@ -248,6 +275,9 @@ fun registerOlcRtcBuildTask(
     environment("GOOS", goos)
     environment("GOARCH", goarch)
     environment("CGO_ENABLED", "0")
+    environment("GIT_CONFIG_COUNT", "1")
+    environment("GIT_CONFIG_KEY_0", "safe.directory")
+    environment("GIT_CONFIG_VALUE_0", olcrtcRepoDir.get().canonicalPath.replace('\\', '/'))
     commandLine(
         "go",
         "build",
@@ -261,6 +291,9 @@ fun registerOlcRtcBuildTask(
 
     doFirst {
         outputFile.get().asFile.parentFile.mkdirs()
+    }
+    doLast {
+        verifyOlcRtcBinaryVcsMetadata(outputFile.get().asFile)
     }
 }
 
@@ -276,6 +309,7 @@ fun registerOlcRtcLibraryBuildTask(
     inputs.dir(olcrtcRepoDir.map { it.resolve("internal") })
     inputs.dir(olcrtcRepoDir.map { it.resolve("pkg") })
     inputs.files(olcrtcRepoDir.map { it.resolve("go.mod") }, olcrtcRepoDir.map { it.resolve("go.sum") })
+    inputs.property("olcrtcRepositoryPath", olcrtcRepoDir.map { it.canonicalPath })
     inputs.property("olcrtcCommit", expectedOlcrtcCommit)
     outputs.file(outputFile)
     dependsOn(":verifyOlcRtcSource")
@@ -283,6 +317,9 @@ fun registerOlcRtcLibraryBuildTask(
     environment("GOOS", goos)
     environment("GOARCH", goarch)
     environment("CGO_ENABLED", "1")
+    environment("GIT_CONFIG_COUNT", "1")
+    environment("GIT_CONFIG_KEY_0", "safe.directory")
+    environment("GIT_CONFIG_VALUE_0", olcrtcRepoDir.get().canonicalPath.replace('\\', '/'))
     commandLine(
         "go",
         "build",
@@ -297,6 +334,9 @@ fun registerOlcRtcLibraryBuildTask(
 
     doFirst {
         outputFile.get().asFile.parentFile.mkdirs()
+    }
+    doLast {
+        verifyOlcRtcBinaryVcsMetadata(outputFile.get().asFile)
     }
 }
 
@@ -475,6 +515,16 @@ if (currentBuildOs.isWindows) {
     val singBoxAwgWindowsOutput = generatedNativeResources.map {
         it.file("native/sing-box-awg-windows-amd64.exe")
     }
+    val xrayWindowsSource = providers.environmentVariable("XRAY_BINARY")
+        .map { rootProject.file(it) }
+        .orElse(
+            rootProject.layout.projectDirectory.file(
+                ".downloads/xray/v$xrayVersion/windows-64/xray.exe"
+            ).asFile
+        )
+    val xrayWindowsOutput = generatedNativeResources.map {
+        it.file("native/xray-windows-amd64.exe")
+    }
 
     val copySingBoxAwgWindowsAmd64 = tasks.register<Copy>("copySingBoxAwgWindowsAmd64") {
         from(singBoxAwgWindowsSource)
@@ -487,6 +537,21 @@ if (currentBuildOs.isWindows) {
             require(singBoxAwgWindowsSource.get().isFile) {
                 "AmneziaWG sing-box binary is missing: ${singBoxAwgWindowsSource.get().absolutePath}. " +
                     "Set SING_BOX_AWG_BINARY to the compatible Throne sing-box fork binary."
+            }
+        }
+    }
+
+    val copyXrayWindowsAmd64 = tasks.register<Copy>("copyXrayWindowsAmd64") {
+        from(xrayWindowsSource)
+        into(xrayWindowsOutput.map { it.asFile.parentFile })
+        rename { "xray-windows-amd64.exe" }
+        inputs.file(xrayWindowsSource)
+        outputs.file(xrayWindowsOutput)
+
+        doFirst {
+            require(xrayWindowsSource.get().isFile) {
+                "Xray binary is missing: ${xrayWindowsSource.get().absolutePath}. " +
+                    "Set XRAY_BINARY to the official Windows amd64 Xray executable."
             }
         }
     }
@@ -516,9 +581,11 @@ if (currentBuildOs.isWindows) {
     desktopNativeAssetTasks.add(extractTun2SocksWindowsAmd64)
     desktopNativeAssetTasks.add(extractWintunWindowsAmd64)
     desktopNativeAssetTasks.add(copySingBoxAwgWindowsAmd64)
+    desktopNativeAssetTasks.add(copyXrayWindowsAmd64)
     hostDesktopNativeAssetTasks.add(extractTun2SocksWindowsAmd64)
     hostDesktopNativeAssetTasks.add(extractWintunWindowsAmd64)
     hostDesktopNativeAssetTasks.add(copySingBoxAwgWindowsAmd64)
+    hostDesktopNativeAssetTasks.add(copyXrayWindowsAmd64)
 }
 
 fun requiredHostNativeResourcePaths(): List<String> = buildList {
@@ -535,6 +602,7 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/tun2socks-windows-amd64.exe")
             add("native/wintun.dll")
             add("native/sing-box-awg-windows-amd64.exe")
+            add("native/xray-windows-amd64.exe")
         }
         currentBuildOs.isLinux -> {
             add("native/olcrtc-linux-$hostDesktopArch")
@@ -595,6 +663,13 @@ if (currentBuildOs.isWindows) {
         launcherName.set("$desktopPackageName.exe")
         timeoutSeconds.set(30L)
     }
+
+    tasks.withType<AbstractJPackageTask>()
+        .matching { task -> task.name == "packageReleaseExe" || task.name == "packageReleaseMsi" }
+        .configureEach {
+            appImage.set(desktopAppImageDir)
+            freeArgs.add("--verbose")
+        }
 
     listOf(
         "packageReleaseDistributionForCurrentOS",

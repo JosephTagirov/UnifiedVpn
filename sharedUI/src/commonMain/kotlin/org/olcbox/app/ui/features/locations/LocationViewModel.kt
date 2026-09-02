@@ -67,6 +67,8 @@ class LocationViewModel(
     private val pingSemaphore = Semaphore(LOCATION_PING_PARALLELISM)
     private var loadLocationsJob: Job? = null
     private var loadLocationsRequest = 0
+    private var moveLocationJob: Job? = null
+    private var moveLocationRequest = 0
     private val providerDrafts = mutableMapOf<String, ProviderDraft>()
 
     var editingConfig by mutableStateOf(LocationConfig())
@@ -512,7 +514,7 @@ class LocationViewModel(
     private fun validateKey(key: String) {
         keyError = when {
             key.isBlank() -> "Key cannot be empty"
-            !key.matches(Regex("^[a-fA-F0-9]{64}$")) -> "Key must be 64 hex characters"
+            !LocationConfig.isValidCryptoKey(key) -> "Key must be 64 hex characters"
             else -> null
         }
     }
@@ -597,11 +599,16 @@ class LocationViewModel(
 
         locations[sourceListIndex] = target
         locations[targetListIndex] = current
-        viewModelScope.launch {
+        val previousMoveJob = moveLocationJob
+        val requestId = ++moveLocationRequest
+        moveLocationJob = viewModelScope.launch {
+            previousMoveJob?.join()
             runCatching {
                 locationsRepository.moveLocation(id, target.storageId)
             }
-            loadLocations()
+            if (requestId == moveLocationRequest) {
+                loadLocations()
+            }
         }
     }
 

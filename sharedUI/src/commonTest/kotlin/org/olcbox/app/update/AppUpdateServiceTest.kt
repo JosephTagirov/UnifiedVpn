@@ -225,6 +225,27 @@ class AppUpdateServiceTest {
         )
     }
 
+    @Test
+    fun currentVersionUsesExplicitLatestInstalledMessage() {
+        val info = AppUpdateInfo(
+            channel = ReleaseChannel.Stable,
+            version = "0.0.10",
+            htmlUrl = "https://example/release",
+            publishedAt = null,
+            asset = AppUpdateAsset(
+                name = "UnifiedVPN-0.0.10.apk",
+                downloadUrl = "https://example/app.apk",
+                sizeBytes = 100
+            ),
+            isUpdateAvailable = false
+        )
+
+        assertEquals(
+            "The latest version of Unified VPN is already installed",
+            info.updateStatusMessage(AppUpdateSettings())
+        )
+    }
+
     private class StaticIdentityProvider(
         private val value: String
     ) : DeviceIdentityProvider {

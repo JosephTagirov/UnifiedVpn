@@ -9,9 +9,11 @@ import org.json.JSONObject
 import org.olcbox.app.data.model.VpnProfileConfig
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URLDecoder
+import java.util.concurrent.TimeUnit
 import java.util.zip.Inflater
 import kotlin.concurrent.thread
 
@@ -70,6 +72,26 @@ internal fun createSocksBackedVpnEngine(
     }
 }
 
+internal fun createTunSocksBridge(
+    context: Context,
+    profileType: String,
+    upstreamSocksHost: String,
+    upstreamSocksPort: Int,
+    bridgeSocksPort: Int,
+    username: String,
+    password: String,
+    log: (String) -> Unit
+): SocksBackedVpnEngine = SingBoxTunSocksBridge(
+    context = context.applicationContext,
+    profileType = profileType,
+    upstreamSocksHost = upstreamSocksHost,
+    upstreamSocksPort = upstreamSocksPort,
+    socksPort = bridgeSocksPort,
+    username = username,
+    password = password,
+    log = log
+)
+
 private class ExistingSocksEngine(
     override val profileType: String,
     private val host: String,
@@ -106,6 +128,158 @@ private class MissingNativeEngine(
     override fun stop() = Unit
 }
 
+private class SingBoxTunSocksBridge(
+    private val context: Context,
+    override val profileType: String,
+    private val upstreamSocksHost: String,
+    private val upstreamSocksPort: Int,
+    override val socksPort: Int,
+    private val username: String,
+    private val password: String,
+    private val log: (String) -> Unit
+) : SocksBackedVpnEngine {
+    override val socksHost: String = DEFAULT_SOCKS_HOST
+    override val isRunning: Boolean
+        get() = process?.isAlive == true && canConnect(socksHost, socksPort)
+
+    private var process: Process? = null
+    private var logThread: Thread? = null
+
+    override suspend fun start() {
+        require(upstreamSocksPort in 1..65535) { "Invalid olcRTC SOCKS port" }
+        require(socksPort in 1..65535 && socksPort != upstreamSocksPort) {
+            "Invalid olcRTC bridge SOCKS port"
+        }
+
+        val executableSource = findEngineExecutable(context, "sing-box")
+            ?: throw IllegalStateException(
+                "sing-box executable is missing. Put it at jniLibs/<abi>/libsing-box.so " +
+                    "or assets/bin/<abi>/sing-box."
+            )
+        val workDir = File(
+            context.noBackupFilesDir,
+            "engines/sing-box/${executableSource.abi}"
+        ).apply { mkdirs() }
+        val executable = executableSource.file ?: File(workDir, "sing-box").also { target ->
+            copyAsset(context, executableSource.assetPath.orEmpty(), target)
+            target.setExecutable(true, false)
+        }
+        val configFile = File(workDir, "tun-bridge-$socksPort.json").also { file ->
+            file.writeText(buildTunBridgeConfig().toString())
+        }
+
+        stop()
+        val started = ProcessBuilder(
+            executable.absolutePath,
+            "run",
+            "-c",
+            configFile.absolutePath
+        )
+            .directory(workDir)
+            .redirectErrorStream(true)
+            .start()
+        process = started
+        logThread = startEngineLogReader(
+            threadName = "SingBoxTunBridgeLog",
+            logPrefix = "TUN bridge",
+            process = started,
+            log = log
+        )
+
+        val deadline = System.currentTimeMillis() + SING_BOX_READY_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
+            if (!started.isAlive) {
+                throw IllegalStateException("TUN DNS bridge exited before SOCKS became ready")
+            }
+            if (canConnect(socksHost, socksPort)) {
+                log("TUN DNS bridge ready on $socksHost:$socksPort")
+                return
+            }
+            delay(SOCKS_READY_POLL_MS)
+        }
+        stop()
+        throw IllegalStateException("TUN DNS bridge did not open SOCKS port $socksPort")
+    }
+
+    override fun stop() {
+        val running = process
+        process = null
+        running?.destroy()
+        if (running?.isAlive == true) {
+            runCatching {
+                if (!running.waitFor(ENGINE_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                    running.destroyForcibly()
+                    running.waitFor(ENGINE_FORCE_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                }
+            }
+        }
+        logThread?.interrupt()
+        logThread = null
+    }
+
+    private fun buildTunBridgeConfig(): JSONObject {
+        val inbound = buildSingBoxSocksInbound(
+            socksHost = socksHost,
+            socksPort = socksPort,
+            username = username,
+            password = password
+        ).put("tag", SING_BOX_TUN_BRIDGE_INBOUND_TAG)
+
+        val outbound = JSONObject()
+            .put("type", "socks")
+            .put("tag", SING_BOX_TUN_BRIDGE_OUTBOUND_TAG)
+            .put("server", upstreamSocksHost)
+            .put("server_port", upstreamSocksPort)
+            .put("version", "5")
+            .also { socks ->
+                if (username.isNotBlank()) {
+                    socks.put("username", username)
+                    socks.put("password", password)
+                }
+            }
+
+        val dnsServer = JSONObject()
+            .put("type", "https")
+            .put("tag", SING_BOX_TUN_BRIDGE_DNS_TAG)
+            .put("server", "8.8.8.8")
+            .put("server_port", 443)
+            .put("path", "/dns-query")
+            .put(
+                "tls",
+                JSONObject()
+                    .put("enabled", true)
+                    .put("server_name", "dns.google")
+            )
+            .put("detour", SING_BOX_TUN_BRIDGE_OUTBOUND_TAG)
+
+        val routeRules = JSONArray()
+            .put(
+                JSONObject()
+                    .put("inbound", SING_BOX_TUN_BRIDGE_INBOUND_TAG)
+                    .put("port", 53)
+                    .put("action", "hijack-dns")
+            )
+
+        return JSONObject()
+            .put("log", JSONObject().put("level", "warn"))
+            .put(
+                "dns",
+                JSONObject()
+                    .put("servers", JSONArray().put(dnsServer))
+                    .put("final", SING_BOX_TUN_BRIDGE_DNS_TAG)
+                    .put("strategy", "ipv4_only")
+            )
+            .put("inbounds", JSONArray().put(inbound))
+            .put("outbounds", JSONArray().put(outbound))
+            .put(
+                "route",
+                JSONObject()
+                    .put("rules", routeRules)
+                    .put("final", SING_BOX_TUN_BRIDGE_OUTBOUND_TAG)
+            )
+    }
+}
+
 private class SingBoxVlessEngine(
     private val context: Context,
     private val profile: VpnProfileConfig,
@@ -121,44 +295,49 @@ private class SingBoxVlessEngine(
 
     private var process: Process? = null
     private var logThread: Thread? = null
+    private var activeEngineName: String = "sing-box"
 
     override suspend fun start() {
         val uri = profile.rawConfig?.takeIf { it.startsWith("vless://", ignoreCase = true) }
             ?: profile.uri?.takeIf { it.startsWith("vless://", ignoreCase = true) }
             ?: throw IllegalStateException("VLESS profile does not contain a vless:// URI")
-        val executableSource = findEngineExecutable(context, "sing-box")
+        val outbound = parseVlessUri(uri)
+        val useXray = outbound.transport in XRAY_VLESS_TRANSPORTS
+        val engineName = if (useXray) "xray" else "sing-box"
+        val executableSource = findEngineExecutable(context, engineName)
             ?: throw IllegalStateException(
-                "sing-box executable is missing. Put it at jniLibs/<abi>/libsing-box.so " +
-                    "or assets/bin/<abi>/sing-box."
+                "$engineName executable is missing. Put it at jniLibs/<abi>/lib$engineName.so " +
+                    "or assets/bin/<abi>/$engineName."
             )
-        val workDir = File(context.noBackupFilesDir, "engines/sing-box/${executableSource.abi}").apply {
+        val workDir = File(context.noBackupFilesDir, "engines/$engineName/${executableSource.abi}").apply {
             mkdirs()
         }
-        val executable = executableSource.file ?: File(workDir, "sing-box").also { target ->
+        val executable = executableSource.file ?: File(workDir, engineName).also { target ->
             copyAsset(context, executableSource.assetPath.orEmpty(), target)
             target.setExecutable(true, false)
         }
-        val outbound = parseVlessUri(uri)
         val configFile = File(workDir, "vless-$socksPort.json").also { file ->
-            file.writeText(buildSingBoxConfig(outbound))
+            file.writeText(if (useXray) buildXrayConfig(outbound) else buildSingBoxConfig(outbound))
         }
 
         stop()
-        process = ProcessBuilder(
-            executable.absolutePath,
-            "run",
-            "-c",
-            configFile.absolutePath
-        )
+        activeEngineName = engineName
+        val command = if (useXray) {
+            listOf(executable.absolutePath, "run", "-config", configFile.absolutePath)
+        } else {
+            listOf(executable.absolutePath, "run", "-c", configFile.absolutePath)
+        }
+        process = ProcessBuilder(command)
             .directory(workDir)
             .redirectErrorStream(true)
             .start()
         logThread = process?.let { started ->
-            thread(name = "SingBoxVlessLog", isDaemon = true) {
-                started.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line -> log("sing-box: $line") }
-                }
-            }
+            startEngineLogReader(
+                threadName = if (useXray) "XrayVlessLog" else "SingBoxVlessLog",
+                logPrefix = engineName,
+                process = started,
+                log = log
+            )
         }
 
         waitForSocksPort()
@@ -177,12 +356,109 @@ private class SingBoxVlessEngine(
         while (System.currentTimeMillis() < deadline) {
             val started = process
             if (started != null && !started.isAlive) {
-                throw IllegalStateException("sing-box exited before SOCKS became ready")
+                throw IllegalStateException("$activeEngineName exited before SOCKS became ready")
             }
             if (canConnect(socksHost, socksPort)) return
             delay(SOCKS_READY_POLL_MS)
         }
-        throw IllegalStateException("sing-box SOCKS port $socksPort did not become ready")
+        throw IllegalStateException("$activeEngineName SOCKS port $socksPort did not become ready")
+    }
+
+    private fun buildXrayConfig(outbound: VlessOutbound): String {
+        val inboundSettings = JSONObject().put("udp", true)
+        if (username.isBlank()) {
+            inboundSettings.put("auth", "noauth")
+        } else {
+            inboundSettings
+                .put("auth", "password")
+                .put(
+                    "accounts",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("user", username)
+                            .put("pass", password)
+                    )
+                )
+        }
+        val inbound = JSONObject()
+            .put("listen", socksHost)
+            .put("port", socksPort)
+            .put("protocol", "socks")
+            .put("settings", inboundSettings)
+        val user = JSONObject()
+            .put("id", outbound.uuid)
+            .put("encryption", outbound.encryption ?: "none")
+        outbound.flow?.let { user.put("flow", it) }
+        val streamSettings = JSONObject()
+            .put("network", "xhttp")
+            .put("security", outbound.security ?: "none")
+            .put(
+                "xhttpSettings",
+                JSONObject()
+                    .put("path", outbound.path ?: "/")
+                    .also { settings ->
+                        outbound.hostHeader?.let { settings.put("host", it) }
+                        outbound.mode?.let { settings.put("mode", it) }
+                    }
+            )
+
+        when (outbound.security) {
+            "reality" -> streamSettings.put(
+                "realitySettings",
+                JSONObject()
+                    .put("show", false)
+                    .also { reality ->
+                        outbound.sni?.let { reality.put("serverName", it) }
+                        outbound.fingerprint?.let { reality.put("fingerprint", it) }
+                        outbound.publicKey?.let { reality.put("publicKey", it) }
+                        outbound.shortId?.let { reality.put("shortId", it) }
+                        outbound.spiderX?.let { reality.put("spiderX", it) }
+                    }
+            )
+            "tls" -> streamSettings.put(
+                "tlsSettings",
+                JSONObject().also { tls ->
+                    outbound.sni?.let { tls.put("serverName", it) }
+                    outbound.fingerprint?.let { tls.put("fingerprint", it) }
+                    outbound.alpn
+                        ?.takeIf(List<String>::isNotEmpty)
+                        ?.let { tls.put("alpn", JSONArray(it)) }
+                    outbound.allowInsecure?.let { tls.put("allowInsecure", it) }
+                }
+            )
+        }
+        val proxy = JSONObject()
+            .put("protocol", "vless")
+            .put("tag", "proxy")
+            .put(
+                "settings",
+                JSONObject().put(
+                    "vnext",
+                    JSONArray().put(
+                        JSONObject()
+                            .put("address", outbound.host)
+                            .put("port", outbound.port)
+                            .put("users", JSONArray().put(user))
+                    )
+                )
+            )
+            .put("streamSettings", streamSettings)
+
+        return JSONObject()
+            .put(
+                "log",
+                JSONObject()
+                    .put("loglevel", "warning")
+                    .put("dnsLog", false)
+            )
+            .put("inbounds", JSONArray().put(inbound))
+            .put(
+                "outbounds",
+                JSONArray()
+                    .put(proxy)
+                    .put(JSONObject().put("protocol", "freedom").put("tag", "direct"))
+            )
+            .toString(2)
     }
 
     private fun buildSingBoxConfig(outbound: VlessOutbound): String {
@@ -288,6 +564,7 @@ private data class VlessOutbound(
     val uuid: String,
     val host: String,
     val port: Int,
+    val encryption: String?,
     val security: String?,
     val flow: String?,
     val sni: String?,
@@ -297,7 +574,11 @@ private data class VlessOutbound(
     val transport: String?,
     val path: String?,
     val hostHeader: String?,
-    val serviceName: String?
+    val serviceName: String?,
+    val mode: String?,
+    val spiderX: String?,
+    val alpn: List<String>?,
+    val allowInsecure: Boolean?
 )
 
 private class SingBoxWireGuardEngine(
@@ -346,11 +627,7 @@ private class SingBoxWireGuardEngine(
             .redirectErrorStream(true)
             .start()
         logThread = process?.let { started ->
-            thread(name = "SingBoxWireGuardLog", isDaemon = true) {
-                started.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line -> log("sing-box: $line") }
-                }
-            }
+            startEngineLogReader("SingBoxWireGuardLog", "sing-box", started, log)
         }
 
         waitForSocksPort()
@@ -394,6 +671,7 @@ private class SingBoxWireGuardEngine(
             .put("tag", "amnezia-wireguard")
             .put("address", JSONArray(outbound.addresses))
             .put("private_key", outbound.privateKey)
+            .put("domain_resolver", SING_BOX_BOOTSTRAP_DNS_TAG)
             .put("peers", JSONArray().put(peer))
 
         outbound.mtu?.let { endpoint.put("mtu", it) }
@@ -410,20 +688,63 @@ private class SingBoxWireGuardEngine(
 
         return JSONObject()
             .put("log", JSONObject().put("level", "warn"))
+            .put("dns", buildSingBoxDns(outbound.dnsServers, outbound.addresses))
             .put("inbounds", JSONArray().put(inbound))
             .put("endpoints", JSONArray().put(endpoint))
             .put(
                 "outbounds",
                 JSONArray().put(JSONObject().put("type", "direct").put("tag", "direct"))
             )
-            .put("route", buildSingBoxRoute(finalOutbound = "amnezia-wireguard"))
+            .put(
+                "route",
+                buildSingBoxRoute(
+                    finalOutbound = "amnezia-wireguard",
+                    defaultDomainResolver = "${SING_BOX_TUNNEL_DNS_TAG_PREFIX}0",
+                    hijackDns = true
+                )
+            )
             .toString(2)
+    }
+
+    private fun buildSingBoxDns(
+        configuredServers: List<String>,
+        interfaceAddresses: List<String>
+    ): JSONObject {
+        val tunnelServers = configuredServers
+            .mapNotNull(::parseDnsEndpoint)
+            .distinct()
+            .take(MAX_SING_BOX_DNS_SERVERS)
+            .ifEmpty { DEFAULT_SING_BOX_DNS_SERVERS.mapNotNull(::parseDnsEndpoint) }
+        val bootstrap = DEFAULT_SING_BOX_DNS_SERVERS.first().let(::parseDnsEndpoint)
+            ?: error("Invalid built-in DNS endpoint")
+        val servers = JSONArray().put(
+            JSONObject()
+                .put("type", "udp")
+                .put("tag", SING_BOX_BOOTSTRAP_DNS_TAG)
+                .put("server", bootstrap.host)
+                .put("server_port", bootstrap.port)
+        )
+        tunnelServers.forEachIndexed { index, server ->
+            servers.put(
+                JSONObject()
+                    .put("type", "tcp")
+                    .put("tag", "$SING_BOX_TUNNEL_DNS_TAG_PREFIX$index")
+                    .put("server", server.host)
+                    .put("server_port", server.port)
+                    .put("detour", SING_BOX_AMNEZIA_WIREGUARD_TAG)
+            )
+        }
+        return JSONObject()
+            .put("servers", servers)
+            .put("final", "${SING_BOX_TUNNEL_DNS_TAG_PREFIX}0")
+            .put("strategy", singBoxDnsStrategy(interfaceAddresses))
     }
 }
 
 private data class WireGuardOutbound(
     val privateKey: String,
     val addresses: List<String>,
+    val dnsServers: List<String>,
     val mtu: Int?,
     val peerPublicKey: String,
     val preSharedKey: String?,
@@ -546,6 +867,9 @@ private fun decodeCompressedVpnUri(uri: String, prefix: String): String? {
                 if (count == 0) {
                     if (inflater.needsInput() || inflater.needsDictionary()) break
                 } else {
+                    require(output.size() + count <= MAX_DECOMPRESSED_PROFILE_SIZE) {
+                        "Compressed VPN profile is too large"
+                    }
                     output.write(buffer, 0, count)
                 }
             }
@@ -579,6 +903,7 @@ private fun parseWireGuardConfig(config: String): WireGuardOutbound {
         privateKey = interfaceConfig["privatekey"]
             ?: throw IllegalArgumentException("WireGuard private key is missing"),
         addresses = interfaceConfig["address"].orEmpty().splitCsv(),
+        dnsServers = interfaceConfig["dns"].orEmpty().splitCsv(),
         mtu = interfaceConfig["mtu"]?.toIntOrNull(),
         peerPublicKey = peerConfig["publickey"]
             ?: throw IllegalArgumentException("WireGuard peer public key is missing"),
@@ -639,6 +964,35 @@ private fun parseWireGuardIni(config: String): ParsedWireGuardConfig {
 
 private data class HostPort(val host: String, val port: Int)
 
+private fun parseDnsEndpoint(endpoint: String): HostPort? {
+    val value = endpoint.trim()
+    if (value.isBlank() || value.startsWith('$')) return null
+    if (value.startsWith("[")) {
+        val closing = value.indexOf(']')
+        if (closing <= 0) return null
+        val host = value.substring(1, closing)
+        val port = value.substring(closing + 1).removePrefix(":").toIntOrNull() ?: 53
+        return HostPort(host, port).takeIf { it.port in 1..65535 && it.host.isIpLiteral() }
+    }
+    if (value.count { it == ':' } > 1) return HostPort(value, 53).takeIf { it.host.isIpLiteral() }
+    val separator = value.lastIndexOf(':')
+    if (separator <= 0) return HostPort(value, 53).takeIf { it.host.isIpLiteral() }
+    val port = value.substring(separator + 1).toIntOrNull() ?: return null
+    return HostPort(value.substring(0, separator), port)
+        .takeIf { it.port in 1..65535 && it.host.isIpLiteral() }
+}
+
+private fun String.isIpLiteral(): Boolean {
+    if (':' in this) {
+        return isNotBlank() && all { it.isDigit() || it.lowercaseChar() in 'a'..'f' || it in ":.%" }
+    }
+    val octets = split('.')
+    return octets.size == 4 && octets.all { octet ->
+        val number = octet.toIntOrNull()
+        octet.isNotEmpty() && octet.length <= 3 && number != null && number in 0..255
+    }
+}
+
 private fun parseEndpoint(endpoint: String): HostPort {
     val value = endpoint.trim()
     require(value.isNotBlank()) { "WireGuard endpoint is blank" }
@@ -666,11 +1020,10 @@ private fun parseEndpoint(endpoint: String): HostPort {
 }
 
 private fun looksLikeWireGuardConfig(config: String): Boolean {
-    val lower = config.lowercase()
-    return lower.contains("[interface]") &&
-        lower.contains("[peer]") &&
-        lower.contains("privatekey") &&
-        lower.contains("publickey")
+    return WIREGUARD_INTERFACE_SECTION.containsMatchIn(config) &&
+        WIREGUARD_PEER_SECTION.containsMatchIn(config) &&
+        WIREGUARD_PRIVATE_KEY.containsMatchIn(config) &&
+        WIREGUARD_PUBLIC_KEY.containsMatchIn(config)
 }
 
 private fun String.splitCsv(): List<String> {
@@ -703,6 +1056,23 @@ private data class EngineExecutable(
     val assetPath: String? = null
 )
 
+private fun startEngineLogReader(
+    threadName: String,
+    logPrefix: String,
+    process: Process,
+    log: (String) -> Unit
+): Thread = thread(name = threadName, isDaemon = true) {
+    try {
+        process.inputStream.bufferedReader().useLines { lines ->
+            lines.forEach { line -> log("$logPrefix: $line") }
+        }
+    } catch (exception: IOException) {
+        if (process.isAlive && !Thread.currentThread().isInterrupted) {
+            log("$logPrefix log reader failed: ${exception.message ?: exception::class.simpleName}")
+        }
+    }
+}
+
 private fun parseVlessUri(uri: String): VlessOutbound {
     val payload = uri.removePrefix("vless://")
     val withoutFragment = payload.substringBefore("#")
@@ -734,6 +1104,7 @@ private fun parseVlessUri(uri: String): VlessOutbound {
         uuid = uuid,
         host = host.urlDecode(),
         port = port,
+        encryption = params["encryption"],
         security = params["security"]?.lowercase(),
         flow = params["flow"],
         sni = params["sni"] ?: params["serverName"],
@@ -743,7 +1114,11 @@ private fun parseVlessUri(uri: String): VlessOutbound {
         transport = params["type"]?.lowercase(),
         path = params["path"],
         hostHeader = params["host"],
-        serviceName = params["serviceName"] ?: params["service_name"]
+        serviceName = params["serviceName"] ?: params["service_name"],
+        mode = params["mode"],
+        spiderX = params["spx"] ?: params["spiderX"],
+        alpn = params["alpn"]?.split(',')?.map(String::trim)?.filter(String::isNotBlank),
+        allowInsecure = params["allowInsecure"]?.toBooleanStrictOrNull()
     )
 }
 
@@ -826,17 +1201,40 @@ private fun buildSingBoxSocksInbound(
     return inbound
 }
 
-private fun buildSingBoxRoute(finalOutbound: String): JSONObject {
-    return JSONObject()
-        .put(
-            "rules",
-            JSONArray().put(
-                JSONObject()
-                    .put("inbound", SING_BOX_LOCAL_SOCKS_TAG)
-                    .put("action", "sniff")
-            )
+private fun buildSingBoxRoute(
+    finalOutbound: String,
+    defaultDomainResolver: String? = null,
+    hijackDns: Boolean = false
+): JSONObject {
+    val rules = JSONArray().put(
+        JSONObject()
+            .put("inbound", SING_BOX_LOCAL_SOCKS_TAG)
+            .put("action", "sniff")
+    )
+    if (hijackDns) {
+        rules.put(
+            JSONObject()
+                .put("protocol", "dns")
+                .put("action", "hijack-dns")
         )
+    }
+    return JSONObject()
+        .put("rules", rules)
+        .also { route ->
+            defaultDomainResolver?.let { route.put("default_domain_resolver", it) }
+        }
         .put("final", finalOutbound)
+}
+
+private fun singBoxDnsStrategy(interfaceAddresses: List<String>): String {
+    val hosts = interfaceAddresses.map { it.substringBefore('/').trim() }
+    val hasIpv4 = hosts.any { '.' in it }
+    val hasIpv6 = hosts.any { ':' in it }
+    return when {
+        hasIpv4 && hasIpv6 -> "prefer_ipv4"
+        hasIpv6 -> "ipv6_only"
+        else -> "ipv4_only"
+    }
 }
 
 private fun String.urlDecode(): String {
@@ -845,11 +1243,39 @@ private fun String.urlDecode(): String {
 
 private const val DEFAULT_SOCKS_HOST = "127.0.0.1"
 private const val SING_BOX_LOCAL_SOCKS_TAG = "local-socks"
+private const val SING_BOX_AMNEZIA_WIREGUARD_TAG = "amnezia-wireguard"
+private const val SING_BOX_BOOTSTRAP_DNS_TAG = "dns-bootstrap"
+private const val SING_BOX_TUNNEL_DNS_TAG_PREFIX = "dns-tunnel-"
+private const val SING_BOX_TUN_BRIDGE_INBOUND_TAG = "tun-bridge-in"
+private const val SING_BOX_TUN_BRIDGE_OUTBOUND_TAG = "tun-upstream"
+private const val SING_BOX_TUN_BRIDGE_DNS_TAG = "tun-dns"
+private const val MAX_SING_BOX_DNS_SERVERS = 3
+private val DEFAULT_SING_BOX_DNS_SERVERS = listOf("1.1.1.1:53", "8.8.8.8:53")
 private const val CONNECT_TIMEOUT_MS = 150
 private const val SING_BOX_READY_TIMEOUT_MS = 8_000L
 private const val SOCKS_READY_POLL_MS = 150L
+private const val ENGINE_STOP_TIMEOUT_MS = 1_500L
+private const val ENGINE_FORCE_STOP_TIMEOUT_MS = 1_000L
+private const val MAX_DECOMPRESSED_PROFILE_SIZE = 4 * 1024 * 1024
+private val XRAY_VLESS_TRANSPORTS = setOf("xhttp", "splithttp")
 private const val PRIMARY_DNS = "\$PRIMARY_DNS"
 private const val SECONDARY_DNS = "\$SECONDARY_DNS"
+private val WIREGUARD_INTERFACE_SECTION = Regex(
+    """^\s*\[\s*interface\s*]\s*$""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
+)
+private val WIREGUARD_PEER_SECTION = Regex(
+    """^\s*\[\s*peer\s*]\s*$""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
+)
+private val WIREGUARD_PRIVATE_KEY = Regex(
+    """^\s*privatekey\s*=""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
+)
+private val WIREGUARD_PUBLIC_KEY = Regex(
+    """^\s*publickey\s*=""",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
+)
 private val AMNEZIA_WG_INTEGER_FIELDS = setOf(
     "jc", "jmin", "jmax", "s1", "s2", "s3", "s4"
 )

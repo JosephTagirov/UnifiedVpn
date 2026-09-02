@@ -256,7 +256,9 @@ internal object OlcRtcConnectionChecker {
             location = normalized,
             socksHost = PacServer.LOCAL_SOCKS_HOST,
             socksPort = socksPort,
-            dnsServer = normalized.dnsServer.ifBlank { DesktopDnsResolver.current() },
+            dnsServer = normalizeOlcRtcDnsEndpoint(
+                normalized.dnsServer.ifBlank { DesktopDnsResolver.current() }
+            ),
             dataDir = dataDir
         )
         val configPath = writeOlcRtcClientConfig(command)

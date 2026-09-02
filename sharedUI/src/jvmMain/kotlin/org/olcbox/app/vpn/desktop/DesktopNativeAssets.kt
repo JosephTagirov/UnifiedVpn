@@ -20,6 +20,7 @@ internal object DesktopNativeAssets {
             DesktopOs.Windows -> {
                 assets.add(resolveWindowsTun2SocksBinary())
                 assets.add(resolveSingBoxBinary())
+                assets.add(resolveXrayBinary())
             }
             DesktopOs.Linux -> assets.add(resolveHevSocks5TunnelBinary())
             DesktopOs.MacOS,
@@ -124,6 +125,21 @@ internal object DesktopNativeAssets {
         )
     }
 
+    fun resolveXrayBinary(): Path {
+        require(DesktopPaths.os == DesktopOs.Windows) {
+            "The bundled VLESS Xray engine is currently available on Windows only"
+        }
+        val fileName = "xray-windows-amd64.exe"
+        val explicitBinary = System.getenv("XRAY_BINARY")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { Path(it) }
+        return resolveBinary(
+            fileName = fileName,
+            resourceName = "native/$fileName",
+            candidates = listOfNotNull(explicitBinary) + desktopNativeResourceCandidates(fileName)
+        )
+    }
+
     private fun resolveBinary(
         fileName: String,
         resourceName: String,
@@ -202,8 +218,11 @@ internal object DesktopNativeAssets {
     private fun olcRtcDataSourceCandidates(fileName: String): List<Path> {
         val explicitRepo = System.getenv("OLCRTC_REPO")?.takeIf { it.isNotBlank() }?.let { Path(it) }
         val defaultRepo = Path("..").resolve("olcrtc")
-        return listOfNotNull(explicitRepo, defaultRepo).map { repo ->
-            repo.resolve("data").resolve(fileName)
+        return listOfNotNull(explicitRepo, defaultRepo).flatMap { repo ->
+            listOf(
+                repo.resolve("data").resolve(fileName),
+                repo.resolve("internal").resolve("names").resolve("data").resolve(fileName)
+            )
         }
     }
 

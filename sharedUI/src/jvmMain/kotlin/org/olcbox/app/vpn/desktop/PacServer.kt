@@ -2,6 +2,7 @@ package org.olcbox.app.vpn.desktop
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import java.net.BindException
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
@@ -12,13 +13,18 @@ class PacServer(
 ) {
     private var server: HttpServer? = null
     @Volatile
+    private var activePort: Int? = null
+    @Volatile
     private var socksTarget = SocksTarget(LOCAL_SOCKS_HOST, LOCAL_SOCKS_PORT, "", "")
     private var executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "OlcboxPacServer").apply { isDaemon = true }
     }
 
     val url: String
-        get() = "http://$host:$port/proxy.pac"
+        get() = "http://$host:${activePort ?: port}/proxy.pac"
+
+    val boundPort: Int?
+        get() = activePort
 
     fun start(
         socksHost: String = LOCAL_SOCKS_HOST,
@@ -31,7 +37,8 @@ class PacServer(
         executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "OlcboxPacServer").apply { isDaemon = true }
         }
-        server = HttpServer.create(InetSocketAddress(host, port), 0).also { httpServer ->
+        val httpServer = createServer()
+        server = httpServer.also {
             httpServer.createContext("/proxy.pac") { exchange ->
                 exchange.respond(currentPacContent())
             }
@@ -40,6 +47,7 @@ class PacServer(
             }
             httpServer.executor = executor
             httpServer.start()
+            activePort = httpServer.address.port
         }
     }
 
@@ -65,7 +73,17 @@ class PacServer(
     fun stop() {
         server?.stop(0)
         server = null
+        activePort = null
         executor.shutdownNow()
+    }
+
+    private fun createServer(): HttpServer {
+        return try {
+            HttpServer.create(InetSocketAddress(host, port), 0)
+        } catch (error: BindException) {
+            if (port == 0) throw error
+            HttpServer.create(InetSocketAddress(host, 0), 0)
+        }
     }
 
     private fun HttpExchange.respond(body: String) {

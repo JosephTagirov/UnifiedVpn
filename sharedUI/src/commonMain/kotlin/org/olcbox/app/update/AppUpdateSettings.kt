@@ -77,6 +77,14 @@ fun AppUpdateInfo.isDownloaded(settings: AppUpdateSettings): Boolean {
     return settings.lastDownloadedUpdateVersion == identity()
 }
 
+fun AppUpdateInfo.updateStatusMessage(settings: AppUpdateSettings): String {
+    return when {
+        isDownloaded(settings) -> "Unified VPN $version is already downloaded"
+        isUpdateAvailable -> "Unified VPN update available: $version"
+        else -> "The latest version of Unified VPN is already installed"
+    }
+}
+
 fun AppUpdateInfo.shouldShowOffer(settings: AppUpdateSettings): Boolean {
     return isUpdateAvailable &&
             !isDownloaded(settings) &&

@@ -28,10 +28,22 @@ abstract class VerifyOlcRtcSourceTask : DefaultTask() {
         require(repository.resolve("go.mod").isFile && repository.resolve("mobile").isDirectory) {
             "OLCRTC_REPO is not an olcRTC source tree: ${repository.absolutePath}"
         }
+        require(repository.resolve(".git").isDirectory) {
+            "OLCRTC_REPO must be a standalone Git clone with its own .git directory: " +
+                "${repository.absolutePath}. Nested Git worktrees can make Go stamp the parent " +
+                "repository revision into olcRTC binaries."
+        }
 
         fun git(vararg arguments: String): String {
+            val safeRepository = repository.absolutePath.replace('\\', '/')
             val process = ProcessBuilder(
-                listOf("git", "-C", repository.absolutePath) + arguments
+                listOf(
+                    "git",
+                    "-c",
+                    "safe.directory=$safeRepository",
+                    "-C",
+                    repository.absolutePath
+                ) + arguments
             )
                 .redirectErrorStream(true)
                 .start()
