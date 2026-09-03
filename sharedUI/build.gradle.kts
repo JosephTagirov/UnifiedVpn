@@ -5,7 +5,6 @@ import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 import java.util.Properties
 
 plugins {
@@ -32,8 +31,6 @@ val olcrtcCommitSha = providers.gradleProperty("olcbox.olcrtcSha")
     .orElse(detectedOlcrtcSha)
 val olcrtcAndroidAar = layout.buildDirectory.file("generated/olcrtc/olcrtc.aar")
 val olcrtcAndroidAarFile = olcrtcAndroidAar.get().asFile
-val olcrtcIosXcframework = layout.buildDirectory.dir("generated/olcrtc/ios/OlcRtcMobile.xcframework")
-val olcrtcIosXcframeworkDir = olcrtcIosXcframework.get().asFile
 val localProperties = Properties().apply {
     rootProject.file("local.properties")
         .takeIf { it.isFile }
@@ -44,6 +41,7 @@ val androidSdkPath = providers.environmentVariable("ANDROID_HOME")
     .orElse(providers.environmentVariable("ANDROID_SDK_ROOT"))
     .orElse(providers.provider { localProperties.getProperty("sdk.dir").orEmpty() })
 val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.10")
+val olcboxBuild = providers.gradleProperty("olcbox.build").orElse("1")
 val awgCoreCommitSha = providers.gradleProperty("olcbox.awgCoreSha").orElse("unknown")
 val xrayCoreVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("unknown")
 val xrayCoreCommitSha = providers.gradleProperty("olcbox.xraySha").orElse("unknown")
@@ -53,6 +51,9 @@ val generatedAppInfoDir = layout.buildDirectory.dir("generated/source/olcboxAppI
 abstract class GenerateAppInfoTask : DefaultTask() {
     @get:Input
     abstract val version: Property<String>
+
+    @get:Input
+    abstract val build: Property<Long>
 
     @get:Input
     abstract val olcrtcSha: Property<String>
@@ -85,6 +86,7 @@ abstract class GenerateAppInfoTask : DefaultTask() {
             internal object GeneratedAppInfo {
                 const val NAME: String = "unified-vpn"
                 const val VERSION: String = "$escapedVersion"
+                const val BUILD: Long = ${build.get()}L
                 const val SOURCE_ATTRIBUTION: String = "Based on Olcbox from GitHub"
                 const val OLCRTC_SHA: String = "$escapedOlcrtcSha"
                 const val AWG_CORE_SHA: String = "$escapedAwgCoreSha"
@@ -136,39 +138,9 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
 
 val olcrtcAndroidAarDependency = files(olcrtcAndroidAarFile).builtBy(buildOlcrtcAndroidAar)
 
-val buildOlcrtcIosXcframework by tasks.registering(Exec::class) {
-    group = "build"
-    description = "Builds olcrtc iOS XCFramework from OLCRTC_REPO using gomobile."
-    dependsOn(":verifyOlcRtcSource")
-
-    inputs.dir(olcrtcRepoDir.resolve("mobile"))
-    inputs.dir(olcrtcRepoDir.resolve("internal"))
-    inputs.files(olcrtcRepoDir.resolve("go.mod"), olcrtcRepoDir.resolve("go.sum"))
-    inputs.property("olcrtcRepositoryPath", olcrtcRepoDir.canonicalPath)
-    inputs.property("olcrtcCommit", olcrtcCommitSha)
-    outputs.dir(olcrtcIosXcframework)
-
-    workingDir = olcrtcRepoDir
-
-    doFirst {
-        delete(olcrtcIosXcframeworkDir)
-        olcrtcIosXcframeworkDir.parentFile.mkdirs()
-    }
-
-    commandLine(
-        "gomobile",
-        "bind",
-        "-target=ios",
-        "-ldflags",
-        "-s -w -checklinkname=0",
-        "-o",
-        olcrtcIosXcframeworkDir.absolutePath,
-        "./mobile"
-    )
-}
-
 val generateAppInfo by tasks.registering(GenerateAppInfoTask::class) {
     version.set(olcboxVersionValue)
+    build.set(olcboxBuild.map { it.toLong() })
     olcrtcSha.set(olcrtcCommitSha)
     awgCoreSha.set(awgCoreCommitSha)
     xrayVersion.set(xrayCoreVersion)
@@ -192,10 +164,6 @@ kotlin {
             jvmTarget.set(JvmTarget.JVM_17)
         }
     }
-
-    macosArm64()
-    iosArm64()
-    iosSimulatorArm64()
 
     sourceSets {
         commonMain {
@@ -266,26 +234,5 @@ kotlin {
             }
         }
 
-        iosMain.dependencies {
-            implementation(libs.ktor.client.darwin)
-            implementation(libs.kstore.file)
-        }
-
-        macosMain.dependencies {
-            implementation(libs.ktor.client.darwin)
-            implementation(libs.kstore.file)
-        }
     }
-
-    targets
-        .withType<KotlinNativeTarget>()
-        .matching { it.konanTarget.family.isAppleFamily }
-        .configureEach {
-            binaries {
-                framework {
-                    baseName = "SharedUI"
-                    isStatic = true
-                }
-            }
-        }
 }

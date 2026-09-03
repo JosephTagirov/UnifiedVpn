@@ -19,6 +19,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import org.olcbox.app.ui.localization.localizeUiText
 import androidx.datastore.preferences.core.Preferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -717,6 +718,10 @@ class OlcboxVpnService : VpnService() {
             updateNotification("Tunnel restart failed")
             return
         }
+        bindProcessToNetwork(
+            upstream,
+            "Bound ${profile.typeLabel()} transport to ${getNetName(upstream)}"
+        )
         activeProfileType = profile.normalizedType
 
         val targetSocksPort = profile.localSocksPort ?: allocateLocalSocksPort()
@@ -741,6 +746,7 @@ class OlcboxVpnService : VpnService() {
             engine.start()
         } catch (e: CancellationException) {
             stopExternalEngine()
+            unbindProcessFromNetwork()
             throw e
         } catch (e: Exception) {
             val message = e.message ?: "${profile.typeLabel()} start failed"
@@ -748,6 +754,7 @@ class OlcboxVpnService : VpnService() {
             setStatus(VpnStatus.Error(message))
             updateNotification("Connection failed")
             stopExternalEngine()
+            unbindProcessFromNetwork()
             return
         }
 
@@ -1777,14 +1784,14 @@ class OlcboxVpnService : VpnService() {
 
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Unified VPN")
-            .setContentText(status)
+            .setContentText(localizedNotificationText(status))
             .setSmallIcon(smallIcon)
             .setLargeIcon(largeIcon)
             .setOngoing(true)
             .setContentIntent(getAppPendingIntent())
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                "Stop",
+                localizedNotificationText("Stop"),
                 PendingIntent.getService(
                     this,
                     0,
@@ -1825,6 +1832,11 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun connectedNotificationText(): String = "${activeModeLabel()} Connected"
+
+    private fun localizedNotificationText(text: String): String {
+        val language = resources.configuration.locales.get(0)?.language.orEmpty()
+        return localizeUiText(text, language)
+    }
 
     private class AuthenticatedSocksProxy(
         private val listenPort: Int,

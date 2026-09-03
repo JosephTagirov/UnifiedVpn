@@ -37,7 +37,6 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
@@ -58,19 +57,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Dimension
-import java.awt.Desktop
 import java.awt.FileDialog
 import java.awt.Frame
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
-import java.net.URI
 import java.security.SecureRandom
 import kotlin.math.min
 import kotlinx.coroutines.Dispatchers
@@ -95,10 +90,11 @@ import org.olcbox.app.ui.components.ApplicationSocksProxySettings
 import org.olcbox.app.ui.components.ApplicationRoutingModeOption
 import org.olcbox.app.ui.components.ApplicationSettingsSheet
 import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
-import org.olcbox.app.ui.components.UpstreamUpdateNoticeSheet
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.LocationViewModel
+import org.olcbox.app.ui.localization.AppText as Text
+import org.olcbox.app.ui.localization.localizeUiText
 import org.olcbox.app.ui.navigation.AppScreen
 import org.olcbox.app.ui.provisioning.FriendAccessPackageCreatorDialog
 import org.olcbox.app.ui.provisioning.FriendAccessPackageInstallDialog
@@ -109,15 +105,11 @@ import org.olcbox.app.update.AppUpdateSettings
 import org.olcbox.app.update.AppUpdateService
 import org.olcbox.app.update.JvmUpdateInstaller
 import org.olcbox.app.update.JvmUpdateSettingsStore
-import org.olcbox.app.update.UpstreamReleaseInfo
-import org.olcbox.app.update.UpstreamUpdateService
-import org.olcbox.app.update.hasSeen
 import org.olcbox.app.update.identity
 import org.olcbox.app.update.isDownloaded
 import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
 import org.olcbox.app.update.updateStatusMessage
-import org.olcbox.app.update.withSeen
 import org.olcbox.app.vpn.DesktopSocksProxySettings
 import org.olcbox.app.vpn.DesktopRoutingMode
 import org.olcbox.app.vpn.DesktopVpnManager
@@ -130,12 +122,10 @@ private class DesktopAppDependencies {
     val configImporter = JvmConfigImporter()
 
     val locationsRepository = LocationsRepositoryImpl(locationsDataSource)
-    val updateService = AppUpdateService(
-        deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
-    )
-    val upstreamUpdateService = UpstreamUpdateService(
-        deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
-    )
+    private val deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
+    val updateService by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        AppUpdateService(deviceIdentityProvider = deviceIdentityProvider)
+    }
     val updateSettingsStore = JvmUpdateSettingsStore()
     val updateInstaller = JvmUpdateInstaller()
     val socksProxySettingsStore = JvmDesktopSocksProxySettingsStore()
@@ -167,6 +157,17 @@ fun main(args: Array<String>) {
         check(assets.all { it.toFile().isFile && it.toFile().length() > 0L }) {
             "One or more desktop native assets are empty"
         }
+        if (System.getProperty("os.name").contains("windows", ignoreCase = true)) {
+            val launcher = System.getProperty("jpackage.app-path")
+                ?.takeIf(String::isNotBlank)
+                ?.let(::File)
+            check(
+                launcher?.isFile == true &&
+                    launcher.name.equals("UnifiedVPN.exe", ignoreCase = true)
+            ) {
+                "Packaged Windows launcher path is unavailable for updater and UAC restart"
+            }
+        }
         println("Verified ${assets.size} desktop native assets")
         return
     }
@@ -193,17 +194,42 @@ private fun runDesktopApplication(args: Array<String>) = application {
     var updateSettings by remember { mutableStateOf(AppUpdateSettings()) }
     var updateProgress by remember { mutableStateOf<Float?>(null) }
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
-    var upstreamNotices by remember { mutableStateOf<List<UpstreamReleaseInfo>>(emptyList()) }
     var sharePayload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var desktopNotice by remember { mutableStateOf<String?>(null) }
+    var isTrayReady by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    val trayState = rememberTrayState()
     val trayHomeState by dependencies.homeViewModel.state.collectAsState()
+    val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
+    val desktopLanguage = remember { java.util.Locale.getDefault().language }
+
+    fun desktopText(text: String): String = localizeUiText(text, desktopLanguage)
+
+    fun selectRoutingMode(mode: DesktopRoutingMode, isOlcRtcProfile: Boolean) {
+        val currentMode = socksProxySettings.routingModeFor(isOlcRtcProfile)
+        if (mode == currentMode) return
+        val settings = if (isOlcRtcProfile) {
+            socksProxySettings.copy(routingMode = mode).normalized()
+        } else {
+            socksProxySettings.copy(externalRoutingMode = mode).normalized()
+        }
+        dependencies.vpnManager.updateSocksProxySettings(settings)
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                dependencies.socksProxySettingsStore.save(settings)
+            }
+            desktopNotice = desktopText("Connection mode saved")
+            if (dependencies.homeViewModel.shouldRestartVpnAfterProfileSelection()) {
+                dependencies.homeViewModel.restartVpnIfRunning(force = true)
+            }
+        }
+    }
 
     suspend fun saveUpdateSettings(settings: AppUpdateSettings) {
         val normalized = settings.normalized()
         updateSettings = normalized
-        dependencies.updateSettingsStore.save(normalized)
+        withContext(Dispatchers.IO) {
+            dependencies.updateSettingsStore.save(normalized)
+        }
     }
 
     fun checkUpdate(manual: Boolean) {
@@ -212,10 +238,11 @@ private fun runDesktopApplication(args: Array<String>) = application {
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
-            updateMessage = "Checking Unified VPN and upstream releases..."
+            updateMessage = "Checking Unified VPN updates..."
             val proxy = dependencies.vpnManager.subscriptionFetchProxy()
-            val result = dependencies.updateService.check(previousSettings.channel, proxy)
-            val upstreamResults = dependencies.upstreamUpdateService.checkAll(proxy)
+            val result = withContext(Dispatchers.IO) {
+                dependencies.updateService.check(previousSettings.channel, proxy)
+            }
             val checkedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             val checkedSettings = previousSettings.copy(lastCheckAtEpochMs = checkedAt).normalized()
             saveUpdateSettings(checkedSettings)
@@ -235,18 +262,6 @@ private fun runDesktopApplication(args: Array<String>) = application {
                     statusParts += error.message ?: "Unified VPN update check failed"
                 }
             )
-
-            val upstreamInfos = upstreamResults.mapNotNull { it.getOrNull() }
-            val unseen = upstreamInfos.filterNot(previousSettings::hasSeen)
-            if (unseen.isNotEmpty()) {
-                upstreamNotices = (upstreamNotices + unseen).distinctBy { it.identity() }
-                statusParts += unseen.joinToString { "${it.project.displayName} updated on GitHub" }
-            } else if (manual && upstreamInfos.isNotEmpty()) {
-                statusParts += "Original olcbox and Amnezia VPN GitHub versions are up to date"
-            }
-            if (manual) {
-                upstreamResults.mapNotNull { it.exceptionOrNull()?.message }.forEach(statusParts::add)
-            }
             updateMessage = statusParts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
         }
     }
@@ -297,33 +312,20 @@ private fun runDesktopApplication(args: Array<String>) = application {
         }
     }
 
-    fun dismissUpstreamNotice(info: UpstreamReleaseInfo) {
-        scope.launch {
-            saveUpdateSettings(updateSettings.withSeen(info))
-            upstreamNotices = upstreamNotices.filterNot { it.identity() == info.identity() }
-        }
-    }
-
-    fun openUpstreamRelease(info: UpstreamReleaseInfo) {
-        runCatching {
-            check(Desktop.isDesktopSupported())
-            Desktop.getDesktop().browse(URI(info.htmlUrl))
-        }.onFailure {
-            desktopNotice = "Unable to open GitHub"
-        }
-        dismissUpstreamNotice(info)
-    }
-
     LaunchedEffect(Unit) {
-        val loaded = dependencies.updateSettingsStore.load()
+        val (loaded, proxySettings) = withContext(Dispatchers.IO) {
+            dependencies.updateSettingsStore.load() to dependencies.socksProxySettingsStore.load()
+        }
         updateSettings = loaded
-        dependencies.vpnManager.updateSocksProxySettings(dependencies.socksProxySettingsStore.load())
-        checkUpdate(manual = false)
+        dependencies.vpnManager.updateSocksProxySettings(proxySettings)
         if (WINDOWS_ELEVATED_START_ARGUMENT in args) {
             dependencies.homeViewModel.loadCurrentConfig {
                 dependencies.homeViewModel.ToggleVpn()
             }
         }
+        delay(BACKGROUND_STARTUP_DELAY_MS)
+        isTrayReady = true
+        checkUpdate(manual = false)
     }
 
     LaunchedEffect(desktopNotice) {
@@ -333,51 +335,62 @@ private fun runDesktopApplication(args: Array<String>) = application {
         }
     }
 
-    Tray(
-        state = trayState,
-        icon = painterResource("LinuxIcon.png"),
-        tooltip = "Unified VPN",
-        menu = {
-		Item(
-			text = "Open Unified VPN window",
-			onClick = {
-				isWindowVisible = true
-			}
-		)
-
-		Separator()
-
-		Item(
-			text = if (trayHomeState.isVpnConnected || trayHomeState.isVpnLoading)
-				"Stop relay"
-			else
-				"Start relay",
-			enabled = trayHomeState.isVpnConnected ||
-				trayHomeState.isVpnLoading ||
-				trayHomeState.canStartVpn,
-			onClick = {
-				dependencies.homeViewModel.ToggleVpn()
-			}
-		)
-
-		Separator()
-
-		Item(
-			text = "Connection settings",
-			onClick = {
-				isWindowVisible = true
-				showDesktopSettings = true
-			}
-		)
-
-		Separator()
-
-		Item(
-			text = "Quit Unified VPN",
-			onClick = ::quitDesktopApplication
-		)
-	}
-    )
+    if (isTrayReady) {
+        val trayIsOlcRtcProfile = trayHomeState.activeProfile?.isOlcRtc() != false
+        val showRouting = trayHomeState.activeProfile != null &&
+            (trayHomeState.isVpnConnected || trayHomeState.isVpnLoading)
+        val configuredTrayMode = socksProxySettings.routingModeFor(trayIsOlcRtcProfile)
+        val effectiveTrayMode = configuredTrayMode.effectiveMode(trayIsOlcRtcProfile)
+        UnifiedVpnTray(
+            tooltip = "Unified VPN",
+            openText = desktopText("Open Unified VPN window"),
+            toggleText = if (trayHomeState.isVpnConnected || trayHomeState.isVpnLoading) {
+                desktopText("Stop relay")
+            } else {
+                desktopText("Start relay")
+            },
+            toggleEnabled = trayHomeState.isVpnConnected ||
+                trayHomeState.isVpnLoading ||
+                trayHomeState.canStartVpn,
+            routingText = if (showRouting) {
+                when (effectiveTrayMode) {
+                    DesktopRoutingMode.LocalSocks -> desktopText("SOCKS5 -> Proxy")
+                    DesktopRoutingMode.SystemProxy -> desktopText("Proxy -> VPN")
+                    DesktopRoutingMode.Tun -> if (trayIsOlcRtcProfile) {
+                        desktopText("VPN -> SOCKS5")
+                    } else {
+                        desktopText("VPN -> Proxy")
+                    }
+                    DesktopRoutingMode.Auto -> error("Auto tray mode was not resolved")
+                }
+            } else {
+                null
+            },
+            routingEnabled = trayHomeState.isVpnConnected && !trayHomeState.isVpnLoading,
+            settingsText = desktopText("Connection settings"),
+            quitText = desktopText("Quit Unified VPN"),
+            onOpen = { isWindowVisible = true },
+            onToggle = { dependencies.homeViewModel.ToggleVpn() },
+            onRoutingToggle = {
+                val nextMode = when (effectiveTrayMode) {
+                    DesktopRoutingMode.LocalSocks -> DesktopRoutingMode.SystemProxy
+                    DesktopRoutingMode.SystemProxy -> DesktopRoutingMode.Tun
+                    DesktopRoutingMode.Tun -> if (trayIsOlcRtcProfile) {
+                        DesktopRoutingMode.Auto
+                    } else {
+                        DesktopRoutingMode.SystemProxy
+                    }
+                    DesktopRoutingMode.Auto -> error("Auto tray mode was not resolved")
+                }
+                selectRoutingMode(nextMode, isOlcRtcProfile = trayIsOlcRtcProfile)
+            },
+            onSettings = {
+                isWindowVisible = true
+                showDesktopSettings = true
+            },
+            onQuit = ::quitDesktopApplication
+        )
+    }
 
     Window(
         title = "Unified VPN",
@@ -397,7 +410,8 @@ private fun runDesktopApplication(args: Array<String>) = application {
         AppTheme {
             val logs by dependencies.homeViewModel.logs.collectAsState()
             val homeState by dependencies.homeViewModel.state.collectAsState()
-            val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
+            val settingsIsOlcRtcProfile = homeState.activeProfile?.isOlcRtc() != false
+            val selectedRoutingMode = socksProxySettings.routingModeFor(settingsIsOlcRtcProfile)
 
             fun reloadLocationsAfterImport(onComplete: () -> Unit = {}) {
                 dependencies.locationViewModel.loadLocations {
@@ -489,16 +503,26 @@ private fun runDesktopApplication(args: Array<String>) = application {
                     ApplicationSettingsSheet(
                         updateSettings = updateSettings,
                         updateStatusText = updateMessage,
-                        updateOffer = upstreamNotices.firstOrNull(),
                         subscriptions = desktopSubscriptionItems(dependencies.locationViewModel.locations.toList()),
                         logs = logs,
-                        connectionSummary = "${socksProxySettings.routingMode.effectiveDisplayName()} · " +
-                            "SOCKS5 ${socksProxySettings.host}:${socksProxySettings.port}",
+                        connectionSummary = "${selectedRoutingMode.effectiveDisplayName(settingsIsOlcRtcProfile)} · " +
+                            if (settingsIsOlcRtcProfile) "olcRTC" else "VLESS / Amnezia",
                         connectionDetails = buildList {
-                            add("Mode" to socksProxySettings.routingMode.effectiveDisplayName())
-                            if (socksProxySettings.routingMode.effectiveMode() == DesktopRoutingMode.SystemProxy) {
-                                add("PAC URL" to "http://127.0.0.1:10809/proxy.pac")
-                                add("PAC Target" to "SOCKS5 ${socksProxySettings.host}:${socksProxySettings.port}")
+                            add(
+                                "Routing" to selectedRoutingMode.effectiveDisplayName(
+                                    settingsIsOlcRtcProfile
+                                )
+                            )
+                            add("SOCKS5" to "${socksProxySettings.host}:${socksProxySettings.port}")
+                            when (selectedRoutingMode.effectiveMode(settingsIsOlcRtcProfile)) {
+                                DesktopRoutingMode.Tun -> add(
+                                    "Administrator rights" to "Requested when TUN (VPN) starts"
+                                )
+                                DesktopRoutingMode.SystemProxy -> add(
+                                    "PAC URL" to "http://127.0.0.1:10809/proxy.pac"
+                                )
+                                DesktopRoutingMode.LocalSocks -> Unit
+                                DesktopRoutingMode.Auto -> Unit
                             }
                         },
                         socksProxySettings = socksProxySettings.toApplicationSocksProxySettings(),
@@ -509,7 +533,7 @@ private fun runDesktopApplication(args: Array<String>) = application {
                                 subtitle = mode.description()
                             )
                         },
-                        selectedRoutingModeId = socksProxySettings.routingMode.name,
+                        selectedRoutingModeId = selectedRoutingMode.name,
                         isConnectionActive = homeState.isVpnConnected,
                         onDismiss = { showDesktopSettings = false },
                         onCopyConfigClick = {
@@ -544,8 +568,6 @@ private fun runDesktopApplication(args: Array<String>) = application {
                             }
                         },
                         onCheckUpdatesClick = { checkUpdate(manual = true) },
-                        onOpenUpstreamReleaseClick = ::openUpstreamRelease,
-                        onDismissUpstreamReleaseClick = ::dismissUpstreamNotice,
                         onSubscriptionShareClick = { url ->
                             sharePayload = "Subscription QR" to ConfigShareService.subscriptionQrText(url)
                         },
@@ -612,17 +634,7 @@ private fun runDesktopApplication(args: Array<String>) = application {
                         onRoutingModeSelected = { id ->
                             val mode = runCatching { DesktopRoutingMode.valueOf(id) }
                                 .getOrDefault(DesktopRoutingMode.Auto)
-                            if (mode != socksProxySettings.routingMode) {
-                                val settings = socksProxySettings.copy(routingMode = mode).normalized()
-                                dependencies.vpnManager.updateSocksProxySettings(settings)
-                                scope.launch {
-                                    dependencies.socksProxySettingsStore.save(settings)
-                                }
-                                desktopNotice = "Connection mode saved"
-                                if (homeState.isVpnConnected) {
-                                    dependencies.homeViewModel.restartVpnIfRunning()
-                                }
-                            }
+                            selectRoutingMode(mode, settingsIsOlcRtcProfile)
                         }
                     )
                 }
@@ -720,16 +732,6 @@ private fun runDesktopApplication(args: Array<String>) = application {
                     )
                 }
 
-                if (updateOffer == null && !showDesktopSettings) {
-                    upstreamNotices.firstOrNull()?.let { info ->
-                        UpstreamUpdateNoticeSheet(
-                            info = info,
-                            onDismiss = { dismissUpstreamNotice(info) },
-                            onOpenGitHub = { openUpstreamRelease(info) }
-                        )
-                    }
-                }
-
                 sharePayload?.let { (title, payload) ->
                     DesktopConfigShareOverlay(
                         title = title,
@@ -765,6 +767,7 @@ private fun DesktopConfigShareOverlay(
     onDismiss: () -> Unit
 ) {
     var copied by remember(payload) { mutableStateOf(false) }
+    val dismissInteraction = remember { MutableInteractionSource() }
     val qrMatrix = remember(payload) {
         runCatching {
             MultiFormatWriter().encode(payload, BarcodeFormat.QR_CODE, 128, 128)
@@ -779,7 +782,11 @@ private fun DesktopConfigShareOverlay(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black.copy(alpha = 0.28f))
-                .clickable(onClick = onDismiss),
+                .clickable(
+                    interactionSource = dismissInteraction,
+                    indication = null,
+                    onClick = onDismiss
+                ),
             contentAlignment = Alignment.Center
         ) {
             val noOpInteraction = remember { MutableInteractionSource() }
@@ -943,6 +950,7 @@ private fun generateDesktopProxyPassword(length: Int = 24): String {
 
 private const val DESKTOP_PROXY_PASSWORD_ALPHABET =
     "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+private const val BACKGROUND_STARTUP_DELAY_MS = 750L
 
 private fun desktopSubscriptionItems(items: List<LocationItem>): List<SubscriptionShareItem> {
     return items
@@ -974,14 +982,22 @@ private fun desktopSubscriptionItems(items: List<LocationItem>): List<Subscripti
 }
 
 private fun chooseConfigFile(owner: Frame): File? {
-    val dialog = FileDialog(owner, "Import Unified VPN Config", FileDialog.LOAD)
+    val title = localizeUiText(
+        "Import Unified VPN Config",
+        java.util.Locale.getDefault().language
+    )
+    val dialog = FileDialog(owner, title, FileDialog.LOAD)
     dialog.isVisible = true
 
     return dialog.files.firstOrNull()
 }
 
 private fun chooseSaveFile(owner: Frame, defaultName: String): File? {
-    val dialog = FileDialog(owner, "Save Unified VPN Logs", FileDialog.SAVE)
+    val title = localizeUiText(
+        "Save Unified VPN Logs",
+        java.util.Locale.getDefault().language
+    )
+    val dialog = FileDialog(owner, title, FileDialog.SAVE)
     dialog.file = defaultName
     dialog.isVisible = true
 

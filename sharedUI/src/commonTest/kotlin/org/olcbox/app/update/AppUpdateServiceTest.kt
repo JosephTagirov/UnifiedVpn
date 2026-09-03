@@ -22,6 +22,74 @@ class AppUpdateServiceTest {
     }
 
     @Test
+    fun equalVersionUsesMonotonicBuildNumber() {
+        assertTrue(
+            AppUpdateService.isUpdateAvailable(
+                channel = ReleaseChannel.Stable,
+                releaseTag = "v0.0.10",
+                currentVersion = "0.0.10",
+                releaseBuild = 2026090202L,
+                currentBuild = 2026090201L
+            )
+        )
+        assertFalse(
+            AppUpdateService.isUpdateAvailable(
+                channel = ReleaseChannel.Stable,
+                releaseTag = "v0.0.10",
+                currentVersion = "0.0.10",
+                releaseBuild = 2026090201L,
+                currentBuild = 2026090201L
+            )
+        )
+        assertFalse(
+            AppUpdateService.isUpdateAvailable(
+                channel = ReleaseChannel.Stable,
+                releaseTag = "v0.0.10",
+                currentVersion = "0.0.10",
+                releaseBuild = null,
+                currentBuild = 2026090201L
+            )
+        )
+    }
+
+    @Test
+    fun buildNumberIsReadFromReleaseAssetName() {
+        assertEquals(
+            2026090202L,
+            AppUpdateService.assetBuildNumber(
+                "UnifiedVPN-0.0.10-build.2026090202-android-arm64-v8a.apk"
+            )
+        )
+        assertEquals(null, AppUpdateService.assetBuildNumber("UnifiedVPN-0.0.10-android.apk"))
+    }
+
+    @Test
+    fun newestBuildAssetWinsWithinPreferredFileType() {
+        val selected = AppUpdateService.selectAsset(
+            assets = listOf(
+                GithubReleaseAsset(
+                    "UnifiedVPN-0.0.10-build.2026090201-windows-amd64-portable.zip",
+                    "https://example/old.zip"
+                ),
+                GithubReleaseAsset(
+                    "UnifiedVPN-0.0.10-build.2026090203-windows-amd64-portable.zip",
+                    "https://example/new.zip"
+                ),
+                GithubReleaseAsset(
+                    "UnifiedVPN-0.0.10-build.2026090204-windows-amd64-installer.exe",
+                    "https://example/newer.exe"
+                )
+            ),
+            platform = UpdatePlatform("windows", "amd64")
+        )
+
+        assertEquals(
+            "UnifiedVPN-0.0.10-build.2026090203-windows-amd64-portable.zip",
+            selected?.name
+        )
+    }
+
+    @Test
     fun updateSettingsPreserveStableChannel() {
         val settings = AppUpdateSettings(channel = ReleaseChannel.Nightly)
 
@@ -78,38 +146,33 @@ class AppUpdateServiceTest {
     }
 
     @Test
-    fun upstreamWithoutReleasesFallsBackToLatestCommit() = runTest {
-        val engine = MockEngine { request ->
-            when {
-                request.url.encodedPath.endsWith("/releases/latest") -> respond(
-                    content = "{\"message\":\"Not Found\"}",
-                    status = HttpStatusCode.NotFound
+    fun selectsNewestLinuxAppImageForCurrentArchitecture() {
+        val selected = AppUpdateService.selectAsset(
+            assets = listOf(
+                GithubReleaseAsset(
+                    "UnifiedVPN-0.0.11-build.2026090201-linux-amd64.AppImage",
+                    "https://example/linux-old"
+                ),
+                GithubReleaseAsset(
+                    "UnifiedVPN-0.0.11-build.2026090203-linux-arm64.AppImage",
+                    "https://example/linux-arm64"
+                ),
+                GithubReleaseAsset(
+                    "UnifiedVPN-0.0.11-build.2026090202-linux-amd64.AppImage",
+                    "https://example/linux-new"
+                ),
+                GithubReleaseAsset(
+                    "UnifiedVPN-0.0.11-build.2026090204-windows-amd64-portable.zip",
+                    "https://example/windows"
                 )
-                request.url.encodedPath.endsWith("/commits/HEAD") -> respond(
-                    """
-                    {
-                      "sha": "1234567890abcdef1234567890abcdef12345678",
-                      "html_url": "https://github.com/example/project/commit/1234567890abcdef",
-                      "commit": {
-                        "committer": { "date": "2026-08-24T12:00:00Z" }
-                      }
-                    }
-                    """.trimIndent()
-                )
-                else -> error("Unexpected request: ${request.url}")
-            }
-        }
-        val service = UpstreamUpdateService(
-            httpClient = HttpClient(engine),
-            deviceIdentityProvider = StaticIdentityProvider("hwid"),
-            projects = listOf(UpstreamProject.Olcbox)
+            ),
+            platform = UpdatePlatform("linux", "amd64")
         )
 
-        val info = service.checkAll().single().getOrThrow()
-
-        assertEquals("1234567890ab", info.version)
-        assertEquals("2026-08-24T12:00:00Z", info.publishedAt)
-        assertTrue(info.htmlUrl.endsWith("/commit/1234567890abcdef"))
+        assertEquals(
+            "UnifiedVPN-0.0.11-build.2026090202-linux-amd64.AppImage",
+            selected?.name
+        )
     }
 
     @Test

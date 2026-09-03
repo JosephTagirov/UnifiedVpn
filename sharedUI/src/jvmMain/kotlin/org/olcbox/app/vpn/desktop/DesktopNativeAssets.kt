@@ -22,8 +22,11 @@ internal object DesktopNativeAssets {
                 assets.add(resolveSingBoxBinary())
                 assets.add(resolveXrayBinary())
             }
-            DesktopOs.Linux -> assets.add(resolveHevSocks5TunnelBinary())
-            DesktopOs.MacOS,
+            DesktopOs.Linux -> {
+                assets.add(resolveHevSocks5TunnelBinary())
+                assets.add(resolveSingBoxBinary())
+                assets.add(resolveXrayBinary())
+            }
             DesktopOs.Other -> Unit
         }
         return assets
@@ -62,25 +65,13 @@ internal object DesktopNativeAssets {
 
     private fun olcRtcFileNames(): List<String> {
         return when (DesktopPaths.os) {
-            DesktopOs.MacOS -> listOf(
-                "olcrtc-darwin-${desktopArch()}",
-                "olcrtc-darwin-${desktopArchFallback()}"
-            ).distinct()
             DesktopOs.Windows -> listOf("olcrtc-windows-amd64.exe")
             DesktopOs.Linux -> listOf("olcrtc-linux-${desktopArch()}")
-            DesktopOs.Other -> error("Olcbox desktop supports macOS, Windows and Linux")
+            DesktopOs.Other -> error("Unified VPN desktop supports Windows and Linux")
         }
     }
 
     private fun olcRtcFileName(): String = olcRtcFileNames().first()
-
-    private fun desktopArchFallback(): String {
-        return when (desktopArch()) {
-            "arm64" -> "amd64"
-            "amd64" -> "arm64"
-            else -> "amd64"
-        }
-    }
 
     fun resolveOlcRtcDataDir(): Path {
         val target = DesktopPaths.appDataDir().resolve("olcrtc-data")
@@ -111,10 +102,11 @@ internal object DesktopNativeAssets {
     }
 
     fun resolveSingBoxBinary(): Path {
-        require(DesktopPaths.os == DesktopOs.Windows) {
-            "The bundled AmneziaWG sing-box engine is currently available on Windows only"
+        val fileName = when (DesktopPaths.os) {
+            DesktopOs.Windows -> "sing-box-awg-windows-amd64.exe"
+            DesktopOs.Linux -> "sing-box-awg-linux-${desktopArch()}"
+            DesktopOs.Other -> error("The bundled AmneziaWG sing-box engine requires Windows or Linux")
         }
-        val fileName = "sing-box-awg-windows-amd64.exe"
         val explicitBinary = System.getenv("SING_BOX_AWG_BINARY")
             ?.takeIf { it.isNotBlank() }
             ?.let { Path(it) }
@@ -126,10 +118,11 @@ internal object DesktopNativeAssets {
     }
 
     fun resolveXrayBinary(): Path {
-        require(DesktopPaths.os == DesktopOs.Windows) {
-            "The bundled VLESS Xray engine is currently available on Windows only"
+        val fileName = when (DesktopPaths.os) {
+            DesktopOs.Windows -> "xray-windows-amd64.exe"
+            DesktopOs.Linux -> "xray-linux-${desktopArch()}"
+            DesktopOs.Other -> error("The bundled VLESS Xray engine requires Windows or Linux")
         }
-        val fileName = "xray-windows-amd64.exe"
         val explicitBinary = System.getenv("XRAY_BINARY")
             ?.takeIf { it.isNotBlank() }
             ?.let { Path(it) }

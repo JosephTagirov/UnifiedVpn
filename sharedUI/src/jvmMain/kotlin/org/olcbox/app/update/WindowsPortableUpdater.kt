@@ -28,6 +28,11 @@ internal object WindowsPortableUpdater {
                 ?.takeIf(String::isNotBlank)
                 ?.let(Path::of)
                 ?.let(::add)
+            System.getProperty("user.dir")
+                ?.takeIf(String::isNotBlank)
+                ?.let(Path::of)
+                ?.resolve(LAUNCHER_NAME)
+                ?.let(::add)
         }
 
         return candidates.asSequence()

@@ -393,6 +393,10 @@ private class SingBoxVlessEngine(
             .put("network", "xhttp")
             .put("security", outbound.security ?: "none")
             .put(
+                "sockopt",
+                JSONObject().put("domainStrategy", XRAY_BOOTSTRAP_DNS_STRATEGY)
+            )
+            .put(
                 "xhttpSettings",
                 JSONObject()
                     .put("path", outbound.path ?: "/")
@@ -451,12 +455,34 @@ private class SingBoxVlessEngine(
                     .put("loglevel", "warning")
                     .put("dnsLog", false)
             )
+            .put(
+                "dns",
+                JSONObject()
+                    .put("servers", JSONArray(XRAY_BOOTSTRAP_DNS_SERVERS))
+                    .put("queryStrategy", XRAY_BOOTSTRAP_DNS_STRATEGY)
+            )
             .put("inbounds", JSONArray().put(inbound))
             .put(
                 "outbounds",
                 JSONArray()
                     .put(proxy)
                     .put(JSONObject().put("protocol", "freedom").put("tag", "direct"))
+            )
+            .put(
+                "routing",
+                JSONObject()
+                    .put("domainStrategy", "AsIs")
+                    .put(
+                        "rules",
+                        JSONArray().put(
+                            JSONObject()
+                                .put("type", "field")
+                                .put("ip", JSONArray(XRAY_BOOTSTRAP_DNS_SERVERS))
+                                .put("port", "53")
+                                .put("network", "udp,tcp")
+                                .put("outboundTag", "direct")
+                        )
+                    )
             )
             .toString(2)
     }
@@ -1258,6 +1284,8 @@ private const val ENGINE_STOP_TIMEOUT_MS = 1_500L
 private const val ENGINE_FORCE_STOP_TIMEOUT_MS = 1_000L
 private const val MAX_DECOMPRESSED_PROFILE_SIZE = 4 * 1024 * 1024
 private val XRAY_VLESS_TRANSPORTS = setOf("xhttp", "splithttp")
+private val XRAY_BOOTSTRAP_DNS_SERVERS = listOf("1.1.1.1", "8.8.8.8")
+private const val XRAY_BOOTSTRAP_DNS_STRATEGY = "UseIPv4"
 private const val PRIMARY_DNS = "\$PRIMARY_DNS"
 private const val SECONDARY_DNS = "\$SECONDARY_DNS"
 private val WIREGUARD_INTERFACE_SECTION = Regex(

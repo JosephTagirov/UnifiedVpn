@@ -14,7 +14,6 @@ internal object DesktopDnsResolver {
         return when (DesktopPaths.os) {
             DesktopOs.Linux -> currentLinuxDnsServer() ?: FALLBACK_DNS_SERVER
             DesktopOs.Windows -> currentWindowsDnsServer() ?: FALLBACK_DNS_SERVER
-            DesktopOs.MacOS,
             DesktopOs.Other -> FALLBACK_DNS_SERVER
         }
     }

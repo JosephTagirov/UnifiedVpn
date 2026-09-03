@@ -76,8 +76,8 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -426,7 +426,7 @@ private fun AppSettingsHubContent(
 
         SettingsNavigationRow(
             title = "Update Settings",
-            value = "Unified VPN + upstream · every ${updateSettings.intervalHours}h",
+            value = "Unified VPN · every ${updateSettings.intervalHours}h",
             icon = Icons.Outlined.Refresh,
             enabled = true,
             onClick = onUpdatesClick
@@ -448,6 +448,7 @@ private fun AppSettingsHubContent(
         ) {
             Text(
                 text = "${CurrentAppInfo.value.name} ${CurrentAppInfo.value.version} · " +
+                    "build ${CurrentAppInfo.value.build} · " +
                     "olcrtc ${CurrentAppInfo.value.olcrtcSha.take(12)} · " +
                     "awg ${CurrentAppInfo.value.awgCoreSha.take(12)}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

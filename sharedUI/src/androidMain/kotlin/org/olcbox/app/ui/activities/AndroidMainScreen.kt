@@ -30,20 +30,16 @@ import org.olcbox.app.update.AppUpdateInfo
 import org.olcbox.app.update.AppUpdateSettings
 import org.olcbox.app.update.AppUpdateService
 import org.olcbox.app.update.AndroidUpdateInstaller
-import org.olcbox.app.update.UpstreamReleaseInfo
-import org.olcbox.app.update.UpstreamUpdateService
-import org.olcbox.app.update.hasSeen
 import org.olcbox.app.update.identity
 import org.olcbox.app.update.isDownloaded
 import org.olcbox.app.update.isUpdateCheckDue
 import org.olcbox.app.update.shouldShowOffer
 import org.olcbox.app.update.updateStatusMessage
-import org.olcbox.app.update.withSeen
 import org.olcbox.app.ui.OlcboxAppContent
 import org.olcbox.app.ui.components.ApplicationUpdateOfferSheet
-import org.olcbox.app.ui.components.UpstreamUpdateNoticeSheet
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationViewModel
+import org.olcbox.app.ui.localization.androidUiText
 import org.olcbox.app.ui.navigation.AppScreen
 import org.olcbox.app.ui.provisioning.FriendAccessPackageCreatorDialog
 import org.olcbox.app.ui.provisioning.FriendAccessPackageInstallDialog
@@ -60,8 +56,7 @@ fun AndroidMainScreen(
     viewModel: HomeScreenViewModel,
     locationViewModel: LocationViewModel,
     vpnManager: AndroidVpnManager,
-    appUpdateService: AppUpdateService? = null,
-    upstreamUpdateService: UpstreamUpdateService? = null
+    appUpdateService: AppUpdateService? = null
 ) {
 
     var currentScreenRoute by rememberSaveable { mutableStateOf("home") }
@@ -88,6 +83,10 @@ fun AndroidMainScreen(
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    fun showLocalizedToast(message: String?, duration: Int = Toast.LENGTH_SHORT) {
+        Toast.makeText(context, context.androidUiText(message.orEmpty()), duration).show()
+    }
     val connectionMode by vpnManager.connectionMode.collectAsState()
     val proxySettings by vpnManager.proxySettings.collectAsState()
     val splitTunnelProfile by vpnManager.splitTunnelProfile.collectAsState()
@@ -121,7 +120,6 @@ fun AndroidMainScreen(
     var updateStatusText by remember { mutableStateOf<String?>(null) }
     var updateDownloadProgress by remember { mutableStateOf<Float?>(null) }
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
-    var upstreamNotices by remember { mutableStateOf<List<UpstreamReleaseInfo>>(emptyList()) }
     var relaunchAfterInstall by remember { mutableStateOf(false) }
     val subscriptionShareItems = locationViewModel.locations.toList()
         .mapNotNull { item ->
@@ -201,8 +199,7 @@ fun AndroidMainScreen(
 
     fun checkUpdate(manual: Boolean) {
         val service = appUpdateService
-        val upstreamService = upstreamUpdateService
-        if (service == null && upstreamService == null) {
+        if (service == null) {
             updateStatusText = "Update service unavailable"
             return
         }
@@ -211,15 +208,14 @@ fun AndroidMainScreen(
             val checkStartedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             if (!manual && !previousSettings.isUpdateCheckDue(checkStartedAt)) return@launch
 
-            updateStatusText = "Checking Unified VPN and upstream releases..."
+            updateStatusText = "Checking Unified VPN updates..."
             val proxy = vpnManager.subscriptionFetchProxy()
-            val result = service?.check(previousSettings.channel, proxy)
-            val upstreamResults = upstreamService?.checkAll(proxy).orEmpty()
+            val result = service.check(previousSettings.channel, proxy)
             val checkedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
             val checkedSettings = previousSettings.copy(lastCheckAtEpochMs = checkedAt).normalized()
             saveUpdateSettings(checkedSettings)
             val statusParts = mutableListOf<String>()
-            result?.fold(
+            result.fold(
                 onSuccess = { info ->
                     if (manual || info.shouldShowOffer(previousSettings, checkedAt)) {
                         statusParts += showUpdateResult(info, checkedSettings)
@@ -231,18 +227,6 @@ fun AndroidMainScreen(
                     statusParts += error.message ?: "Unified VPN update check failed"
                 }
             )
-
-            val upstreamInfos = upstreamResults.mapNotNull { it.getOrNull() }
-            val unseen = upstreamInfos.filterNot(previousSettings::hasSeen)
-            if (unseen.isNotEmpty()) {
-                upstreamNotices = (upstreamNotices + unseen).distinctBy { it.identity() }
-                statusParts += unseen.joinToString { "${it.project.displayName} updated on GitHub" }
-            } else if (manual && upstreamInfos.isNotEmpty()) {
-                statusParts += "Original olcbox and Amnezia VPN GitHub versions are up to date"
-            }
-            if (manual) {
-                upstreamResults.mapNotNull { it.exceptionOrNull()?.message }.forEach(statusParts::add)
-            }
             updateStatusText = statusParts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
         }
     }
@@ -252,7 +236,7 @@ fun AndroidMainScreen(
             if (!updateInstaller.canRequestPackageInstalls()) {
                 updateInstaller.openUnknownSourcesSettings()
                 updateStatusText = "Allow Unified VPN to install updates, then tap Download again"
-                Toast.makeText(context, updateStatusText, Toast.LENGTH_LONG).show()
+                showLocalizedToast(updateStatusText, Toast.LENGTH_LONG)
                 return@launch
             }
 
@@ -264,7 +248,7 @@ fun AndroidMainScreen(
             val file = result.getOrElse { error ->
                 updateStatusText = "Download failed: ${error.message ?: "unknown error"}"
                 updateDownloadProgress = null
-                Toast.makeText(context, updateStatusText, Toast.LENGTH_LONG).show()
+                showLocalizedToast(updateStatusText, Toast.LENGTH_LONG)
                 return@launch
             }
             updateStatusText = "Installing ${info.asset.name}"
@@ -288,26 +272,10 @@ fun AndroidMainScreen(
         }
     }
 
-    fun dismissUpstreamNotice(info: UpstreamReleaseInfo) {
-        scope.launch {
-            saveUpdateSettings(updateSettings.withSeen(info))
-            upstreamNotices = upstreamNotices.filterNot { it.identity() == info.identity() }
-        }
-    }
-
-    fun openUpstreamRelease(info: UpstreamReleaseInfo) {
-        runCatching {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.htmlUrl)))
-        }.onFailure {
-            Toast.makeText(context, "Unable to open GitHub", Toast.LENGTH_SHORT).show()
-        }
-        dismissUpstreamNotice(info)
-    }
-
-    LaunchedEffect(appUpdateService, upstreamUpdateService) {
+    LaunchedEffect(appUpdateService) {
         val loaded = updateSettingsStore.load()
         updateSettings = loaded
-        if (appUpdateService != null || upstreamUpdateService != null) {
+        if (appUpdateService != null) {
             checkUpdate(manual = false)
         }
     }
@@ -384,18 +352,18 @@ fun AndroidMainScreen(
                         onComplete = {
                             reloadLocationsAfterImport {
                                 OlcboxVpnState.addLog("Configuration imported")
-                                Toast.makeText(context, "Configuration imported", Toast.LENGTH_SHORT).show()
+                                showLocalizedToast("Configuration imported")
                             }
                         },
                         onError = { message ->
                             OlcboxVpnState.addLog("Config import failed: $message")
-                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                            showLocalizedToast(message, Toast.LENGTH_LONG)
                         }
                     )
                 },
                 onError = { message ->
                     OlcboxVpnState.addLog("Config file read failed: $message")
-                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    showLocalizedToast(message, Toast.LENGTH_LONG)
                 }
             )
         }
@@ -416,10 +384,10 @@ fun AndroidMainScreen(
             rawText = rawText,
             onComplete = {
                 reloadLocationsAfterImport {
-                    Toast.makeText(context, "QR imported", Toast.LENGTH_SHORT).show()
+                    showLocalizedToast("QR imported")
                 }
             },
-            onError = { message -> Toast.makeText(context, message, Toast.LENGTH_LONG).show() }
+            onError = { message -> showLocalizedToast(message, Toast.LENGTH_LONG) }
         )
     }
 
@@ -526,15 +494,14 @@ fun AndroidMainScreen(
                                 isFriendPackageCreatorOpen = false
                                 shareSheetPayload = "Encrypted friend package" to encrypted
                             } catch (failure: Exception) {
-                                Toast.makeText(
-                                    context,
+                                showLocalizedToast(
                                     failure.message ?: "Could not encrypt friend package",
                                     Toast.LENGTH_LONG
-                                ).show()
+                                )
                             }
                         }
                     },
-                    onError = { message -> Toast.makeText(context, message, Toast.LENGTH_LONG).show() }
+                    onError = { message -> showLocalizedToast(message, Toast.LENGTH_LONG) }
                 )
             }
         )
@@ -554,20 +521,19 @@ fun AndroidMainScreen(
                             onComplete = {
                                 reloadLocationsAfterImport {
                                     pendingEncryptedFriendPackage = null
-                                    Toast.makeText(
-                                        context,
+                                    showLocalizedToast(
                                         "olcRTC, VLESS, and AmneziaWG are ready",
                                         Toast.LENGTH_LONG
-                                    ).show()
+                                    )
                                     connectAfterProfileImport()
                                 }
                             },
                             onError = { message ->
-                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                showLocalizedToast(message, Toast.LENGTH_LONG)
                             }
                         )
                     },
-                    onError = { message -> Toast.makeText(context, message, Toast.LENGTH_LONG).show() }
+                    onError = { message -> showLocalizedToast(message, Toast.LENGTH_LONG) }
                 )
             }
         )
@@ -582,12 +548,12 @@ fun AndroidMainScreen(
                     onComplete = {
                         reloadLocationsAfterImport {
                             isSelfHostedSetupOpen = false
-                            Toast.makeText(context, "Self-hosted AmneziaWG is ready", Toast.LENGTH_LONG).show()
+                            showLocalizedToast("Self-hosted AmneziaWG is ready", Toast.LENGTH_LONG)
                             connectAfterProfileImport()
                         }
                     },
                     onError = { message ->
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        showLocalizedToast(message, Toast.LENGTH_LONG)
                     }
                 )
             }
@@ -609,16 +575,6 @@ fun AndroidMainScreen(
             onLater = { postponeUpdate(info) },
             onDownload = { downloadUpdate(info) }
         )
-    }
-
-    if (updateOffer == null) {
-        upstreamNotices.firstOrNull()?.let { info ->
-            UpstreamUpdateNoticeSheet(
-                info = info,
-                onDismiss = { dismissUpstreamNotice(info) },
-                onOpenGitHub = { openUpstreamRelease(info) }
-            )
-        }
     }
 
     if (isAppSettingsOpen) {
@@ -643,7 +599,7 @@ fun AndroidMainScreen(
             },
             onCopyConfigClick = {
                 viewModel.onCopyFullConfigClicked()
-                Toast.makeText(context, "Config copied", Toast.LENGTH_SHORT).show()
+                showLocalizedToast("Config copied")
             },
             onCreateFriendPackageClick = {
                 isAppSettingsOpen = false
@@ -651,14 +607,14 @@ fun AndroidMainScreen(
             },
             onSaveLogsClick = {
                 val showToast: (String) -> Unit = { message ->
-                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    showLocalizedToast(message)
                 }
                 pendingLogSaveCallbacks.value = showToast to showToast
                 logSaveLauncher.launch(viewModel.suggestedLogsFileName())
             },
             onShareLogsClick = {
                 val showToast: (String) -> Unit = { message ->
-                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    showLocalizedToast(message)
                 }
                 viewModel.onShareLogs(showToast, showToast)
             },
@@ -677,11 +633,9 @@ fun AndroidMainScreen(
                 viewModel.refreshSubscription(url) { updatedCount ->
                     reloadLocationsAfterImport {
                         viewModel.restartVpnIfRunning()
-                        Toast.makeText(
-                            context,
-                            if (updatedCount > 0) "Subscription updated" else "Subscription not updated",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        showLocalizedToast(
+                            if (updatedCount > 0) "Subscription updated" else "Subscription not updated"
+                        )
                         onFinished()
                     }
                 }
@@ -689,15 +643,13 @@ fun AndroidMainScreen(
             onSubscriptionRefreshIntervalChanged = { url, intervalMs ->
                 viewModel.setSubscriptionRefreshInterval(url, intervalMs) {
                     locationViewModel.loadLocations {
-                        Toast.makeText(
-                            context,
+                        showLocalizedToast(
                             if (intervalMs == null) {
                                 "Subscription refresh set to Auto"
                             } else {
                                 "Subscription refresh rate saved"
-                            },
-                            Toast.LENGTH_SHORT
-                        ).show()
+                            }
+                        )
                     }
                 }
             },
@@ -705,11 +657,9 @@ fun AndroidMainScreen(
                 viewModel.deleteSubscription(url) { removedLocations ->
                     reloadLocationsAfterImport {
                         viewModel.restartVpnIfRunning()
-                        Toast.makeText(
-                            context,
-                            "Subscription deleted · $removedLocations locations removed",
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        showLocalizedToast(
+                            "Subscription deleted · $removedLocations locations removed"
+                        )
                     }
                 }
             },

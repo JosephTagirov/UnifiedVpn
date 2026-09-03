@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
+import org.olcbox.app.ui.localization.androidUiText
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -18,11 +19,19 @@ class AndroidConfigImporter(private val context: Context) : ConfigImporter {
                     ?.let(ClipboardPayloadCodec::decodeOrOriginal)
             }.getOrNull()
             if (text.isNullOrBlank()) {
-                Toast.makeText(context, "Clipboard is empty or invalid", Toast.LENGTH_SHORT).show()
+                Toast.makeText(
+                    context,
+                    context.androidUiText("Clipboard is empty or invalid"),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
             return text
         }
-        Toast.makeText(context, "No clipboard data found", Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            context,
+            context.androidUiText("No clipboard data found"),
+            Toast.LENGTH_SHORT
+        ).show()
         return null
     }
 
@@ -33,9 +42,17 @@ class AndroidConfigImporter(private val context: Context) : ConfigImporter {
             val clip = ClipData.newPlainText("Unified VPN locations", payload)
             clipboard.setPrimaryClip(clip)
         }.onSuccess {
-            Toast.makeText(context, "Config copied to clipboard", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                context,
+                context.androidUiText("Config copied to clipboard"),
+                Toast.LENGTH_SHORT
+            ).show()
         }.onFailure {
-            Toast.makeText(context, "Config is too large for the clipboard", Toast.LENGTH_LONG).show()
+            Toast.makeText(
+                context,
+                context.androidUiText("Config is too large for the clipboard"),
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 

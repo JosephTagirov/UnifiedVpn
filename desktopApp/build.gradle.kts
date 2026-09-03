@@ -211,11 +211,19 @@ val hevSocks5TunnelSourceDir = rootProject.layout.projectDirectory.dir("androidA
 val currentBuildOs = OperatingSystem.current()
 val desktopPackageName = "UnifiedVPN"
 val desktopPackageVersion = providers.gradleProperty("olcbox.version").orElse("0.0.10").get()
+val desktopBuildNumber = providers.gradleProperty("olcbox.build").orElse("1").get()
 val tun2SocksVersion = "2.6.0"
 val wintunVersion = "0.14.1"
 val xrayVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("26.3.27").get()
+val expectedAwgCoreCommit = providers.gradleProperty("olcbox.awgCoreSha")
+val expectedXrayCommit = providers.gradleProperty("olcbox.xraySha")
+val singBoxAwgRepoDir = providers.environmentVariable("SING_BOX_AWG_REPO")
+    .map { rootProject.file(it) }
+    .orElse(rootProject.layout.projectDirectory.dir(".downloads/sing-box-awg/source").asFile)
+val xrayRepoDir = providers.environmentVariable("XRAY_REPO")
+    .map { rootProject.file(it) }
+    .orElse(rootProject.layout.projectDirectory.dir(".downloads/xray/source-v$xrayVersion").asFile)
 val currentBuildTargetFormats = when {
-    currentBuildOs.isMacOsX -> arrayOf(TargetFormat.Dmg)
     currentBuildOs.isWindows -> arrayOf(TargetFormat.Exe, TargetFormat.Msi)
     currentBuildOs.isLinux -> arrayOf(TargetFormat.AppImage)
     else -> emptyArray()
@@ -253,6 +261,25 @@ fun verifyOlcRtcBinaryVcsMetadata(binary: File) {
             "expected revision=$expected modified=false, found revision=$revision modified=$modified"
     }
     logger.lifecycle("Verified olcRTC binary VCS metadata $expected in ${binary.name}")
+}
+
+fun verifyPinnedGitSource(sourceDir: File, expectedCommit: String, label: String) {
+    require(sourceDir.isDirectory) { "$label source directory is missing: ${sourceDir.absolutePath}" }
+    fun gitOutput(vararg arguments: String): String {
+        val process = ProcessBuilder("git", "-C", sourceDir.absolutePath, *arguments)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        require(process.waitFor() == 0) { "$label git ${arguments.joinToString(" ")} failed: $output" }
+        return output
+    }
+
+    val actualCommit = gitOutput("rev-parse", "HEAD").lowercase()
+    val changes = gitOutput("status", "--porcelain", "--untracked-files=no")
+    require(actualCommit == expectedCommit.trim().lowercase() && changes.isBlank()) {
+        "$label source must be clean and pinned to $expectedCommit; " +
+            "found commit=$actualCommit modified=${changes.isNotBlank()}"
+    }
 }
 
 fun registerOlcRtcBuildTask(
@@ -340,20 +367,6 @@ fun registerOlcRtcLibraryBuildTask(
     }
 }
 
-val buildOlcRtcDarwinArm64 = registerOlcRtcBuildTask(
-    taskName = "buildOlcRtcDarwinArm64",
-    goos = "darwin",
-    goarch = "arm64",
-    outputName = "olcrtc-darwin-arm64"
-)
-
-val buildOlcRtcDarwinAmd64 = registerOlcRtcBuildTask(
-    taskName = "buildOlcRtcDarwinAmd64",
-    goos = "darwin",
-    goarch = "amd64",
-    outputName = "olcrtc-darwin-amd64"
-)
-
 val buildOlcRtcWindowsAmd64 = registerOlcRtcBuildTask(
     taskName = "buildOlcRtcWindowsAmd64",
     goos = "windows",
@@ -373,20 +386,6 @@ val buildOlcRtcLinuxArm64 = registerOlcRtcBuildTask(
     goos = "linux",
     goarch = "arm64",
     outputName = "olcrtc-linux-arm64"
-)
-
-val buildOlcRtcLibDarwinArm64 = registerOlcRtcLibraryBuildTask(
-    taskName = "buildOlcRtcLibDarwinArm64",
-    goos = "darwin",
-    goarch = "arm64",
-    outputName = "libolcrtc-darwin-arm64.dylib"
-)
-
-val buildOlcRtcLibDarwinAmd64 = registerOlcRtcLibraryBuildTask(
-    taskName = "buildOlcRtcLibDarwinAmd64",
-    goos = "darwin",
-    goarch = "amd64",
-    outputName = "libolcrtc-darwin-amd64.dylib"
 )
 
 val buildOlcRtcLibLinuxAmd64 = registerOlcRtcLibraryBuildTask(
@@ -438,13 +437,9 @@ val copyOlcRtcDataAssets = tasks.register<Sync>("copyOlcRtcDataAssets") {
 }
 
 val desktopNativeAssetTasks = mutableListOf<Any>(
-    buildOlcRtcDarwinArm64,
-    buildOlcRtcDarwinAmd64,
     buildOlcRtcWindowsAmd64,
     buildOlcRtcLinuxAmd64,
     buildOlcRtcLinuxArm64,
-    buildOlcRtcLibDarwinArm64,
-    buildOlcRtcLibDarwinAmd64,
     buildOlcRtcLibLinuxAmd64,
     buildOlcRtcLibLinuxArm64,
     buildOlcRtcLibWindowsAmd64,
@@ -453,16 +448,6 @@ val desktopNativeAssetTasks = mutableListOf<Any>(
 val hostDesktopNativeAssetTasks = mutableListOf<Any>(copyOlcRtcDataAssets)
 
 when {
-    currentBuildOs.isMacOsX -> when (hostDesktopArch) {
-        "amd64" -> {
-            hostDesktopNativeAssetTasks.add(buildOlcRtcDarwinAmd64)
-            hostDesktopNativeAssetTasks.add(buildOlcRtcLibDarwinAmd64)
-        }
-        "arm64" -> {
-            hostDesktopNativeAssetTasks.add(buildOlcRtcDarwinArm64)
-            hostDesktopNativeAssetTasks.add(buildOlcRtcLibDarwinArm64)
-        }
-    }
     currentBuildOs.isWindows -> {
         hostDesktopNativeAssetTasks.add(buildOlcRtcWindowsAmd64)
         // hostDesktopNativeAssetTasks.add(buildOlcRtcLibWindowsAmd64)
@@ -496,6 +481,76 @@ if (currentBuildOs.isLinux) {
     }
     desktopNativeAssetTasks.add(buildHevSocks5TunnelLinux)
     hostDesktopNativeAssetTasks.add(buildHevSocks5TunnelLinux)
+
+    val singBoxAwgLinuxOutput = generatedNativeResources.map {
+        it.file("native/sing-box-awg-linux-$hostDesktopArch")
+    }
+    val xrayLinuxOutput = generatedNativeResources.map {
+        it.file("native/xray-linux-$hostDesktopArch")
+    }
+    val buildSingBoxAwgLinux = tasks.register<Exec>("buildSingBoxAwgLinux") {
+        val sourceDir = singBoxAwgRepoDir.get()
+        val output = singBoxAwgLinuxOutput.get().asFile
+        val tagsFile = sourceDir.resolve("release/DEFAULT_BUILD_TAGS_OTHERS")
+        val baseLdflagsFile = sourceDir.resolve("release/LDFLAGS")
+
+        inputs.files(fileTree(sourceDir) { exclude(".git/**") })
+        inputs.files(sourceDir.resolve("go.mod"), sourceDir.resolve("go.sum"), tagsFile, baseLdflagsFile)
+        inputs.property("awgCoreCommit", expectedAwgCoreCommit)
+        outputs.file(singBoxAwgLinuxOutput)
+        workingDir = sourceDir
+        environment("GOOS", "linux")
+        environment("GOARCH", hostDesktopArch)
+        environment("CGO_ENABLED", "0")
+        environment("GOTOOLCHAIN", "local")
+
+        doFirst {
+            verifyPinnedGitSource(sourceDir, expectedAwgCoreCommit.get(), "AWG sing-box")
+            output.parentFile.mkdirs()
+            val tags = tagsFile.readText().trim()
+            val ldflags = buildString {
+                append("-X github.com/sagernet/sing-box/constant.Version=")
+                append(desktopPackageVersion)
+                append(' ')
+                append(baseLdflagsFile.readText().trim())
+                append(" -s -w -buildid=")
+            }
+            commandLine(
+                "go", "build", "-trimpath", "-tags", tags,
+                "-ldflags", ldflags,
+                "-o", output.absolutePath,
+                "./cmd/sing-box"
+            )
+        }
+    }
+    val buildXrayLinux = tasks.register<Exec>("buildXrayLinux") {
+        val sourceDir = xrayRepoDir.get()
+        val output = xrayLinuxOutput.get().asFile
+
+        inputs.files(fileTree(sourceDir) { exclude(".git/**") })
+        inputs.files(sourceDir.resolve("go.mod"), sourceDir.resolve("go.sum"))
+        inputs.property("xrayCommit", expectedXrayCommit)
+        outputs.file(xrayLinuxOutput)
+        workingDir = sourceDir
+        environment("GOOS", "linux")
+        environment("GOARCH", hostDesktopArch)
+        environment("CGO_ENABLED", "0")
+        environment("GOTOOLCHAIN", "local")
+
+        doFirst {
+            verifyPinnedGitSource(sourceDir, expectedXrayCommit.get(), "Xray")
+            output.parentFile.mkdirs()
+        }
+        commandLine(
+            "go", "build", "-trimpath", "-ldflags", "-s -w -buildid=",
+            "-o", output.absolutePath,
+            "./main"
+        )
+    }
+    desktopNativeAssetTasks.add(buildSingBoxAwgLinux)
+    desktopNativeAssetTasks.add(buildXrayLinux)
+    hostDesktopNativeAssetTasks.add(buildSingBoxAwgLinux)
+    hostDesktopNativeAssetTasks.add(buildXrayLinux)
 }
 
 if (currentBuildOs.isWindows) {
@@ -592,10 +647,6 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
     add("olcrtc-data/names")
     add("olcrtc-data/surnames")
     when {
-        currentBuildOs.isMacOsX -> {
-            add("native/olcrtc-darwin-$hostDesktopArch")
-            add("native/libolcrtc-darwin-$hostDesktopArch.dylib")
-        }
         currentBuildOs.isWindows -> {
             add("native/olcrtc-windows-amd64.exe")
             // add("native/olcrtc-windows-amd64.dll")
@@ -608,6 +659,8 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/olcrtc-linux-$hostDesktopArch")
             add("native/libolcrtc-linux-$hostDesktopArch.so")
             add("native/hev-socks5-tunnel-linux-$hostDesktopArch")
+            add("native/sing-box-awg-linux-$hostDesktopArch")
+            add("native/xray-linux-$hostDesktopArch")
         }
     }
 }
@@ -640,6 +693,7 @@ if (currentBuildOs.isWindows) {
     listOf("createRuntimeImage", "createReleaseDistributable").forEach { taskName ->
         tasks.matching { task -> task.name == taskName }.configureEach {
             inputs.property("unifiedVpnPackageVersion", desktopPackageVersion)
+            inputs.property("unifiedVpnBuildNumber", desktopBuildNumber)
         }
     }
 
@@ -680,6 +734,7 @@ if (currentBuildOs.isWindows) {
         tasks.matching { task -> task.name == taskName }.configureEach {
             dependsOn(verifyDesktopAppImage)
             inputs.property("unifiedVpnPackageVersion", desktopPackageVersion)
+            inputs.property("unifiedVpnBuildNumber", desktopBuildNumber)
         }
     }
 
@@ -689,7 +744,9 @@ if (currentBuildOs.isWindows) {
 
         dependsOn("createReleaseDistributable")
         from(jpackageAppRootDir)
-        archiveFileName.set("$desktopPackageName-$desktopPackageVersion-windows-amd64-portable.zip")
+        archiveFileName.set(
+            "$desktopPackageName-$desktopPackageVersion-build.$desktopBuildNumber-windows-amd64-portable.zip"
+        )
         destinationDirectory.set(layout.buildDirectory.dir("compose/binaries/main-release/portable"))
 
         doFirst {
@@ -699,6 +756,25 @@ if (currentBuildOs.isWindows) {
                 "Windows portable app image was not created at ${appRoot.absolutePath}"
             }
         }
+    }
+
+    tasks.register<Sync>("packageReleaseUpdateBundle") {
+        group = "distribution"
+        description = "Collects build-aware Windows update assets for GitHub without publishing them."
+        dependsOn("packageReleaseExe", "packageReleasePortableZip")
+        inputs.property("unifiedVpnPackageVersion", desktopPackageVersion)
+        inputs.property("unifiedVpnBuildNumber", desktopBuildNumber)
+
+        from(layout.buildDirectory.dir("compose/binaries/main-release/exe")) {
+            include("*.exe")
+            rename {
+                "$desktopPackageName-$desktopPackageVersion-build.$desktopBuildNumber-windows-amd64-installer.exe"
+            }
+        }
+        from(layout.buildDirectory.dir("compose/binaries/main-release/portable")) {
+            include("*$desktopPackageVersion-build.$desktopBuildNumber-windows-amd64-portable.zip")
+        }
+        into(layout.buildDirectory.dir("compose/binaries/main-release/update"))
     }
 }
 
@@ -712,9 +788,9 @@ listOf(
     "packageReleaseDistributionForCurrentOS",
     "packageReleaseExe",
     "packageReleaseMsi",
-    "packageReleaseDmg",
     "packageReleaseAppImage",
-    "packageReleasePortableZip"
+    "packageReleasePortableZip",
+    "packageReleaseUpdateBundle"
 ).forEach { taskName ->
     tasks.matching { it.name == taskName }.configureEach {
         dependsOn(verifyDesktopNativeResources)
@@ -745,10 +821,6 @@ compose.desktop {
                 dirChooser = true
                 upgradeUuid = "6f0aaf78-dbed-4745-9d95-9e63f10a30de"
             }
-            macOS {
-                iconFile.set(project.file("appIcons/MacosIcon.icns"))
-                bundleID = "org.olcbox.app.desktopApp"
-            }
         }
     }
 }
@@ -759,7 +831,8 @@ if (currentBuildOs.isLinux) {
     val appDir = layout.buildDirectory.dir("compose/binaries/main-release/appimage/AppDir")
     val linuxIconFile = layout.projectDirectory.file("appIcons/LinuxIcon.png")
     val appImageFile = layout.buildDirectory.file(
-        "compose/binaries/main-release/appimage/$desktopPackageName-$desktopPackageVersion-$hostDesktopArch.AppImage"
+        "compose/binaries/main-release/appimage/" +
+            "$desktopPackageName-$desktopPackageVersion-build.$desktopBuildNumber-linux-$hostDesktopArch.AppImage"
     )
 
     val prepareReleaseLinuxAppDir = tasks.register<Exec>("prepareReleaseLinuxAppDir") {
@@ -826,7 +899,18 @@ if (currentBuildOs.isLinux) {
         )
     }
 
-    tasks.matching { it.name == "packageReleaseDistributionForCurrentOS" }.configureEach {
+    val verifyReleaseLinuxAppImage = tasks.register<Exec>("verifyReleaseLinuxAppImage") {
+        group = "verification"
+        description = "Launches the Linux AppImage in extract mode and verifies the JVM and native assets."
+
         dependsOn(packageReleaseLinuxAppImage)
+        inputs.file(appImageFile)
+        environment("APPIMAGE_EXTRACT_AND_RUN", "1")
+        environment("HOME", layout.buildDirectory.dir("tmp/linux-smoke-home").get().asFile.absolutePath)
+        commandLine(appImageFile.get().asFile.absolutePath, "--verify-native-assets")
+    }
+
+    tasks.matching { it.name == "packageReleaseDistributionForCurrentOS" }.configureEach {
+        dependsOn(verifyReleaseLinuxAppImage)
     }
 }

@@ -77,7 +77,7 @@ class DesktopNativeProfileIntegrationTest {
 
             val proxy = assertNotNull(manager.subscriptionFetchProxy())
             assertSocks5Https(proxy, "www.instagram.com")
-            assertSocks5Https(proxy, "api.telegram.org")
+            assertSocks5Https(proxy, "www.wikipedia.org")
 
             manager.stopVpn()
             val stoppedStatus = withTimeout(STOP_TIMEOUT_MS) {

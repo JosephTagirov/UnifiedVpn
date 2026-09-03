@@ -187,9 +187,12 @@ val hasReleaseKeystore =
         listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
             .all { key -> !keystoreProperties.getProperty(key).isNullOrBlank() }
 val olcboxVersion = providers.gradleProperty("olcbox.version").orElse("0.0.10")
-val olcboxVersionCode = providers.gradleProperty("olcbox.versionCode")
+val olcboxBuild = providers.gradleProperty("olcbox.build")
     .map { it.toInt() }
     .orElse(1)
+val olcboxVersionCode = providers.gradleProperty("olcbox.versionCode")
+    .map { it.toInt() }
+    .orElse(olcboxBuild)
 val defaultAndroidAbiFilters = listOf("armeabi-v7a", "arm64-v8a", "x86_64")
 val androidAbiFilters = providers.gradleProperty("olcbox.android.abiFilters")
     .map { value ->
@@ -314,5 +317,60 @@ listOf("debug", "release").forEach { buildType ->
 
     tasks.matching { task -> task.name == "assemble$buildTypeName" }.configureEach {
         finalizedBy(verifyTask)
+    }
+}
+
+tasks.register<Copy>("packageReleaseUpdateApk") {
+    group = "distribution"
+    description = "Copies the signed release APK to the build-aware GitHub update filename."
+    dependsOn("assembleRelease")
+    inputs.property("unifiedVpnVersion", olcboxVersion)
+    inputs.property("unifiedVpnBuildNumber", olcboxBuild)
+
+    from(layout.buildDirectory.dir("outputs/apk/release")) {
+        include("*.apk")
+        rename {
+            "UnifiedVPN-${olcboxVersion.get()}-build.${olcboxBuild.get()}-android-universal.apk"
+        }
+    }
+    into(layout.buildDirectory.dir("outputs/update"))
+
+    doFirst {
+        require(hasReleaseKeystore) {
+            "A signed GitHub update APK requires keystore.properties; refusing to package an unsigned release."
+        }
+        val releaseDirectory = layout.buildDirectory.dir("outputs/apk/release").get().asFile
+        val releaseApks = releaseDirectory
+            .listFiles { file -> file.isFile && file.extension.equals("apk", ignoreCase = true) }
+            .orEmpty()
+        require(releaseApks.size == 1 && "unsigned" !in releaseApks.single().name.lowercase()) {
+            "Expected exactly one release APK in ${releaseDirectory.absolutePath}; found ${releaseApks.size}"
+        }
+    }
+}
+
+tasks.register<Sync>("packageDebugUpdateApk") {
+    group = "distribution"
+    description = "Copies the locally installable debug APK to a build-aware test filename."
+    dependsOn("assembleDebug")
+    inputs.property("unifiedVpnVersion", olcboxVersion)
+    inputs.property("unifiedVpnBuildNumber", olcboxBuild)
+
+    from(layout.buildDirectory.dir("outputs/apk/debug")) {
+        include("*.apk")
+        rename {
+            "UnifiedVPN-${olcboxVersion.get()}-build.${olcboxBuild.get()}-android-universal-debug.apk"
+        }
+    }
+    into(layout.buildDirectory.dir("outputs/update"))
+
+    doFirst {
+        val debugDirectory = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
+        val debugApks = debugDirectory
+            .listFiles { file -> file.isFile && file.extension.equals("apk", ignoreCase = true) }
+            .orEmpty()
+        require(debugApks.size == 1) {
+            "Expected exactly one debug APK in ${debugDirectory.absolutePath}; found ${debugApks.size}"
+        }
     }
 }

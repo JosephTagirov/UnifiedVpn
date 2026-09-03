@@ -12,7 +12,6 @@ internal interface DesktopProxyController {
     companion object {
         fun current(): DesktopProxyController {
             return when (DesktopPaths.os) {
-                DesktopOs.MacOS -> MacOsProxyController()
                 DesktopOs.Windows -> WindowsProxyController()
                 DesktopOs.Linux -> UnsupportedProxyController()
                 DesktopOs.Other -> UnsupportedProxyController()
@@ -23,83 +22,10 @@ internal interface DesktopProxyController {
 
 internal class UnsupportedProxyController : DesktopProxyController {
     override suspend fun enable(pacUrl: String) {
-        error("System proxy mode supports macOS and Windows")
+        error("System proxy mode is available on Windows only")
     }
 
     override suspend fun restore() = Unit
-}
-
-internal data class MacOsAutoProxyState(
-    val service: String,
-    val enabled: Boolean,
-    val url: String?
-)
-
-internal class MacOsProxyController : DesktopProxyController {
-    private var backup: List<MacOsAutoProxyState>? = null
-
-    override suspend fun enable(pacUrl: String) {
-        val services = enabledNetworkServices()
-        backup = services.map { service ->
-            readAutoProxyState(service)
-        }
-        enableCommands(services, pacUrl).forEach { runCommand(it) }
-    }
-
-    override suspend fun restore() {
-        val states = backup ?: return
-        restoreCommands(states).forEach { command ->
-            runCatching { runCommand(command) }
-        }
-        backup = null
-    }
-
-    private suspend fun enabledNetworkServices(): List<String> {
-        return runCommand(listOf("networksetup", "-listallnetworkservices"))
-            .lineSequence()
-            .map { it.trim() }
-            .filter { it.isNotBlank() && !it.startsWith("An asterisk") && !it.startsWith("*") }
-            .toList()
-    }
-
-    private suspend fun readAutoProxyState(service: String): MacOsAutoProxyState {
-        val output = runCommand(listOf("networksetup", "-getautoproxyurl", service))
-        val enabled = output.lineSequence()
-            .firstOrNull { it.startsWith("Enabled:", ignoreCase = true) }
-            ?.substringAfter(":")
-            ?.trim()
-            ?.equals("Yes", ignoreCase = true) == true
-        val url = output.lineSequence()
-            .firstOrNull { it.startsWith("URL:", ignoreCase = true) }
-            ?.substringAfter(":")
-            ?.trim()
-            ?.takeIf { it.isNotBlank() && it != "(null)" }
-        return MacOsAutoProxyState(service, enabled, url)
-    }
-
-    companion object {
-        fun enableCommands(services: List<String>, pacUrl: String): List<List<String>> {
-            return services.flatMap { service ->
-                listOf(
-                    listOf("networksetup", "-setautoproxyurl", service, pacUrl),
-                    listOf("networksetup", "-setautoproxystate", service, "on")
-                )
-            }
-        }
-
-        fun restoreCommands(states: List<MacOsAutoProxyState>): List<List<String>> {
-            return states.flatMap { state ->
-                if (state.enabled && !state.url.isNullOrBlank()) {
-                    listOf(
-                        listOf("networksetup", "-setautoproxyurl", state.service, state.url),
-                        listOf("networksetup", "-setautoproxystate", state.service, "on")
-                    )
-                } else {
-                    listOf(listOf("networksetup", "-setautoproxystate", state.service, "off"))
-                }
-            }
-        }
-    }
 }
 
 internal data class WindowsProxyState(

@@ -249,7 +249,10 @@ class DesktopVpnManager private constructor(
                         "using $selectedSocksPort for this connection"
                 )
             }
-            val desktopMode = DesktopMode.from(socksSettings.routingMode)
+            val desktopMode = DesktopMode.from(
+                mode = socksSettings.routingModeFor(profile.isOlcRtc()),
+                isOlcRtcProfile = profile.isOlcRtc()
+            )
             activeDesktopMode = desktopMode
 
             if (desktopMode == DesktopMode.WindowsTun) {
@@ -408,12 +411,11 @@ class DesktopVpnManager private constructor(
         LocalSocks;
 
         companion object {
-            fun from(mode: DesktopRoutingMode): DesktopMode {
-                return when (mode.resolveForCurrentPlatform()) {
+            fun from(mode: DesktopRoutingMode, isOlcRtcProfile: Boolean): DesktopMode {
+                return when (mode.resolveForCurrentPlatform(isOlcRtcProfile)) {
                     DesktopRoutingMode.Tun -> when (DesktopPaths.os) {
                         DesktopOs.Linux -> LinuxTun
                         DesktopOs.Windows -> WindowsTun
-                        DesktopOs.MacOS,
                         DesktopOs.Other -> SystemProxy
                     }
                     DesktopRoutingMode.SystemProxy -> SystemProxy

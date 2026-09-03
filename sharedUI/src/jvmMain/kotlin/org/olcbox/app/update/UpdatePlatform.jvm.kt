@@ -4,7 +4,6 @@ actual fun currentUpdatePlatform(): UpdatePlatform {
     val osName = System.getProperty("os.name", "").lowercase()
     val os = when {
         "win" in osName -> "windows"
-        "mac" in osName || "darwin" in osName -> "macos"
         "linux" in osName -> "linux"
         else -> osName.ifBlank { "unknown" }
     }

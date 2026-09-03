@@ -45,11 +45,17 @@ function Invoke-Adb {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
 
     $previousErrorAction = $ErrorActionPreference
+    $previousAndroidUserHome = $env:ANDROID_USER_HOME
+    $previousHome = $env:HOME
     $ErrorActionPreference = "Continue"
     try {
+        $env:ANDROID_USER_HOME = Join-Path $env:USERPROFILE ".android"
+        $env:HOME = $env:USERPROFILE
         $output = & $AdbPath -s $EmulatorSerial @Arguments 2>&1
         $exitCode = $LASTEXITCODE
     } finally {
+        $env:ANDROID_USER_HOME = $previousAndroidUserHome
+        $env:HOME = $previousHome
         $ErrorActionPreference = $previousErrorAction
     }
     if ($exitCode -ne 0) {
@@ -115,8 +121,8 @@ function Test-AndroidTunnel {
     $jarFile = Build-AndroidProbe
     try {
         Invoke-Adb push $jarFile $remoteProbe | Out-Null
-        $result = Invoke-Adb shell env "CLASSPATH=$remoteProbe" app_process /data/local/tmp NetworkProbe https://www.instagram.com/ https://api.telegram.org/
-        $lines = @($result | Where-Object { $_ -match '^(www\.instagram\.com|api\.telegram\.org)_http=[1-5]\d{2}$' })
+        $result = Invoke-Adb shell env "CLASSPATH=$remoteProbe" app_process /data/local/tmp NetworkProbe https://www.instagram.com/ https://www.wikipedia.org/
+        $lines = @($result | Where-Object { $_ -match '^(www\.instagram\.com|www\.wikipedia\.org)_http=[1-5]\d{2}$' })
         if ($lines.Count -ne 2) {
             throw "Android tunnel did not return valid HTTPS responses for both targets"
         }

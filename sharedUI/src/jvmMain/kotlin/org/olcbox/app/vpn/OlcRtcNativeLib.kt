@@ -103,11 +103,6 @@ internal fun olcRtcNativeLibrarySpec(
     }
 
     return when {
-        "mac" in os || "darwin" in os -> when (arch) {
-            "arm64" -> OlcRtcNativeLibrarySpec("libolcrtc-darwin-arm64.dylib")
-            "amd64" -> OlcRtcNativeLibrarySpec("libolcrtc-darwin-amd64.dylib")
-            else -> null
-        }
         "linux" in os -> when (arch) {
             "arm64" -> OlcRtcNativeLibrarySpec("libolcrtc-linux-arm64.so")
             "amd64" -> OlcRtcNativeLibrarySpec("libolcrtc-linux-amd64.so")

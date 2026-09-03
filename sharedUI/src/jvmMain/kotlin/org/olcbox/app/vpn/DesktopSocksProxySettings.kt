@@ -14,32 +14,39 @@ enum class DesktopRoutingMode {
 
     fun displayName(): String = when (this) {
         Auto -> "Auto"
-        Tun -> "TUN"
+        Tun -> "TUN (VPN)"
         SystemProxy -> "System proxy"
         LocalSocks -> "Local SOCKS only"
     }
 
     fun description(): String = when (this) {
-        Auto -> "Use the recommended mode for this operating system"
-        Tun -> "Route system traffic through a virtual network adapter"
+        Auto -> "Use local SOCKS for olcRTC and the recommended mode for other profiles"
+        Tun -> "Route all traffic through a virtual adapter; Windows asks for administrator rights"
         SystemProxy -> "Configure the operating system proxy automatically"
         LocalSocks -> "Expose SOCKS5 without changing system routing"
     }
 
-    fun effectiveDisplayName(): String = when (resolveForCurrentPlatform()) {
-        Tun -> "TUN"
-        SystemProxy -> "System proxy"
-        LocalSocks -> "Local SOCKS only"
-        Auto -> error("Auto must resolve to a concrete desktop routing mode")
-    }
+    fun effectiveDisplayName(isOlcRtcProfile: Boolean = false): String =
+        when (resolveForCurrentPlatform(isOlcRtcProfile)) {
+            Tun -> "TUN (VPN)"
+            SystemProxy -> "System proxy"
+            LocalSocks -> "Local SOCKS only"
+            Auto -> error("Auto must resolve to a concrete desktop routing mode")
+        }
 
-    fun effectiveMode(): DesktopRoutingMode = resolveForCurrentPlatform()
+    fun effectiveMode(isOlcRtcProfile: Boolean = false): DesktopRoutingMode =
+        resolveForCurrentPlatform(isOlcRtcProfile)
 
-    internal fun resolveForCurrentPlatform(): DesktopRoutingMode {
+    internal fun resolveForCurrentPlatform(isOlcRtcProfile: Boolean = false): DesktopRoutingMode =
+        resolveFor(DesktopPaths.os, isOlcRtcProfile)
+
+    internal fun resolveFor(os: DesktopOs): DesktopRoutingMode = resolveFor(os, false)
+
+    internal fun resolveFor(os: DesktopOs, isOlcRtcProfile: Boolean): DesktopRoutingMode {
         if (this != Auto) return this
-        return when (DesktopPaths.os) {
+        if (isOlcRtcProfile) return LocalSocks
+        return when (os) {
             DesktopOs.Linux -> Tun
-            DesktopOs.MacOS,
             DesktopOs.Windows -> SystemProxy
             DesktopOs.Other -> LocalSocks
         }
@@ -51,7 +58,7 @@ enum class DesktopRoutingMode {
             if (DesktopPaths.os == DesktopOs.Linux || DesktopPaths.os == DesktopOs.Windows) {
                 add(Tun)
             }
-            if (DesktopPaths.os == DesktopOs.MacOS || DesktopPaths.os == DesktopOs.Windows) {
+            if (DesktopPaths.os == DesktopOs.Windows) {
                 add(SystemProxy)
             }
             add(LocalSocks)
@@ -65,21 +72,27 @@ data class DesktopSocksProxySettings(
     val port: Int = PacServer.LOCAL_SOCKS_PORT,
     val username: String = "",
     val password: String = "",
-    val routingMode: DesktopRoutingMode = DesktopRoutingMode.Auto
+    val routingMode: DesktopRoutingMode = DesktopRoutingMode.Auto,
+    val externalRoutingMode: DesktopRoutingMode = DesktopRoutingMode.Auto
 ) {
     val isConfigured: Boolean
         get() = username.isNotBlank() && password.isNotBlank()
 
     fun normalized(): DesktopSocksProxySettings {
+        val availableModes = DesktopRoutingMode.availableForCurrentPlatform()
         return copy(
             host = host.ifBlank { PacServer.LOCAL_SOCKS_HOST },
             port = sanitizePort(port),
             username = username.take(MAX_CREDENTIAL_LENGTH),
             password = password.take(MAX_CREDENTIAL_LENGTH),
-            routingMode = routingMode.takeIf { it in DesktopRoutingMode.availableForCurrentPlatform() }
+            routingMode = routingMode.takeIf { it in availableModes } ?: DesktopRoutingMode.Auto,
+            externalRoutingMode = externalRoutingMode.takeIf { it in availableModes }
                 ?: DesktopRoutingMode.Auto
         )
     }
+
+    fun routingModeFor(isOlcRtcProfile: Boolean): DesktopRoutingMode =
+        if (isOlcRtcProfile) routingMode else externalRoutingMode
 
     companion object {
         const val MIN_PORT = 1024

@@ -1,5 +1,7 @@
 package org.olcbox.app.ui.features.home.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,6 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,15 +25,27 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.components.LocationRow
@@ -92,19 +108,15 @@ fun LocationSelectorScreen(
 
                     Spacer(modifier = Modifier.height(2.dp))
 
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        group.forEach { location ->
-                            LocationSelectorRow(
-                                location = location,
-                                selectedLocationId = selectedLocationId,
-                                pingsState = pingsState,
-                                onLocationSelected = onLocationSelected,
-                                onLocationSettingsClick = onLocationSettingsClick,
-                                onMoveLocation = onMoveLocation
-                            )
-                        }
+                    key(group.first().subscriptionGroupKey()) {
+                        ReorderableLocationGroup(
+                            locations = group,
+                            selectedLocationId = selectedLocationId,
+                            pingsState = pingsState,
+                            onLocationSelected = onLocationSelected,
+                            onLocationSettingsClick = onLocationSettingsClick,
+                            onMoveLocation = onMoveLocation
+                        )
                     }
                 }
             }
@@ -137,17 +149,15 @@ fun LocationSelectorScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        customLocations.forEach { location ->
-                            LocationSelectorRow(
-                                location = location,
-                                selectedLocationId = selectedLocationId,
-                                pingsState = pingsState,
-                                onLocationSelected = onLocationSelected,
-                                onLocationSettingsClick = onLocationSettingsClick,
-                                onMoveLocation = onMoveLocation
-                            )
-                        }
+                    key(CUSTOM_PROFILE_GROUP_KEY) {
+                        ReorderableLocationGroup(
+                            locations = customLocations,
+                            selectedLocationId = selectedLocationId,
+                            pingsState = pingsState,
+                            onLocationSelected = onLocationSelected,
+                            onLocationSettingsClick = onLocationSettingsClick,
+                            onMoveLocation = onMoveLocation
+                        )
                     }
                 }
             }
@@ -347,31 +357,158 @@ private fun SubscriptionGroupHeader(
 }
 
 @Composable
-private fun LocationSelectorRow(
-    location: LocationItem,
+private fun ReorderableLocationGroup(
+    locations: List<LocationItem>,
     selectedLocationId: String?,
     pingsState: PingsState,
     onLocationSelected: (String) -> Unit,
     onLocationSettingsClick: (String) -> Unit,
     onMoveLocation: (String, Int) -> Unit
 ) {
+    var draggedId by remember { mutableStateOf<String?>(null) }
+    var draggedIndex by remember { mutableIntStateOf(-1) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var settleJob by remember { mutableStateOf<Job?>(null) }
+    val scope = rememberCoroutineScope()
+    val itemExtentPx = with(LocalDensity.current) {
+        (PROFILE_ROW_HEIGHT + PROFILE_ROW_SPACING).toPx()
+    }
+    val listHeight = PROFILE_ROW_HEIGHT * locations.size +
+        PROFILE_ROW_SPACING * (locations.size - 1).coerceAtLeast(0)
+
+    fun settleDraggedRow() {
+        val settlingId = draggedId ?: return
+        settleJob?.cancel()
+        settleJob = scope.launch {
+            val animation = Animatable(dragOffsetY)
+            animation.animateTo(
+                targetValue = 0f,
+                animationSpec = tween(durationMillis = 140)
+            ) {
+                if (draggedId == settlingId) {
+                    dragOffsetY = value
+                }
+            }
+            if (draggedId == settlingId) {
+                dragOffsetY = 0f
+                draggedIndex = -1
+                draggedId = null
+            }
+        }
+    }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(listHeight),
+        userScrollEnabled = false,
+        verticalArrangement = Arrangement.spacedBy(PROFILE_ROW_SPACING)
+    ) {
+        items(
+            items = locations,
+            key = { location -> location.storageId }
+        ) { location ->
+            val isDragging = draggedId == location.storageId
+            val placementModifier = if (isDragging) {
+                Modifier.zIndex(1f)
+            } else {
+                Modifier
+                    .animateItem()
+                    .zIndex(0f)
+            }
+
+            LocationSelectorRow(
+                modifier = placementModifier,
+                location = location,
+                selectedLocationId = selectedLocationId,
+                pingsState = pingsState,
+                isDragging = isDragging,
+                dragOffsetY = if (isDragging) dragOffsetY else 0f,
+                onLocationSelected = onLocationSelected,
+                onLocationSettingsClick = onLocationSettingsClick,
+                onDragStart = {
+                    settleJob?.cancel()
+                    draggedId = location.storageId
+                    draggedIndex = locations.indexOfFirst {
+                        it.storageId == location.storageId
+                    }
+                    dragOffsetY = 0f
+                },
+                onDrag = { deltaY ->
+                    val activeId = draggedId ?: return@LocationSelectorRow
+                    if (draggedIndex !in locations.indices) return@LocationSelectorRow
+
+                    var nextOffset = dragOffsetY + deltaY
+                    var nextIndex = draggedIndex
+                    val crossingThreshold = itemExtentPx / 2f
+
+                    while (nextOffset > crossingThreshold && nextIndex < locations.lastIndex) {
+                        onMoveLocation(activeId, 1)
+                        nextIndex += 1
+                        nextOffset -= itemExtentPx
+                    }
+                    while (nextOffset < -crossingThreshold && nextIndex > 0) {
+                        onMoveLocation(activeId, -1)
+                        nextIndex -= 1
+                        nextOffset += itemExtentPx
+                    }
+
+                    val minOffset = if (nextIndex == 0) {
+                        -itemExtentPx * EDGE_DRAG_RESISTANCE
+                    } else {
+                        -crossingThreshold
+                    }
+                    val maxOffset = if (nextIndex == locations.lastIndex) {
+                        itemExtentPx * EDGE_DRAG_RESISTANCE
+                    } else {
+                        crossingThreshold
+                    }
+                    draggedIndex = nextIndex
+                    dragOffsetY = nextOffset.coerceIn(minOffset, maxOffset)
+                },
+                onDragCancel = ::settleDraggedRow,
+                onDragEnd = ::settleDraggedRow
+            )
+        }
+    }
+}
+
+@Composable
+private fun LocationSelectorRow(
+    modifier: Modifier = Modifier,
+    location: LocationItem,
+    selectedLocationId: String?,
+    pingsState: PingsState,
+    isDragging: Boolean,
+    dragOffsetY: Float,
+    onLocationSelected: (String) -> Unit,
+    onLocationSettingsClick: (String) -> Unit,
+    onDragStart: () -> Unit,
+    onDrag: (Float) -> Unit,
+    onDragCancel: () -> Unit,
+    onDragEnd: () -> Unit
+) {
     val pingMs = pingsState.pingFor(location.storageId)
     val isLoading = pingsState.isChecking(location.storageId)
     val isOffline = pingsState.isOffline(location.storageId)
 
     LocationRow(
+        modifier = modifier,
         location = location,
         isSelected = selectedLocationId == location.storageId,
         isLoading = isLoading,
         isError = isOffline,
         pingMs = pingMs,
+        isDragging = isDragging,
+        dragOffsetY = dragOffsetY,
         settingsEnabled = true,
         onSettingsClick = {
             onLocationSettingsClick(location.storageId)
         },
-        onMoveRequested = { offset ->
-            onMoveLocation(location.storageId, offset)
-        },
+        onDragStart = onDragStart,
+        onDrag = onDrag,
+        onDragCancel = onDragCancel,
+        onDragEnd = onDragEnd,
         onClick = {
             onLocationSelected(location.storageId)
         }
@@ -461,3 +598,7 @@ private fun plural(value: Long, unit: String): String {
 private const val MINUTE_MILLIS = 60_000L
 private const val HOUR_MILLIS = 60 * MINUTE_MILLIS
 private const val DAY_MILLIS = 24 * HOUR_MILLIS
+private val PROFILE_ROW_HEIGHT = 76.dp
+private val PROFILE_ROW_SPACING = 12.dp
+private const val EDGE_DRAG_RESISTANCE = 0.2f
+private const val CUSTOM_PROFILE_GROUP_KEY = "custom-profiles"

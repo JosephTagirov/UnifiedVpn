@@ -56,8 +56,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -82,7 +82,6 @@ import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.ui.features.home.components.LogLines
 import org.olcbox.app.update.AppUpdateSettings
-import org.olcbox.app.update.UpstreamReleaseInfo
 import kotlin.time.Clock
 import kotlin.time.Instant
 
@@ -113,7 +112,6 @@ data class ApplicationRoutingModeOption(
 fun ApplicationSettingsSheet(
     updateSettings: AppUpdateSettings,
     updateStatusText: String?,
-    updateOffer: UpstreamReleaseInfo?,
     subscriptions: List<SubscriptionShareItem>,
     logs: List<String>,
     connectionSummary: String,
@@ -130,8 +128,6 @@ fun ApplicationSettingsSheet(
     onShareLogsClick: () -> Unit,
     onUpdateIntervalSelected: (Int) -> Unit,
     onCheckUpdatesClick: () -> Unit,
-    onOpenUpstreamReleaseClick: (UpstreamReleaseInfo) -> Unit,
-    onDismissUpstreamReleaseClick: (UpstreamReleaseInfo) -> Unit,
     onSubscriptionShareClick: (String) -> Unit,
     onSubscriptionRefreshClick: (String, () -> Unit) -> Unit,
     onSubscriptionRefreshIntervalChanged: (String, Long?) -> Unit = { _, _ -> },
@@ -273,12 +269,9 @@ fun ApplicationSettingsSheet(
                 SharedSettingsRoute.Updates -> SharedUpdatesSettingsContent(
                     settings = updateSettings,
                     statusText = updateStatusText,
-                    offer = updateOffer,
                     onBack = { route = SharedSettingsRoute.Hub },
                     onIntervalSelected = onUpdateIntervalSelected,
-                    onCheckUpdatesClick = onCheckUpdatesClick,
-                    onOpenUpstreamReleaseClick = onOpenUpstreamReleaseClick,
-                    onDismissUpstreamReleaseClick = onDismissUpstreamReleaseClick
+                    onCheckUpdatesClick = onCheckUpdatesClick
                 )
 
                 SharedSettingsRoute.Logs -> SharedLogsSettingsContent(
@@ -334,7 +327,7 @@ private fun SharedSettingsHubContent(
 
         SharedNavigationRow(
             title = "Update Settings",
-            value = "olcbox + Amnezia · every ${updateSettings.intervalHours}h",
+            value = "Unified VPN · every ${updateSettings.intervalHours}h",
             icon = Icons.Outlined.Refresh,
             onClick = onUpdatesClick
         )
@@ -354,7 +347,8 @@ private fun SharedSettingsHubContent(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "${CurrentAppInfo.value.name} ${CurrentAppInfo.value.version}",
+                    text = "${CurrentAppInfo.value.name} ${CurrentAppInfo.value.version} · " +
+                        "build ${CurrentAppInfo.value.build}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 12.sp
                 )
@@ -631,12 +625,9 @@ private fun SharedSocksProxyTextField(
 private fun SharedUpdatesSettingsContent(
     settings: AppUpdateSettings,
     statusText: String?,
-    offer: UpstreamReleaseInfo?,
     onBack: () -> Unit,
     onIntervalSelected: (Int) -> Unit,
-    onCheckUpdatesClick: () -> Unit,
-    onOpenUpstreamReleaseClick: (UpstreamReleaseInfo) -> Unit,
-    onDismissUpstreamReleaseClick: (UpstreamReleaseInfo) -> Unit
+    onCheckUpdatesClick: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -647,19 +638,10 @@ private fun SharedUpdatesSettingsContent(
             .padding(top = 16.dp, bottom = 12.dp)
     ) {
         SharedDetailHeader(
-            title = "Upstream Updates",
-            subtitle = "Monitoring olcbox and Amnezia VPN",
+            title = "Unified VPN Updates",
+            subtitle = "Application releases",
             onBack = onBack
         )
-
-        if (offer != null) {
-            Spacer(Modifier.height(16.dp))
-            SharedUpdateOfferCard(
-                offer = offer,
-                onOpenGitHub = { onOpenUpstreamReleaseClick(offer) },
-                onDismiss = { onDismissUpstreamReleaseClick(offer) }
-            )
-        }
 
         Spacer(Modifier.height(18.dp))
 
@@ -1016,47 +998,6 @@ private fun SharedLogsSettingsContent(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(14.dp)
             )
-        }
-    }
-}
-
-@Composable
-private fun SharedUpdateOfferCard(
-    offer: UpstreamReleaseInfo,
-    onOpenGitHub: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.primaryContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "${offer.project.displayName} updated on GitHub",
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = "Release ${offer.version}. Unified VPN will be updated soon.",
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                fontSize = 13.sp,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onDismiss) {
-                    Text("Got it")
-                }
-                Button(onClick = onOpenGitHub) {
-                    Text("Open GitHub")
-                }
-            }
         }
     }
 }

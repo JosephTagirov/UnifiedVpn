@@ -211,52 +211,6 @@ function Write-Ico([string]$path) {
     }
 }
 
-function Write-BigEndianInt32([System.IO.BinaryWriter]$writer, [int]$value) {
-    $writer.Write([byte](($value -shr 24) -band 0xff))
-    $writer.Write([byte](($value -shr 16) -band 0xff))
-    $writer.Write([byte](($value -shr 8) -band 0xff))
-    $writer.Write([byte]($value -band 0xff))
-}
-
-function Write-Icns([string]$path) {
-    $specs = @(
-        @{ Type = "icp4"; Size = 16 },
-        @{ Type = "icp5"; Size = 32 },
-        @{ Type = "icp6"; Size = 64 },
-        @{ Type = "ic07"; Size = 128 },
-        @{ Type = "ic08"; Size = 256 },
-        @{ Type = "ic09"; Size = 512 },
-        @{ Type = "ic10"; Size = 1024 }
-    )
-    $images = @()
-    $totalLength = 8
-    foreach ($spec in $specs) {
-        $bitmap = New-SquareIcon $spec.Size
-        try {
-            [byte[]]$bytes = Get-PngBytes $bitmap
-            $images += [pscustomobject]@{ Type = $spec.Type; Bytes = $bytes }
-            $totalLength += 8 + $bytes.Length
-        } finally {
-            $bitmap.Dispose()
-        }
-    }
-
-    $stream = [System.IO.File]::Create($path)
-    $writer = [System.IO.BinaryWriter]::new($stream)
-    try {
-        $writer.Write([System.Text.Encoding]::ASCII.GetBytes("icns"))
-        Write-BigEndianInt32 $writer $totalLength
-        foreach ($image in $images) {
-            $writer.Write([System.Text.Encoding]::ASCII.GetBytes($image.Type))
-            Write-BigEndianInt32 $writer (8 + $image.Bytes.Length)
-            $writer.Write([byte[]]$image.Bytes)
-        }
-    } finally {
-        $writer.Dispose()
-        $stream.Dispose()
-    }
-}
-
 try {
     $androidRes = Join-Path $projectRoot "androidApp\src\main\res"
     $androidSizes = @{
@@ -291,21 +245,6 @@ try {
     $linux = New-SquareIcon 512
     try { Save-Png $linux (Join-Path $desktopIcons "LinuxIcon.png") } finally { $linux.Dispose() }
     Write-Ico (Join-Path $desktopIcons "WindowsIcon.ico")
-    Write-Icns (Join-Path $desktopIcons "MacosIcon.icns")
-
-    $iosIcons = Join-Path $projectRoot "iosApp\iosApp\Assets.xcassets\AppIcon.appiconset"
-    $iosSizes = @{
-        "AppIcon-20.png" = 20; "AppIcon-20@2x.png" = 40; "AppIcon-20@3x.png" = 60
-        "AppIcon-29.png" = 29; "AppIcon-29@2x.png" = 58; "AppIcon-29@3x.png" = 87
-        "AppIcon-40.png" = 40; "AppIcon-40@2x.png" = 80; "AppIcon-40@3x.png" = 120
-        "AppIcon-60@2x.png" = 120; "AppIcon-60@3x.png" = 180
-        "AppIcon-76.png" = 76; "AppIcon-76@2x.png" = 152; "AppIcon-83.5@2x.png" = 167
-        "AppIcon-1024.png" = 1024
-    }
-    foreach ($name in $iosSizes.Keys) {
-        $bitmap = New-SquareIcon $iosSizes[$name]
-        try { Save-Png $bitmap (Join-Path $iosIcons $name) } finally { $bitmap.Dispose() }
-    }
 } finally {
     $sourceBitmap.Dispose()
 }

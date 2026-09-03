@@ -60,7 +60,7 @@ class DesktopOlcRtcIntegrationTest {
             val proxy = assertNotNull(manager.subscriptionFetchProxy())
             assertSocks5TcpConnect(proxy, targetAddress = byteArrayOf(1, 1, 1, 1), targetPort = 443)
             assertHttpsViaSocks(proxy, "www.instagram.com")
-            assertHttpsViaSocks(proxy, "api.telegram.org")
+            assertHttpsViaSocks(proxy, "www.wikipedia.org")
 
             manager.stopVpn()
             val stoppedStatus = withTimeout(15_000L) {

@@ -1,0 +1,26 @@
+[Unit]
+Description=Unified VPN private upstream update notifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=/etc/unifiedvpn-upstream-notifier.env
+Environment=STATE_FILE=/var/lib/unifiedvpn-upstream-notifier/state.json
+StateDirectory=unifiedvpn-upstream-notifier
+ExecStart=/usr/bin/python3 /usr/local/lib/unifiedvpn-upstream-notifier/upstream_notifier.py
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

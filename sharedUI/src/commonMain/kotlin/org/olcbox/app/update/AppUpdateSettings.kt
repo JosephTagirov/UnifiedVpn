@@ -66,10 +66,12 @@ fun AppUpdateInfo.identity(): String {
     return listOf(
         channel.name,
         version,
+        build?.toString().orEmpty(),
         publishedAt.orEmpty(),
         asset.name,
         asset.sizeBytes?.toString().orEmpty(),
-        asset.updatedAt.orEmpty()
+        asset.updatedAt.orEmpty(),
+        asset.digest.orEmpty()
     ).joinToString("|")
 }
 
@@ -79,10 +81,14 @@ fun AppUpdateInfo.isDownloaded(settings: AppUpdateSettings): Boolean {
 
 fun AppUpdateInfo.updateStatusMessage(settings: AppUpdateSettings): String {
     return when {
-        isDownloaded(settings) -> "Unified VPN $version is already downloaded"
-        isUpdateAvailable -> "Unified VPN update available: $version"
+        isDownloaded(settings) -> "Unified VPN ${versionLabel()} is already downloaded"
+        isUpdateAvailable -> "Unified VPN update available: ${versionLabel()}"
         else -> "The latest version of Unified VPN is already installed"
     }
+}
+
+fun AppUpdateInfo.versionLabel(): String {
+    return build?.let { "$version (build $it)" } ?: version
 }
 
 fun AppUpdateInfo.shouldShowOffer(settings: AppUpdateSettings): Boolean {
@@ -95,23 +101,4 @@ fun AppUpdateInfo.shouldShowOffer(settings: AppUpdateSettings, nowEpochMs: Long)
     return isUpdateAvailable &&
             !isDownloaded(settings) &&
             (settings.lastSeenUpdateVersion != identity() || settings.isUpdateCheckDue(nowEpochMs))
-}
-
-fun UpstreamReleaseInfo.identity(): String {
-    return listOf(project.name, version, publishedAt.orEmpty(), htmlUrl).joinToString("|")
-}
-
-fun AppUpdateSettings.hasSeen(info: UpstreamReleaseInfo): Boolean {
-    val seenIdentity = when (info.project) {
-        UpstreamProject.Olcbox -> lastSeenOlcboxRelease
-        UpstreamProject.Amnezia -> lastSeenAmneziaRelease
-    }
-    return seenIdentity == info.identity()
-}
-
-fun AppUpdateSettings.withSeen(info: UpstreamReleaseInfo): AppUpdateSettings {
-    return when (info.project) {
-        UpstreamProject.Olcbox -> copy(lastSeenOlcboxRelease = info.identity())
-        UpstreamProject.Amnezia -> copy(lastSeenAmneziaRelease = info.identity())
-    }
 }

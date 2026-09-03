@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unified VPN notification switcher concept</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+      background: #eef0f2;
+      color: #202124;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      width: 1440px;
+      height: 900px;
+      overflow: hidden;
+      background: #eef0f2;
+    }
+
+    main {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 72px;
+      align-items: center;
+      justify-items: center;
+      padding: 50px 118px;
+    }
+
+    .phone {
+      position: relative;
+      width: 480px;
+      height: 800px;
+      overflow: hidden;
+      border: 10px solid #17191c;
+      border-radius: 36px;
+      background: #e7e9ec;
+      box-shadow: 0 24px 64px rgba(26, 29, 33, 0.18);
+    }
+
+    .camera {
+      position: absolute;
+      z-index: 5;
+      top: 14px;
+      left: 50%;
+      width: 12px;
+      height: 12px;
+      transform: translateX(-50%);
+      border-radius: 50%;
+      background: #15171a;
+    }
+
+    .shade {
+      position: absolute;
+      inset: 0;
+      padding: 26px 18px 24px;
+      background:
+        linear-gradient(rgba(244, 246, 248, 0.95), rgba(225, 228, 232, 0.98)),
+        radial-gradient(circle at 15% 10%, #d9e2ea 0, transparent 45%);
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 34px;
+      padding: 0 10px;
+      color: #282b2f;
+      font-size: 15px;
+      font-weight: 650;
+    }
+
+    .status-icons {
+      display: flex;
+      gap: 9px;
+      align-items: center;
+      font-size: 13px;
+    }
+
+    .quick-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin: 14px 4px 22px;
+    }
+
+    .quick {
+      height: 48px;
+      border: 0;
+      border-radius: 8px;
+      background: rgba(248, 249, 250, 0.88);
+      color: #3b3e42;
+      font: inherit;
+      font-size: 12px;
+      box-shadow: inset 0 0 0 1px rgba(60, 64, 67, 0.08);
+    }
+
+    .quick.active {
+      background: #dce9df;
+      color: #20572f;
+    }
+
+    .date {
+      margin: 0 10px 10px;
+      color: #5d6167;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .notification {
+      overflow: hidden;
+      border: 1px solid rgba(60, 64, 67, 0.12);
+      border-radius: 8px;
+      background: rgba(252, 253, 253, 0.96);
+      box-shadow: 0 4px 18px rgba(32, 33, 36, 0.09);
+    }
+
+    .notification-head {
+      display: grid;
+      grid-template-columns: 46px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 76px;
+      padding: 14px 16px 10px;
+    }
+
+    .app-icon {
+      width: 44px;
+      height: 44px;
+      object-fit: cover;
+      border-radius: 8px;
+      border: 1px solid rgba(60, 64, 67, 0.12);
+    }
+
+    .app-name {
+      margin: 0 0 4px;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .profile-name {
+      margin: 0;
+      color: #34373b;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .profile-meta {
+      margin-top: 3px;
+      color: #696d72;
+      font-size: 12px;
+    }
+
+    .connected {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      align-self: start;
+      margin-top: 3px;
+      color: #2e7040;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #3b8d51;
+      box-shadow: 0 0 0 3px rgba(59, 141, 81, 0.12);
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      min-height: 58px;
+      border-top: 1px solid rgba(60, 64, 67, 0.1);
+    }
+
+    .action {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: center;
+      border-right: 1px solid rgba(60, 64, 67, 0.09);
+      color: #345b42;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .action:last-child { border-right: 0; }
+
+    .arrow {
+      width: 9px;
+      height: 9px;
+      border-top: 2px solid currentColor;
+      border-left: 2px solid currentColor;
+    }
+
+    .arrow.previous { transform: rotate(-45deg); }
+    .arrow.next { transform: rotate(135deg); }
+
+    .stop {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      background: currentColor;
+    }
+
+    .caption {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 28px;
+      color: #61656a;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .scrim {
+      position: absolute;
+      z-index: 2;
+      inset: 0;
+      background: rgba(28, 30, 33, 0.24);
+    }
+
+    .sheet {
+      position: absolute;
+      z-index: 3;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      min-height: 474px;
+      padding: 12px 22px 20px;
+      border-radius: 18px 18px 0 0;
+      background: #fbfcfc;
+      box-shadow: 0 -14px 38px rgba(26, 29, 33, 0.18);
+    }
+
+    .handle {
+      width: 36px;
+      height: 4px;
+      margin: 0 auto 20px;
+      border-radius: 4px;
+      background: #c1c5c9;
+    }
+
+    .sheet-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 13px;
+      font-size: 20px;
+      font-weight: 720;
+    }
+
+    .sheet-title .app-icon {
+      width: 36px;
+      height: 36px;
+    }
+
+    .profile-row {
+      display: grid;
+      grid-template-columns: 34px 1fr 22px;
+      gap: 12px;
+      align-items: center;
+      min-height: 76px;
+      padding: 8px 4px;
+      border-bottom: 1px solid #e7e9eb;
+    }
+
+    .provider {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: #eceff1;
+      color: #45494e;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .provider.rtc { background: #dce9df; color: #28623a; }
+    .provider.vless { background: #e5e8ee; color: #394967; }
+    .provider.awg { background: #f0e5d7; color: #6e4c28; }
+
+    .row-name {
+      margin: 0 0 4px;
+      font-size: 15px;
+      font-weight: 680;
+    }
+
+    .row-meta {
+      color: #70747a;
+      font-size: 12px;
+    }
+
+    .check {
+      position: relative;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #aeb3b7;
+      border-radius: 50%;
+    }
+
+    .check.selected { border-color: #3b8d51; }
+    .check.selected::after {
+      content: "";
+      position: absolute;
+      inset: 4px;
+      border-radius: 50%;
+      background: #3b8d51;
+    }
+
+    .open-app {
+      width: 100%;
+      height: 46px;
+      margin-top: 18px;
+      border: 1px solid #aab0b4;
+      border-radius: 8px;
+      background: transparent;
+      color: #315b3e;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="phone" aria-label="Compact notification state">
+      <div class="camera"></div>
+      <div class="shade">
+        <div class="status"><span>12:48</span><span class="status-icons">5G&nbsp;&nbsp;82%</span></div>
+        <div class="quick-row">
+          <button class="quick active">Internet</button>
+          <button class="quick">Bluetooth</button>
+          <button class="quick">Silent</button>
+          <button class="quick">Auto-rotate</button>
+        </div>
+        <div class="date">Wednesday, September 2</div>
+        <article class="notification">
+          <div class="notification-head">
+            <img class="app-icon" src="../../desktopApp/appIcons/LinuxIcon.png" alt="">
+            <div>
+              <p class="app-name">Unified VPN</p>
+              <p class="profile-name">jitsi_FI_2</p>
+              <div class="profile-meta">olcRTC · Proxy</div>
+            </div>
+            <div class="connected"><span class="dot"></span>Connected</div>
+          </div>
+          <div class="actions">
+            <div class="action"><span class="arrow previous"></span>Previous</div>
+            <div class="action"><span class="stop"></span>Stop</div>
+            <div class="action">Next<span class="arrow next"></span></div>
+          </div>
+        </article>
+        <div class="caption">Tap the notification to choose a specific profile</div>
+      </div>
+    </section>
+
+    <section class="phone" aria-label="Profile picker state">
+      <div class="camera"></div>
+      <div class="shade">
+        <div class="status"><span>12:48</span><span class="status-icons">5G&nbsp;&nbsp;82%</span></div>
+        <div class="quick-row">
+          <button class="quick active">Internet</button>
+          <button class="quick">Bluetooth</button>
+          <button class="quick">Silent</button>
+          <button class="quick">Auto-rotate</button>
+        </div>
+        <div class="date">Wednesday, September 2</div>
+        <article class="notification">
+          <div class="notification-head">
+            <img class="app-icon" src="../../desktopApp/appIcons/LinuxIcon.png" alt="">
+            <div>
+              <p class="app-name">Unified VPN</p>
+              <p class="profile-name">jitsi_FI_2</p>
+              <div class="profile-meta">olcRTC · Proxy</div>
+            </div>
+            <div class="connected"><span class="dot"></span>Connected</div>
+          </div>
+        </article>
+      </div>
+      <div class="scrim"></div>
+      <section class="sheet" aria-label="Switch connection">
+        <div class="handle"></div>
+        <div class="sheet-title">
+          <img class="app-icon" src="../../desktopApp/appIcons/LinuxIcon.png" alt="">
+          <span>Switch connection</span>
+        </div>
+        <div class="profile-row">
+          <div class="provider rtc">RTC</div>
+          <div><p class="row-name">jitsi_FI_2</p><div class="row-meta">olcRTC · Proxy · Connected</div></div>
+          <div class="check selected"></div>
+        </div>
+        <div class="profile-row">
+          <div class="provider vless">VL</div>
+          <div><p class="row-name">My VLESS</p><div class="row-meta">VLESS · TUN (VPN)</div></div>
+          <div class="check"></div>
+        </div>
+        <div class="profile-row">
+          <div class="provider awg">AWG</div>
+          <div><p class="row-name">Home AWG</p><div class="row-meta">AmneziaWG · System proxy</div></div>
+          <div class="check"></div>
+        </div>
+        <button class="open-app">Open Unified VPN</button>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

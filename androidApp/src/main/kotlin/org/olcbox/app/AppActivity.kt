@@ -19,7 +19,6 @@ import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationViewModel
 import org.olcbox.app.ui.theme.AppTheme
 import org.olcbox.app.update.AppUpdateService
-import org.olcbox.app.update.UpstreamUpdateService
 import org.olcbox.app.vpn.AndroidVpnManager
 
 class AppActivity : ComponentActivity() {
@@ -46,9 +45,6 @@ class AppActivity : ComponentActivity() {
         val updateService = AppUpdateService(
             deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
         )
-        val upstreamUpdateService = UpstreamUpdateService(
-            deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
-        )
 
         val viewModel = HomeScreenViewModel(
             vpnManager = vpnManager,
@@ -69,8 +65,7 @@ class AppActivity : ComponentActivity() {
                     viewModel = viewModel,
                     locationViewModel = locationViewModel,
                     vpnManager = vpnManager,
-                    appUpdateService = updateService,
-                    upstreamUpdateService = upstreamUpdateService
+                    appUpdateService = updateService
                 )
             }
         }

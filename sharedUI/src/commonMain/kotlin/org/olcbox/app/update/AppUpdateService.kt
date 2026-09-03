@@ -51,119 +51,16 @@ data class AppUpdateInfo(
     val htmlUrl: String,
     val publishedAt: String?,
     val asset: AppUpdateAsset,
-    val isUpdateAvailable: Boolean
+    val isUpdateAvailable: Boolean,
+    val build: Long? = null
 )
-
-@Serializable
-enum class UpstreamProject(
-    val displayName: String,
-    val repositoryUrl: String
-) {
-    Olcbox(
-        displayName = "Original olcbox",
-        repositoryUrl = "https://github.com/alananisimov/olcbox"
-    ),
-    Amnezia(
-        displayName = "Amnezia VPN",
-        repositoryUrl = "https://github.com/amnezia-vpn/amnezia-client"
-    );
-
-    val ownerRepo: String
-        get() = repositoryUrl
-            .removePrefix("https://github.com/")
-            .removeSuffix("/")
-}
-
-data class UpstreamReleaseInfo(
-    val project: UpstreamProject,
-    val version: String,
-    val htmlUrl: String,
-    val publishedAt: String?
-)
-
-class UpstreamUpdateService(
-    private val httpClient: HttpClient = createUpdateHttpClient(),
-    private val deviceIdentityProvider: DeviceIdentityProvider,
-    private val projects: List<UpstreamProject> = UpstreamProject.entries
-) {
-    suspend fun checkAll(
-        proxy: SubscriptionFetchProxy? = null
-    ): List<Result<UpstreamReleaseInfo>> {
-        val client = if (proxy == null) httpClient else createUpdateHttpClient(proxy)
-        return try {
-            withProxyAuthentication(proxy) {
-                projects.map { project ->
-                    runCatching { fetchLatestRelease(client, project) }
-                }
-            }
-        } finally {
-            if (client !== httpClient) client.close()
-        }
-    }
-
-    private suspend fun fetchLatestRelease(
-        client: HttpClient,
-        project: UpstreamProject
-    ): UpstreamReleaseInfo {
-        val hwid = deviceIdentityProvider.hwid()
-        val response = client.get(
-            "https://api.github.com/repos/${project.ownerRepo}/releases/latest"
-        ) {
-            headers {
-                append(HttpHeaders.Accept, "application/vnd.github+json")
-                append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
-                append("x-hwid", hwid)
-            }
-        }
-        if (response.status.value == 404) {
-            return fetchLatestCommit(client, project, hwid)
-        }
-        if (response.status.value !in 200..299) {
-            error("${project.displayName} release check failed with HTTP ${response.status.value}")
-        }
-
-        val release = json.decodeFromString(GithubRelease.serializer(), response.bodyAsText())
-        return UpstreamReleaseInfo(
-            project = project,
-            version = release.tagName.removePrefix("v"),
-            htmlUrl = release.htmlUrl,
-            publishedAt = release.publishedAt
-        )
-    }
-
-    private suspend fun fetchLatestCommit(
-        client: HttpClient,
-        project: UpstreamProject,
-        hwid: String
-    ): UpstreamReleaseInfo {
-        val response = client.get(
-            "https://api.github.com/repos/${project.ownerRepo}/commits/HEAD"
-        ) {
-            headers {
-                append(HttpHeaders.Accept, "application/vnd.github+json")
-                append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
-                append("x-hwid", hwid)
-            }
-        }
-        if (response.status.value !in 200..299) {
-            error("${project.displayName} GitHub check failed with HTTP ${response.status.value}")
-        }
-
-        val commit = json.decodeFromString(GithubCommit.serializer(), response.bodyAsText())
-        return UpstreamReleaseInfo(
-            project = project,
-            version = commit.sha.take(12),
-            htmlUrl = commit.htmlUrl,
-            publishedAt = commit.commit.committer?.date
-        )
-    }
-}
 
 class AppUpdateService(
     private val httpClient: HttpClient = createUpdateHttpClient(),
     private val deviceIdentityProvider: DeviceIdentityProvider,
     private val mirror: ReleaseMirror = ReleaseMirror.GitHub,
     private val currentVersion: String = CurrentAppInfo.value.version,
+    private val currentBuild: Long = CurrentAppInfo.value.build,
     private val platform: UpdatePlatform = UpdatePlatform.current()
 ) {
     suspend fun check(
@@ -180,17 +77,22 @@ class AppUpdateService(
                             .orEmpty()
             )
 
+        val version = updateVersion(channel, release.tagName, asset)
+        val build = assetBuildNumber(asset.name)
         AppUpdateInfo(
             channel = channel,
-            version = updateVersion(channel, release.tagName, asset),
+            version = version,
             htmlUrl = release.htmlUrl,
             publishedAt = release.publishedAt,
             asset = asset,
             isUpdateAvailable = isUpdateAvailable(
                 channel = channel,
-                releaseTag = updateVersion(channel, release.tagName, asset),
-                currentVersion = currentVersion
-            )
+                releaseTag = version,
+                currentVersion = currentVersion,
+                releaseBuild = build,
+                currentBuild = currentBuild
+            ),
+            build = build
         )
     }
 
@@ -292,20 +194,36 @@ class AppUpdateService(
         ): GithubReleaseAsset? {
             return preferredExtensions
                 .firstNotNullOfOrNull { extension ->
-                    candidates.firstOrNull { it.name.lowercase().endsWith(extension) }
+                    candidates
+                        .filter { it.name.lowercase().endsWith(extension) }
+                        .maxByOrNull { assetBuildNumber(it.name) ?: Long.MIN_VALUE }
                 }
-                ?: candidates.firstOrNull()
+                ?: candidates.maxByOrNull { assetBuildNumber(it.name) ?: Long.MIN_VALUE }
         }
 
         fun isUpdateAvailable(
             channel: ReleaseChannel,
             releaseTag: String,
-            currentVersion: String
+            currentVersion: String,
+            releaseBuild: Long? = null,
+            currentBuild: Long = 0L
         ): Boolean {
             val release = releaseTag.removePrefix("v")
             if (channel == ReleaseChannel.Nightly && release == "nightly") return true
 
-            return compareVersions(release, currentVersion) > 0
+            val versionComparison = compareVersions(release, currentVersion)
+            return when {
+                versionComparison > 0 -> true
+                versionComparison < 0 -> false
+                else -> releaseBuild?.let { it > currentBuild } ?: false
+            }
+        }
+
+        fun assetBuildNumber(assetName: String): Long? {
+            return BUILD_NUMBER_PATTERN.find(assetName)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toLongOrNull()
         }
 
         fun compareVersions(left: String, right: String): Int {
@@ -336,6 +254,11 @@ class AppUpdateService(
                 ?.groupValues
                 ?.getOrNull(1)
         }
+
+        private val BUILD_NUMBER_PATTERN = Regex(
+            pattern = "(?:^|[-_.])build[-_.]?(\\d{1,18})(?=[-_.]|$)",
+            option = RegexOption.IGNORE_CASE
+        )
     }
 }
 
@@ -346,7 +269,6 @@ data class UpdatePlatform(
     val assetToken: List<String>
         get() = when (os) {
             "windows" -> listOf("windows", "amd64")
-            "macos" -> listOf("macos", arch)
             "linux" -> listOf("linux", arch)
             "android" -> listOf("android")
             else -> listOf(os, arch)
@@ -367,7 +289,6 @@ data class UpdatePlatform(
     val preferredExtensions: List<String>
         get() = when (os) {
             "windows" -> listOf(".zip", ".msi", ".exe")
-            "macos" -> listOf(".dmg")
             "linux" -> listOf(".appimage")
             "android" -> listOf(".apk")
             else -> emptyList()
@@ -410,24 +331,6 @@ data class GithubReleaseAsset(
     @SerialName("updated_at")
     val updatedAt: String? = null,
     val digest: String? = null
-)
-
-@Serializable
-private data class GithubCommit(
-    val sha: String,
-    @SerialName("html_url")
-    val htmlUrl: String,
-    val commit: GithubCommitDetails
-)
-
-@Serializable
-private data class GithubCommitDetails(
-    val committer: GithubCommitAuthor? = null
-)
-
-@Serializable
-private data class GithubCommitAuthor(
-    val date: String? = null
 )
 
 private val json = Json {

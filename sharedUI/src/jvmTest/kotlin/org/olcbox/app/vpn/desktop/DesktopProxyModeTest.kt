@@ -1,6 +1,7 @@
 package org.olcbox.app.vpn.desktop
 
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.vpn.DesktopRoutingMode
 import org.olcbox.app.vpn.DesktopSocksProxySettings
 import org.olcbox.app.vpn.desktopOlcRtcStartupFailure
@@ -15,6 +16,45 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class DesktopProxyModeTest {
+
+    @Test
+    fun windowsSupportsBothSystemProxyAndAdministratorTun() {
+        assertEquals(
+            DesktopRoutingMode.SystemProxy,
+            DesktopRoutingMode.SystemProxy.resolveFor(DesktopOs.Windows)
+        )
+        assertEquals(
+            DesktopRoutingMode.Tun,
+            DesktopRoutingMode.Tun.resolveFor(DesktopOs.Windows)
+        )
+        assertEquals(
+            DesktopRoutingMode.SystemProxy,
+            DesktopRoutingMode.Auto.resolveFor(DesktopOs.Windows)
+        )
+        assertEquals(
+            DesktopRoutingMode.LocalSocks,
+            DesktopRoutingMode.Auto.resolveFor(
+                os = DesktopOs.Windows,
+                isOlcRtcProfile = true
+            )
+        )
+    }
+
+    @Test
+    fun olcRtcAndExternalProfilesKeepIndependentRoutingChoices() {
+        val settings = DesktopSocksProxySettings(
+            routingMode = DesktopRoutingMode.Auto,
+            externalRoutingMode = DesktopRoutingMode.Tun
+        ).normalized()
+
+        assertEquals(DesktopRoutingMode.Auto, settings.routingModeFor(isOlcRtcProfile = true))
+        assertEquals(DesktopRoutingMode.Tun, settings.routingModeFor(isOlcRtcProfile = false))
+        assertEquals(
+            DesktopRoutingMode.LocalSocks,
+            settings.routingModeFor(isOlcRtcProfile = true)
+                .resolveFor(DesktopOs.Windows, isOlcRtcProfile = true)
+        )
+    }
 
     @Test
     fun desktopRoutingModesAlwaysOfferAutoAndLocalSocks() {
@@ -230,10 +270,6 @@ class DesktopProxyModeTest {
     @Test
     fun nativeLibrarySpecSelectsPlatformFiles() {
         assertEquals(
-            "libolcrtc-darwin-arm64.dylib",
-            olcRtcNativeLibrarySpec("Mac OS X", "aarch64")?.fileName
-        )
-        assertEquals(
             "libolcrtc-linux-amd64.so",
             olcRtcNativeLibrarySpec("Linux", "x86_64")?.fileName
         )
@@ -276,33 +312,6 @@ class DesktopProxyModeTest {
 
             assertContains(command, "provider: 'wbstream'")
         }
-    }
-
-    @Test
-    fun macOsProxyCommandsEnableAndRestorePacPerService() {
-        val enable = MacOsProxyController.enableCommands(listOf("Wi-Fi"), "http://127.0.0.1:10809/proxy.pac")
-        assertEquals(
-            listOf(
-                listOf("networksetup", "-setautoproxyurl", "Wi-Fi", "http://127.0.0.1:10809/proxy.pac"),
-                listOf("networksetup", "-setautoproxystate", "Wi-Fi", "on")
-            ),
-            enable
-        )
-
-        val restore = MacOsProxyController.restoreCommands(
-            listOf(
-                MacOsAutoProxyState("Wi-Fi", enabled = true, url = "http://old/proxy.pac"),
-                MacOsAutoProxyState("USB", enabled = false, url = null)
-            )
-        )
-        assertEquals(
-            listOf(
-                listOf("networksetup", "-setautoproxyurl", "Wi-Fi", "http://old/proxy.pac"),
-                listOf("networksetup", "-setautoproxystate", "Wi-Fi", "on"),
-                listOf("networksetup", "-setautoproxystate", "USB", "off")
-            ),
-            restore
-        )
     }
 
     @Test

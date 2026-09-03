@@ -33,13 +33,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,30 +48,35 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalDensity
-import kotlin.math.abs
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.util.parseEmojiAndName
 
 @Composable
 fun LocationRow(
+    modifier: Modifier = Modifier,
     location: LocationItem,
     isSelected: Boolean,
     isLoading: Boolean,
     pingMs: Int?,
     isError: Boolean = false,
+    isDragging: Boolean = false,
+    dragOffsetY: Float = 0f,
     settingsEnabled: Boolean = true,
     onSettingsClick: () -> Unit = {},
-    onMoveRequested: (Int) -> Unit = {},
+    onDragStart: () -> Unit = {},
+    onDrag: (Float) -> Unit = {},
+    onDragCancel: () -> Unit = {},
+    onDragEnd: () -> Unit = {},
     onClick: () -> Unit
 ) {
-    var isDragging by remember(location.storageId) { mutableStateOf(false) }
     val rowShape = RoundedCornerShape(16.dp)
     val bgColor by animateColorAsState(
         targetValue = when {
@@ -100,8 +104,16 @@ fun LocationRow(
     )
     val borderWidth = if (isSelected || isDragging) 2.dp else 1.dp
     val textColor = MaterialTheme.colorScheme.onSurface
-    val reorderThresholdPx = with(LocalDensity.current) { 44.dp.toPx() }
-    val currentOnMoveRequested by rememberUpdatedState(onMoveRequested)
+    val currentOnDragStart by rememberUpdatedState(onDragStart)
+    val currentOnDrag by rememberUpdatedState(onDrag)
+    val currentOnDragCancel by rememberUpdatedState(onDragCancel)
+    val currentOnDragEnd by rememberUpdatedState(onDragEnd)
+    val defaultViewConfiguration = LocalViewConfiguration.current
+    val dragViewConfiguration = remember(defaultViewConfiguration) {
+        object : ViewConfiguration by defaultViewConfiguration {
+            override val longPressTimeoutMillis: Long = PROFILE_DRAG_LONG_PRESS_TIMEOUT_MS
+        }
+    }
 
     val metadata = location.metadata
     val rawName = metadata?.name?.takeIf { it.isNotBlank() } ?: location.fullName
@@ -113,11 +125,12 @@ fun LocationRow(
 
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(76.dp)
             .zIndex(if (isDragging) 1f else 0f)
             .graphicsLayer {
+                translationY = dragOffsetY
                 scaleX = dragScale
                 scaleY = dragScale
             }
@@ -125,7 +138,7 @@ fun LocationRow(
             .clip(rowShape)
             .background(bgColor)
             .border(borderWidth, borderColor, rowShape)
-            .clickable(onClick = onClick)
+            .clickable(enabled = !isDragging, onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 8.dp)
     ) {
         if (emoji.isNotEmpty()) {
@@ -176,57 +189,51 @@ fun LocationRow(
 
         Spacer(modifier = Modifier.width(12.dp))
 
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(40.dp)
-                .background(
-                    color = if (isDragging) {
-                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f)
-                    } else {
-                        Color.Transparent
-                    },
-                    shape = CircleShape
-                )
-                .pointerInput(location.storageId, reorderThresholdPx) {
-                    var accumulatedDistance = 0f
-                    detectDragGesturesAfterLongPress(
-                        onDragStart = {
-                            accumulatedDistance = 0f
-                            isDragging = true
+        CompositionLocalProvider(LocalViewConfiguration provides dragViewConfiguration) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(40.dp)
+                    .background(
+                        color = if (isDragging) {
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.16f)
+                        } else {
+                            Color.Transparent
                         },
-                        onDragCancel = {
-                            accumulatedDistance = 0f
-                            isDragging = false
-                        },
-                        onDragEnd = {
-                            accumulatedDistance = 0f
-                            isDragging = false
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            accumulatedDistance += dragAmount.y
-                            if (abs(accumulatedDistance) >= reorderThresholdPx) {
-                                currentOnMoveRequested(if (accumulatedDistance > 0f) 1 else -1)
-                                accumulatedDistance = 0f
-                            }
-                        }
+                        shape = CircleShape
                     )
-                }
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.DragHandle,
-                contentDescription = if (isDragging) {
-                    "Reordering profile"
-                } else {
-                    "Hold and drag to reorder"
-                },
-                tint = if (isDragging) {
-                    MaterialTheme.colorScheme.tertiary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                }
-            )
+                    .pointerInput(location.storageId) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                currentOnDragStart()
+                            },
+                            onDragCancel = {
+                                currentOnDragCancel()
+                            },
+                            onDragEnd = {
+                                currentOnDragEnd()
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                currentOnDrag(dragAmount.y)
+                            }
+                        )
+                    }
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.DragHandle,
+                    contentDescription = if (isDragging) {
+                        "Reordering profile"
+                    } else {
+                        "Hold and drag to reorder"
+                    },
+                    tint = if (isDragging) {
+                        MaterialTheme.colorScheme.tertiary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
         }
 
         if (settingsEnabled) {
@@ -337,3 +344,5 @@ private fun ShimmeringPingSkeleton() {
             .background(brush)
     )
 }
+
+private const val PROFILE_DRAG_LONG_PRESS_TIMEOUT_MS = 300L

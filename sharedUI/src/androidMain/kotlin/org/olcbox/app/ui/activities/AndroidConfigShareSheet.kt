@@ -27,7 +27,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import org.olcbox.app.ui.localization.AppText as Text
+import org.olcbox.app.ui.localization.androidUiText
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -117,7 +118,11 @@ internal fun AndroidConfigShareSheet(
                 OutlinedButton(
                     onClick = {
                         context.copySharePayload(payload)
-                        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            context.androidUiText("Copied"),
+                            Toast.LENGTH_SHORT
+                        ).show()
                     },
                     modifier = Modifier.weight(1f)
                 ) {

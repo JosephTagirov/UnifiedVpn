@@ -6,7 +6,7 @@ The release checks must not replace or reconfigure the VPN used by the host.
 
 - Android VPN tests run only on a serial named `emulator-*` and additionally verify `ro.kernel.qemu=1`.
 - Windows native profile tests use `DesktopRoutingMode.LocalSocks`. They do not enable the Windows system proxy or TUN mode.
-- Real connectivity is accepted only after HTTPS responses from both Instagram and Telegram.
+- Real connectivity is accepted only after HTTPS responses from both Instagram and Wikipedia.
 - An `f616f57` client must be tested against an `f616f57` server peer. During a staged server migration, select the profile whose peer has already moved to the `OLC2` record layer.
 - Private profiles stay under `.downloads/private-test-profiles` or another ignored local directory.
 - GitHub publishing is a separate manual action and must not be part of these tests.
@@ -39,7 +39,7 @@ For the Android switching regression, keep the same APK installed and test this 
 private olcRTC profile -> real AWG -> real VLESS -> private olcRTC profile
 ```
 
-At every step, require UI state `Connected`, an unchanged application PID, successful HTTPS responses from Instagram and Telegram, and an empty Android crash buffer. For olcRTC and VLESS, also verify that a managed `tun-bridge-<port>.json` sing-box process exists while connected and disappears after stop. VLESS XHTTP has both an Xray upstream process and the bridge process. AWG must use its WireGuard core directly without the bridge.
+At every step, require UI state `Connected`, an unchanged application PID, successful HTTPS responses from Instagram and Wikipedia, and an empty Android crash buffer. For olcRTC and VLESS, also verify that a managed `tun-bridge-<port>.json` sing-box process exists while connected and disappears after stop. VLESS XHTTP has both an Xray upstream process and the bridge process. AWG must use its WireGuard core directly without the bridge.
 
 Run private Windows VLESS and AWG checks through local SOCKS only:
 
@@ -50,7 +50,7 @@ $env:OLCRTC_REPO = ".downloads\olcrtc-f616-source"
 .\scripts\Test-IsolatedVpn.ps1 -WindowsProfiles
 ```
 
-Run the Windows olcRTC manager, authenticated SOCKS5, Instagram, Telegram, and stop checks against a private profile store:
+Run the Windows olcRTC manager, authenticated SOCKS5, Instagram, Wikipedia, and stop checks against a private profile store:
 
 ```powershell
 $env:UNIFIEDVPN_PRIVATE_OLCRTC_LOCATIONS = "$env:APPDATA\Olcbox\locations_v4.json"
@@ -58,7 +58,7 @@ $env:OLCRTC_REPO = ".downloads\olcrtc-f616-source"
 .\scripts\Test-IsolatedVpn.ps1 -WindowsOlcRtc -OlcRtcProfile "<migrated-olcrtc-profile>"
 ```
 
-The script hashes the relevant Windows proxy settings before and after the run and fails if they change. It never prints profile contents or proxy values, and it removes the isolated olcRTC profile copy after the test. Network integration tasks always run uncached; the olcRTC check makes up to six bounded connection attempts and accepts only application-level Connected followed by authenticated SOCKS5 HTTPS responses from both Instagram and Telegram.
+The script hashes the relevant Windows proxy settings before and after the run and fails if they change. It never prints profile contents or proxy values, and it removes the isolated olcRTC profile copy after the test. Network integration tasks always run uncached; the olcRTC check makes up to six bounded connection attempts and accepts only application-level Connected followed by authenticated SOCKS5 HTTPS responses from both Instagram and Wikipedia.
 
 Before local packaging, also run the uncached shared tests and Android lint:
 

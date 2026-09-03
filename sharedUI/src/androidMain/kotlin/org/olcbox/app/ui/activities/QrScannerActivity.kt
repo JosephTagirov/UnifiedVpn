@@ -42,7 +42,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import org.olcbox.app.ui.localization.AppText as Text
+import org.olcbox.app.ui.localization.androidUiText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,7 +91,7 @@ class QrScannerActivity : ComponentActivity() {
             hasCameraPermission = true
             maybeStartCamera()
         } else {
-            Toast.makeText(this, "Camera permission denied", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, androidUiText("Camera permission denied"), Toast.LENGTH_SHORT).show()
             finish()
         }
     }
@@ -136,7 +137,7 @@ class QrScannerActivity : ComponentActivity() {
                 val provider = runCatching { cameraProviderFuture.get() }
                     .getOrElse {
                         cameraStarted = false
-                        Toast.makeText(this, "Camera unavailable", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, androidUiText("Camera unavailable"), Toast.LENGTH_SHORT).show()
                         finish()
                         return@addListener
                     }
@@ -164,7 +165,7 @@ class QrScannerActivity : ComponentActivity() {
                     )
                 }.onFailure {
                     cameraStarted = false
-                    Toast.makeText(this, "Camera unavailable", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, androidUiText("Camera unavailable"), Toast.LENGTH_SHORT).show()
                     finish()
                 }
             },

@@ -30,6 +30,8 @@ logs/
 *.bak
 *.orig
 *.tmp
+__pycache__/
+*.py[cod]
 
 # Android build artifacts
 *.apk

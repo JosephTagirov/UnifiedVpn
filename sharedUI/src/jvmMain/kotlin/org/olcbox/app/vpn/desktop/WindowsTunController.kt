@@ -3,6 +3,7 @@ package org.olcbox.app.vpn.desktop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 import kotlin.system.exitProcess
@@ -76,15 +77,8 @@ internal class WindowsTunController(
     }
 
     private suspend fun requestAdministratorRestart() {
-        val processInfo = windowsLauncherProcess().info()
-        val currentCommand = processInfo.command().orElse(null)
-            ?: error("Olcbox cannot resolve its Windows launcher for administrator restart")
-        val currentArguments = processInfo.arguments().orElse(emptyArray()).toList()
-        val restartArguments = if (ELEVATED_START_ARGUMENT in currentArguments) {
-            currentArguments
-        } else {
-            currentArguments + ELEVATED_START_ARGUMENT
-        }
+        val currentCommand = windowsLauncherCommand()
+        val restartArguments = listOf(ELEVATED_START_ARGUMENT)
 
         val elevatedPid = runPowerShell(
             restartAsAdministratorScript(
@@ -104,15 +98,33 @@ internal class WindowsTunController(
         }
     }
 
-    private fun windowsLauncherProcess(): ProcessHandle {
+    private fun windowsLauncherCommand(): String {
         val processChain = generateSequence(ProcessHandle.current()) { handle ->
             handle.parent().orElse(null)
         }.toList()
-        return processChain.lastOrNull { handle ->
-            handle.info().command().orElse("")
-                .substringAfterLast('\\')
-                .equals("UnifiedVPN.exe", ignoreCase = true)
-        } ?: ProcessHandle.current()
+        val candidates = buildList {
+            System.getProperty("jpackage.app-path")
+                ?.takeIf(String::isNotBlank)
+                ?.let(::add)
+            processChain.mapNotNullTo(this) { handle ->
+                handle.info().command().orElse(null)
+            }
+            System.getProperty("user.dir")
+                ?.takeIf(String::isNotBlank)
+                ?.let { directory -> add(Path.of(directory).resolve(LAUNCHER_NAME).toString()) }
+        }
+
+        return candidates.asSequence()
+            .mapNotNull { candidate -> runCatching { Path.of(candidate).toAbsolutePath().normalize() }.getOrNull() }
+            .firstOrNull { candidate ->
+                candidate.fileName.toString().equals(LAUNCHER_NAME, ignoreCase = true) &&
+                    Files.isRegularFile(candidate)
+            }
+            ?.toString()
+            ?: error(
+                "Unified VPN cannot find its Windows launcher for administrator restart; " +
+                    "start the packaged UnifiedVPN.exe directly"
+            )
     }
 
     private suspend fun waitForAdapter(process: Process) {
@@ -251,6 +263,8 @@ internal class WindowsTunController(
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
+            "-WindowStyle",
+            "Hidden",
             "-Command",
             script
         )
@@ -289,6 +303,7 @@ internal class WindowsTunController(
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
         const val ELEVATED_PROCESS_START_WAIT_MS = 1_500L
         const val ELEVATED_START_ARGUMENT = "--olcbox-start-vpn-after-elevation"
+        const val LAUNCHER_NAME = "UnifiedVPN.exe"
 
         fun tun2SocksCommand(
             tun2SocksBinary: Path,
