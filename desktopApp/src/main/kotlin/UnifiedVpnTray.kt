@@ -29,7 +29,6 @@ import javax.swing.JPanel
 import javax.swing.SwingConstants
 import javax.swing.AbstractButton
 import javax.swing.SwingUtilities
-import javax.swing.Timer
 import javax.swing.UIManager
 import javax.swing.plaf.basic.BasicButtonUI
 
@@ -116,11 +115,12 @@ private class UnifiedVpnTrayController(initialState: TrayMenuState) {
     private val closed = AtomicBoolean(false)
     private var trayIcon: TrayIcon? = null
     private var popupHost: JFrame? = null
-    private var focusTimer: Timer? = null
 
     fun update(newState: TrayMenuState) {
         state.set(newState)
-        trayIcon?.toolTip = newState.tooltip
+        runOnEventThread {
+            trayIcon?.toolTip = newState.tooltip
+        }
     }
 
     fun attach() {
@@ -218,20 +218,12 @@ private class UnifiedVpnTrayController(initialState: TrayMenuState) {
         host.setLocation(left, top)
         host.isVisible = true
         host.toFront()
-        focusTimer = Timer(TRAY_MENU_FOCUS_DELAY_MS) {
-            if (host.isVisible) {
-                host.toFront()
-                host.requestFocus()
-            }
-        }.apply {
-            isRepeats = false
-            start()
+        EventQueue.invokeLater {
+            if (host.isVisible) host.requestFocusInWindow()
         }
     }
 
     private fun hideMenu() {
-        focusTimer?.stop()
-        focusTimer = null
         popupHost?.isVisible = false
     }
 
@@ -314,7 +306,6 @@ private class UnifiedVpnTrayController(initialState: TrayMenuState) {
 private const val TRAY_MENU_MIN_WIDTH = 218
 private const val TRAY_MENU_ITEM_HEIGHT = 36
 private const val TRAY_MENU_BORDER_SIZE = 2
-private const val TRAY_MENU_FOCUS_DELAY_MS = 250
 private val TRAY_MENU_BACKGROUND = Color(27, 35, 44)
 private val TRAY_MENU_FOREGROUND = Color(239, 243, 247)
 private val TRAY_MENU_DISABLED_FOREGROUND = Color(126, 137, 148)

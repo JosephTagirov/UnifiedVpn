@@ -4,6 +4,7 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import mobile.Mobile
+import org.olcbox.app.data.logging.sanitizeOlcRtcDiagnosticOutput
 import org.olcbox.app.data.model.LocationConfig
 import java.net.ServerSocket
 
@@ -61,7 +62,11 @@ internal object OlcRtcConnectionChecker {
                         config.vp8Batch.toLong()
                     )
                 }.onFailure {
-                    Log.e("OlcRtcConnectionChecker", "HTTP ping failed", it)
+                    val detail = sanitizeOlcRtcDiagnosticOutput(
+                        it.message ?: it::class.java.simpleName,
+                        config.id
+                    )
+                    Log.e("OlcRtcConnectionChecker", "HTTP ping failed: $detail")
                 }.getOrNull()
 
                 if (result != null && result >= 0L) {

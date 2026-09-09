@@ -39,6 +39,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -75,7 +76,6 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -113,6 +113,9 @@ import org.olcbox.app.data.model.formatSubscriptionRefreshInterval
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.ui.components.SensitiveValueVisibilityButton
+import org.olcbox.app.ui.settings.AppAppearanceSettings
+import org.olcbox.app.ui.settings.AppLanguagePreference
+import org.olcbox.app.ui.settings.AppThemePreference
 import org.olcbox.app.update.AppUpdateSettings
 import org.olcbox.app.ui.features.home.components.LogLines
 import org.olcbox.app.vpn.AndroidConnectionMode
@@ -135,7 +138,7 @@ internal fun AppSettingsSheet(
     splitTunnelProfile: AndroidSplitTunnelProfile,
     installedApps: List<AndroidInstalledApp>,
     logs: List<String>,
-    dynamicThemeEnabled: Boolean,
+    appearanceSettings: AppAppearanceSettings,
     updateSettings: AppUpdateSettings,
     updateStatusText: String?,
     updateDownloadProgress: Float?,
@@ -153,7 +156,7 @@ internal fun AppSettingsSheet(
     onSubscriptionRefreshClick: (String, () -> Unit) -> Unit,
     onSubscriptionRefreshIntervalChanged: (String, Long?) -> Unit,
     onSubscriptionDeleteClick: (String) -> Unit,
-    onDynamicThemeChanged: (Boolean) -> Unit,
+    onAppearanceSettingsChanged: (AppAppearanceSettings) -> Unit,
     onModeSelected: (AndroidConnectionMode) -> Unit,
     onProxySettingsSaved: (String, String, String, Int) -> Unit,
     onProxyPasswordRegenerated: () -> Unit,
@@ -232,15 +235,20 @@ internal fun AppSettingsSheet(
             when (currentRoute) {
                 AppSettingsRoute.Hub -> AppSettingsHubContent(
                     selectedMode = selectedMode,
-                    dynamicThemeEnabled = dynamicThemeEnabled,
                     updateSettings = updateSettings,
                     subscriptionsCount = subscriptions.size,
                     enabled = enabled,
-                    onDynamicThemeChanged = onDynamicThemeChanged,
+                    onAppearanceClick = { route = AppSettingsRoute.Appearance },
                     onConnectionSettingsClick = { route = AppSettingsRoute.ConnectionSettings },
                     onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
                     onUpdatesClick = { route = AppSettingsRoute.Updates },
                     onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs }
+                )
+
+                AppSettingsRoute.Appearance -> AppearanceSettingsContent(
+                    settings = appearanceSettings,
+                    onSettingsChanged = onAppearanceSettingsChanged,
+                    onBack = { route = AppSettingsRoute.Hub }
                 )
 
                 AppSettingsRoute.ConnectionSettings -> ConnectionSettingsContent(
@@ -369,11 +377,10 @@ internal enum class AppSettingsInitialRoute {
 @Composable
 private fun AppSettingsHubContent(
     selectedMode: AndroidConnectionMode,
-    dynamicThemeEnabled: Boolean,
     updateSettings: AppUpdateSettings,
     subscriptionsCount: Int,
     enabled: Boolean,
-    onDynamicThemeChanged: (Boolean) -> Unit,
+    onAppearanceClick: () -> Unit,
     onConnectionSettingsClick: () -> Unit,
     onSubscriptionsSharingClick: () -> Unit,
     onUpdatesClick: () -> Unit,
@@ -395,17 +402,12 @@ private fun AppSettingsHubContent(
 
         Spacer(Modifier.height(8.dp))
 
-        SettingsSwitchRow(
-            title = "Dynamic Theme",
-            value = if (dynamicThemeEnabled) {
-                "Using Android system colors"
-            } else {
-                "Using Unified VPN colors"
-            },
+        SettingsNavigationRow(
+            title = "Appearance",
+            value = "Language and theme",
             icon = Icons.Outlined.Palette,
-            checked = dynamicThemeEnabled,
             enabled = true,
-            onCheckedChange = onDynamicThemeChanged
+            onClick = onAppearanceClick
         )
 
         SettingsNavigationRow(
@@ -1790,71 +1792,6 @@ private fun SettingsNavigationRow(
 }
 
 @Composable
-private fun SettingsSwitchRow(
-    title: String,
-    value: String,
-    icon: ImageVector,
-    checked: Boolean,
-    enabled: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(72.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .clickable(enabled = enabled) { onCheckedChange(!checked) },
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    modifier = Modifier.padding(10.dp)
-                )
-            }
-
-            Spacer(Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = value,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Switch(
-                checked = checked,
-                enabled = enabled,
-                onCheckedChange = onCheckedChange
-            )
-        }
-    }
-}
-
-@Composable
 private fun SettingsSheetHeader(
     icon: ImageVector,
     title: String,
@@ -2449,6 +2386,7 @@ private fun SocksProxyTextField(
     sensitiveVisible: Boolean = false,
     onSensitiveVisibilityChanged: (Boolean) -> Unit = {}
 ) {
+    val focusManager = LocalFocusManager.current
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -2461,6 +2399,7 @@ private fun SocksProxyTextField(
         leadingIcon = { Icon(leadingIcon, contentDescription = null) },
         supportingText = supportingText?.let { { Text(it) } },
         keyboardOptions = keyboardOptions,
+        keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
         visualTransformation = if (sensitive && !sensitiveVisible) {
             PasswordVisualTransformation()
         } else {
@@ -2479,6 +2418,87 @@ private fun SocksProxyTextField(
             null
         }
     )
+}
+
+@Composable
+private fun AppearanceSettingsContent(
+    settings: AppAppearanceSettings,
+    onSettingsChanged: (AppAppearanceSettings) -> Unit,
+    onBack: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(top = 16.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        SettingsDetailHeader(
+            title = "Appearance",
+            subtitle = "Language and theme",
+            onBack = onBack
+        )
+
+        AppearancePreferenceSelector(
+            label = "Language",
+            options = AppLanguagePreference.entries.map { it.name to it.displayName() },
+            selectedId = settings.language.name,
+            onSelected = { selectedId ->
+                onSettingsChanged(
+                    settings.copy(language = AppLanguagePreference.fromStored(selectedId))
+                )
+            }
+        )
+
+        AppearancePreferenceSelector(
+            label = "Theme",
+            options = AppThemePreference.entries.map { it.name to it.displayName() },
+            selectedId = settings.theme.name,
+            onSelected = { selectedId ->
+                onSettingsChanged(
+                    settings.copy(theme = AppThemePreference.fromStored(selectedId))
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun AppearancePreferenceSelector(
+    label: String,
+    options: List<Pair<String, String>>,
+    selectedId: String,
+    onSelected: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SettingsSectionLabel(label)
+        options.forEach { (id, title) ->
+            FilterChip(
+                selected = id == selectedId,
+                onClick = { onSelected(id) },
+                modifier = Modifier.fillMaxWidth(),
+                label = {
+                    Text(
+                        text = title,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                leadingIcon = if (id == selectedId) {
+                    {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else {
+                    null
+                }
+            )
+        }
+    }
 }
 
 @Composable
@@ -2724,6 +2744,7 @@ private fun Drawable.toImageBitmap(sizePx: Int): ImageBitmap {
 
 private sealed class AppSettingsRoute(val depth: Int) {
     object Hub : AppSettingsRoute(0)
+    object Appearance : AppSettingsRoute(1)
     object ConnectionSettings : AppSettingsRoute(1)
     object ConnectionMode : AppSettingsRoute(1)
     object SocksProxy : AppSettingsRoute(1)

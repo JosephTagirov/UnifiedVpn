@@ -23,12 +23,19 @@
     </queries>
 
     <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
         android:name=".App"
         android:icon="@mipmap/ic_launcher"
         android:label="Unified VPN"
         android:networkSecurityConfig="@xml/network_security_config"
         android:theme="@android:style/Theme.Material.NoActionBar"
         android:usesCleartextTraffic="true">
+
+        <meta-data
+            android:name="org.olcbox.app.NOTIFICATION_SMALL_ICON"
+            android:resource="@mipmap/ic_qs_tile" />
 
         <activity
             android:name=".AppActivity"
@@ -46,6 +53,18 @@
             android:name="org.olcbox.app.ui.activities.QrScannerActivity"
             android:screenOrientation="portrait"
             android:exported="false" />
+
+        <activity
+            android:name="org.olcbox.app.ui.activities.VpnProfileChooserActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:finishOnTaskLaunch="true"
+            android:launchMode="singleTop"
+            android:noHistory="true"
+            android:showWhenLocked="false"
+            android:taskAffinity=""
+            android:theme="@style/Theme.UnifiedVpn.ProfileChooser"
+            android:turnScreenOn="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

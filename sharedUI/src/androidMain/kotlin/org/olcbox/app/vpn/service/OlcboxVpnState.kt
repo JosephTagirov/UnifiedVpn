@@ -5,7 +5,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
+import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import org.olcbox.app.vpn.VpnStatus
+
+internal data class VpnSessionSnapshot(
+    val activeProfileStorageId: String? = null,
+    val connectedProfileStorageId: String? = null,
+    val activeProfileName: String = "",
+    val connectedAtElapsedRealtimeMs: Long? = null,
+    val sentBytes: Long? = null,
+    val receivedBytes: Long? = null
+)
 
 object OlcboxVpnState {
     private val _logs = MutableStateFlow<List<String>>(emptyList())
@@ -17,9 +27,30 @@ object OlcboxVpnState {
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
 
-    fun setStatus(status: VpnStatus) {
+    @Volatile
+    private var activeProxy: SubscriptionFetchProxy? = null
+
+    private val _session = MutableStateFlow(VpnSessionSnapshot())
+    internal val session = _session.asStateFlow()
+
+    fun setStatus(status: VpnStatus, proxy: SubscriptionFetchProxy? = null) {
+        activeProxy = proxy.takeIf { status is VpnStatus.Connected }
         _status.value = status
         _isConnected.value = status is VpnStatus.Connected
+    }
+
+    internal fun connectedProxy(): SubscriptionFetchProxy? = activeProxy
+
+    internal fun clearConnectedProxy() {
+        activeProxy = null
+    }
+
+    internal fun setSession(snapshot: VpnSessionSnapshot) {
+        _session.value = snapshot
+    }
+
+    internal fun clearSession() {
+        _session.value = VpnSessionSnapshot()
     }
 
     fun addLog(msg: String) {

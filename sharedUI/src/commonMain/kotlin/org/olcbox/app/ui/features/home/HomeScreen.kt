@@ -141,6 +141,7 @@ fun HomeScreen(
         ) {
             RelayStatus(
                 isActive = state.isVpnConnected,
+                isLoading = state.isVpnLoading,
                 requiresSetup = requiresSetup
             )
 

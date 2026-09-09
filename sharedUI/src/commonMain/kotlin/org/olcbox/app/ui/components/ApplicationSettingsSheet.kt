@@ -35,6 +35,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
@@ -81,6 +82,9 @@ import org.olcbox.app.data.model.formatSubscriptionRefreshInterval
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.data.share.SubscriptionShareItem
 import org.olcbox.app.ui.features.home.components.LogLines
+import org.olcbox.app.ui.settings.AppAppearanceSettings
+import org.olcbox.app.ui.settings.AppLanguagePreference
+import org.olcbox.app.ui.settings.AppThemePreference
 import org.olcbox.app.update.AppUpdateSettings
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -122,6 +126,7 @@ fun ApplicationSettingsSheet(
     ),
     selectedRoutingModeId: String = routingModeOptions.firstOrNull()?.id.orEmpty(),
     isConnectionActive: Boolean = false,
+    appearanceSettings: AppAppearanceSettings = AppAppearanceSettings(),
     onDismiss: () -> Unit,
     onCopyConfigClick: () -> Unit,
     onSaveLogsClick: () -> Unit,
@@ -135,6 +140,7 @@ fun ApplicationSettingsSheet(
     onSocksProxySettingsSaved: (String, String, Int) -> Unit = { _, _, _ -> },
     onSocksProxyPasswordRegenerated: () -> Unit = {},
     onRoutingModeSelected: (String) -> Unit = {},
+    onAppearanceSettingsChanged: (AppAppearanceSettings) -> Unit = {},
     onCreateFriendPackageClick: (() -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -182,10 +188,17 @@ fun ApplicationSettingsSheet(
                     updateSettings = updateSettings,
                     subscriptionsCount = subscriptions.size,
                     connectionSummary = connectionSummary,
+                    onAppearanceClick = { route = SharedSettingsRoute.Appearance },
                     onConnectionClick = { route = SharedSettingsRoute.Connection },
                     onSubscriptionsClick = { route = SharedSettingsRoute.Subscriptions },
                     onUpdatesClick = { route = SharedSettingsRoute.Updates },
                     onLogsClick = { route = SharedSettingsRoute.Logs }
+                )
+
+                SharedSettingsRoute.Appearance -> SharedAppearanceSettingsContent(
+                    settings = appearanceSettings,
+                    onSettingsChanged = onAppearanceSettingsChanged,
+                    onBack = { route = SharedSettingsRoute.Hub }
                 )
 
                 SharedSettingsRoute.Connection -> SharedConnectionSettingsContent(
@@ -290,6 +303,7 @@ private fun SharedSettingsHubContent(
     updateSettings: AppUpdateSettings,
     subscriptionsCount: Int,
     connectionSummary: String,
+    onAppearanceClick: () -> Unit,
     onConnectionClick: () -> Unit,
     onSubscriptionsClick: () -> Unit,
     onUpdatesClick: () -> Unit,
@@ -310,6 +324,13 @@ private fun SharedSettingsHubContent(
         )
 
         Spacer(Modifier.height(8.dp))
+
+        SharedNavigationRow(
+            title = "Appearance",
+            value = "Language and theme",
+            icon = Icons.Outlined.Palette,
+            onClick = onAppearanceClick
+        )
 
         SharedNavigationRow(
             title = "Connection Settings",
@@ -409,6 +430,85 @@ private fun SharedConnectionSettingsContent(
                 .forEach { (title, value) ->
                     SharedInfoRow(title = title, value = value)
                 }
+        }
+    }
+}
+
+@Composable
+private fun SharedAppearanceSettingsContent(
+    settings: AppAppearanceSettings,
+    onSettingsChanged: (AppAppearanceSettings) -> Unit,
+    onBack: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp)
+            .padding(top = 16.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        SharedDetailHeader(
+            title = "Appearance",
+            subtitle = "Language and theme",
+            onBack = onBack
+        )
+
+        SharedPreferenceSelector(
+            label = "Language",
+            options = AppLanguagePreference.entries.map { it.name to it.displayName() },
+            selectedId = settings.language.name,
+            onSelected = { selectedId ->
+                val language = AppLanguagePreference.fromStored(selectedId)
+                onSettingsChanged(settings.copy(language = language))
+            }
+        )
+
+        SharedPreferenceSelector(
+            label = "Theme",
+            options = AppThemePreference.entries.map { it.name to it.displayName() },
+            selectedId = settings.theme.name,
+            onSelected = { selectedId ->
+                val theme = AppThemePreference.fromStored(selectedId)
+                onSettingsChanged(settings.copy(theme = theme))
+            }
+        )
+    }
+}
+
+@Composable
+private fun SharedPreferenceSelector(
+    label: String,
+    options: List<Pair<String, String>>,
+    selectedId: String,
+    onSelected: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SharedSectionLabel(label)
+        options.forEach { (id, title) ->
+            FilterChip(
+                selected = id == selectedId,
+                onClick = { onSelected(id) },
+                modifier = Modifier.fillMaxWidth(),
+                label = {
+                    Text(
+                        text = title,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                },
+                leadingIcon = if (id == selectedId) {
+                    {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                } else {
+                    null
+                }
+            )
         }
     }
 }
@@ -1624,6 +1724,7 @@ private fun SharedEmptyState(
 
 private enum class SharedSettingsRoute {
     Hub,
+    Appearance,
     Connection,
     ConnectionMode,
     Subscriptions,

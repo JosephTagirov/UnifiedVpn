@@ -29,6 +29,15 @@ data class LocationItem(
     val metadata: LocationMetadata? = null
 )
 
+internal fun LocationItem.reorderGroupKey(): String {
+    val normalizedUrl = subscriptionUrl?.trim().orEmpty()
+    if (normalizedUrl.isBlank()) return CUSTOM_PROFILE_REORDER_GROUP
+    val subscriptionName = metadata?.subscription?.name?.trim().orEmpty()
+    return "$subscriptionName|$normalizedUrl"
+}
+
+internal const val CUSTOM_PROFILE_REORDER_GROUP = "custom-profiles"
+
 sealed class PingsState {
     object Idle : PingsState()
 
@@ -587,10 +596,8 @@ class LocationViewModel(
     fun moveLocation(id: String, offset: Int) {
         if (offset == 0) return
         val current = locations.firstOrNull { it.storageId == id } ?: return
-        val subscriptionUrl = current.subscriptionUrl?.trim().orEmpty()
-        val peers = locations.filter {
-            it.subscriptionUrl?.trim().orEmpty() == subscriptionUrl
-        }
+        val reorderGroup = current.reorderGroupKey()
+        val peers = locations.filter { it.reorderGroupKey() == reorderGroup }
         val currentIndex = peers.indexOfFirst { it.storageId == id }
         val target = peers.getOrNull(currentIndex + offset) ?: return
         val sourceListIndex = locations.indexOfFirst { it.storageId == current.storageId }

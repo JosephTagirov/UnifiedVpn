@@ -2,6 +2,7 @@ package org.olcbox.app.vpn.desktop
 
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
+import org.olcbox.app.desktop.WindowsTrustedExecutables
 import java.net.InetAddress
 import java.nio.file.Files
 import java.nio.file.Path
@@ -19,6 +20,15 @@ internal object DesktopDnsResolver {
     }
 
     private fun currentWindowsDnsServer(): String? {
+        val powershell = runCatching {
+            WindowsTrustedExecutables.powerShellPath().toString()
+        }.getOrNull() ?: return null
+        val output = runCommand(windowsDnsCommand(powershell)).orEmpty()
+        return selectWindowsDnsServer(output)
+    }
+
+    internal fun windowsDnsCommand(powershellExecutable: String): List<String> {
+        require(powershellExecutable.isNotBlank()) { "PowerShell executable path is required" }
         val script = """
             ${'$'}routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
               Where-Object { ${'$'}_.InterfaceAlias -ne '${WindowsTunController.TUN_NAME}' } |
@@ -28,17 +38,15 @@ internal object DesktopDnsResolver {
               if (${'$'}servers) { ${'$'}servers; break }
             }
         """.trimIndent()
-        val output = runCommand(
-            listOf(
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                script
-            )
+        return listOf(
+            powershellExecutable,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script
         ).orEmpty()
-        return selectWindowsDnsServer(output)
     }
 
     private fun currentLinuxDnsServer(): String? {

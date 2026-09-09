@@ -7,7 +7,9 @@ import android.os.Build
 import android.provider.Settings
 import android.net.Uri
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.olcbox.app.data.datasource.withProxyAuthentication
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
@@ -17,6 +19,7 @@ import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
 import java.security.MessageDigest
+import kotlin.coroutines.coroutineContext
 
 class AndroidUpdateInstaller(
     context: Context,
@@ -51,7 +54,9 @@ class AndroidUpdateInstaller(
             }
 
             val file = download(asset, onProgress).getOrThrow()
+            coroutineContext.ensureActive()
             val installIntent = installIntent(file)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             try {
                 appContext.startActivity(installIntent)
             } catch (error: ActivityNotFoundException) {
@@ -65,6 +70,8 @@ class AndroidUpdateInstaller(
                 )
             }
             "Installing ${asset.name}"
+        }.onFailure { error ->
+            if (error is CancellationException) throw error
         }
     }
 
@@ -85,7 +92,6 @@ class AndroidUpdateInstaller(
             putExtra(Intent.EXTRA_RETURN_RESULT, true)
             putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
             setDataAndType(uri, mimeType(name))
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }
@@ -99,31 +105,46 @@ class AndroidUpdateInstaller(
     }
 
     suspend fun download(asset: AppUpdateAsset, onProgress: (Float) -> Unit): Result<File> = runCatching {
+        val expectedSha256 = UpdateDownloadSecurity.normalizeGithubSha256Digest(asset.digest)
         val proxy = proxyProvider()
         withProxyAuthentication(proxy) {
-            downloadFile(asset, onProgress, proxy)
+            downloadFile(asset, expectedSha256, onProgress, proxy)
         }
+    }.onFailure { error ->
+        if (error is CancellationException) throw error
     }
 
     private suspend fun downloadFile(
         asset: AppUpdateAsset,
+        expectedSha256: String,
         onProgress: (Float) -> Unit,
         proxy: SubscriptionFetchProxy?
     ): File = withContext(Dispatchers.IO) {
+        UpdateDownloadSecurity.validateMetadataSize(asset.sizeBytes)
         val directory = File(appContext.cacheDir, "updates").apply {
-            mkdirs()
+            check(isDirectory || mkdirs()) { "Cannot create the update download directory" }
         }
-        val fileName = asset.name.substringAfterLast('/').ifBlank { "olcbox-update.apk" }
+        val fileName = asset.name
+            .substringAfterLast('/')
+            .substringAfterLast('\\')
+            .takeIf { it.isNotBlank() && it != "." && it != ".." }
+            ?.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            ?.take(180)
+            ?.takeIf(String::isNotBlank)
+            ?: "unifiedvpn-update.apk"
+        require(fileName.endsWith(".apk", ignoreCase = true)) {
+            "Android update asset must be an APK"
+        }
         val target = File(directory, fileName)
-        val partial = File(directory, "$fileName.part")
-        partial.delete()
+        val downloadUrl = URL(UpdateDownloadSecurity.requireHttpsUrl(asset.downloadUrl))
         val connection = if (proxy == null) {
-            URL(asset.downloadUrl).openConnection()
+            downloadUrl.openConnection()
         } else {
-            URL(asset.downloadUrl).openConnection(
+            downloadUrl.openConnection(
                 Proxy(Proxy.Type.SOCKS, InetSocketAddress(proxy.host, proxy.port))
             )
         } as HttpURLConnection
+        val partial = File.createTempFile("unifiedvpn-update-", ".part", directory)
         try {
             connection.instanceFollowRedirects = true
             connection.connectTimeout = 10_000
@@ -132,18 +153,21 @@ class AndroidUpdateInstaller(
             require(status in 200..299) {
                 "Update download failed with HTTP $status"
             }
-            val total = connection.contentLengthLong.takeIf { it > 0L } ?: asset.sizeBytes ?: -1L
+            UpdateDownloadSecurity.requireHttpsUrl(connection.url.toString())
+            val contentLength = UpdateDownloadSecurity.knownContentLength(connection.contentLengthLong)
+            val total = contentLength ?: asset.sizeBytes ?: -1L
             val sha256 = MessageDigest.getInstance("SHA-256")
             var copied = 0L
             connection.inputStream.use { input ->
                 partial.outputStream().use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     while (true) {
+                        coroutineContext.ensureActive()
                         val read = input.read(buffer)
                         if (read < 0) break
+                        copied = UpdateDownloadSecurity.addDownloadedBytes(copied, read)
                         output.write(buffer, 0, read)
                         sha256.update(buffer, 0, read)
-                        copied += read
                         if (total > 0L) {
                             reportProgress(
                                 (copied.toDouble() / total.toDouble()).toFloat().coerceIn(0f, 1f),
@@ -153,12 +177,13 @@ class AndroidUpdateInstaller(
                     }
                 }
             }
+            coroutineContext.ensureActive()
             asset.sizeBytes?.let { expectedSize ->
                 require(copied == expectedSize) {
                     "Downloaded update size mismatch: expected $expectedSize bytes, got $copied"
                 }
             }
-            verifySha256(asset.digest, sha256.digest())
+            verifySha256(expectedSha256, sha256.digest())
             if (target.exists()) {
                 require(target.delete()) { "Cannot replace the previous downloaded update" }
             }
@@ -186,14 +211,11 @@ class AndroidUpdateInstaller(
         }
     }
 
-    private fun verifySha256(expectedDigest: String?, actualBytes: ByteArray) {
-        if (expectedDigest.isNullOrBlank()) return
-        val parts = expectedDigest.trim().split(':', limit = 2)
-        require(parts.size == 2 && parts[0].equals("sha256", ignoreCase = true)) {
-            "Unsupported update digest: ${parts.firstOrNull().orEmpty()}"
+    private fun verifySha256(expectedDigest: String, actualBytes: ByteArray) {
+        val actual = actualBytes.joinToString(separator = "") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
         }
-        val actual = actualBytes.joinToString(separator = "") { byte -> "%02x".format(byte) }
-        require(actual.equals(parts[1], ignoreCase = true)) {
+        require(actual.equals(expectedDigest, ignoreCase = true)) {
             "Downloaded update SHA-256 mismatch"
         }
     }

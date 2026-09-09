@@ -4,12 +4,19 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.PersistableBundle
 import android.widget.Toast
 import org.olcbox.app.ui.localization.androidUiText
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicLong
 
-class AndroidConfigImporter(private val context: Context) : ConfigImporter {
+class AndroidConfigImporter(context: Context) : ConfigImporter {
+    private val context = context.applicationContext
+    private val clipboardClearGeneration = AtomicLong(0L)
+
     override fun getFromClipboard(): String? {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val clip = clipboard.primaryClip
@@ -40,7 +47,9 @@ class AndroidConfigImporter(private val context: Context) : ConfigImporter {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val payload = ClipboardPayloadCodec.encode(text)
             val clip = ClipData.newPlainText("Unified VPN locations", payload)
+            markClipboardContentSensitive(clip)
             clipboard.setPrimaryClip(clip)
+            scheduleClipboardClear(clipboard, clipboardDigest(payload))
         }.onSuccess {
             Toast.makeText(
                 context,
@@ -60,14 +69,58 @@ class AndroidConfigImporter(private val context: Context) : ConfigImporter {
         if (source is Uri) {
             return try {
                 context.contentResolver.openInputStream(source)?.use { inputStream ->
-                    BufferedReader(InputStreamReader(inputStream)).use { reader ->
-                        ClipboardPayloadCodec.decodeOrOriginal(reader.readText())
-                    }
+                    ClipboardPayloadCodec.decodeOrOriginal(inputStream.readBoundedUtf8())
                 }
             } catch (e: Exception) {
                 null
             }
         }
         return null
+    }
+
+    private fun markClipboardContentSensitive(clip: ClipData) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        clip.description.extras = PersistableBundle().apply {
+            putBoolean(CLIPBOARD_IS_SENSITIVE_EXTRA, true)
+        }
+    }
+
+    private fun scheduleClipboardClear(
+        clipboard: ClipboardManager,
+        expectedDigest: ByteArray
+    ) {
+        val generation = clipboardClearGeneration.incrementAndGet()
+        Handler(Looper.getMainLooper()).postDelayed(
+            {
+                if (clipboardClearGeneration.get() != generation) return@postDelayed
+                val currentText = runCatching {
+                    clipboard.primaryClip
+                        ?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)
+                        ?.text
+                        ?.toString()
+                }.getOrNull() ?: return@postDelayed
+                if (!MessageDigest.isEqual(expectedDigest, clipboardDigest(currentText))) {
+                    return@postDelayed
+                }
+
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        clipboard.clearPrimaryClip()
+                    } else {
+                        clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+                    }
+                }
+            },
+            CLIPBOARD_CLEAR_DELAY_MS
+        )
+    }
+
+    private fun clipboardDigest(value: String): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray())
+
+    private companion object {
+        private const val CLIPBOARD_IS_SENSITIVE_EXTRA = "android.content.extra.IS_SENSITIVE"
+        private const val CLIPBOARD_CLEAR_DELAY_MS = 60_000L
     }
 }

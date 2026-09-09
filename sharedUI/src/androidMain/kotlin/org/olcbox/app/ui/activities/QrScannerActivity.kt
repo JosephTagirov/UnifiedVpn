@@ -5,10 +5,10 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -63,6 +63,8 @@ import com.google.zxing.NotFoundException
 import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 import org.olcbox.app.ui.theme.AppTheme
+import org.olcbox.app.ui.settings.AndroidAppearanceSettingsStore
+import org.olcbox.app.ui.theme.SyncAppSystemBars
 import java.nio.ByteBuffer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -98,18 +100,26 @@ class QrScannerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
-        enableEdgeToEdge()
+        val appearanceSettings = AndroidAppearanceSettingsStore(this).loadNow()
 
         setContent {
-            QrScannerScreen(
-                onClose = { finish() },
-                onPreviewReady = { preview ->
-                    previewView = preview
-                    maybeStartCamera()
-                }
-            )
+            SyncAppSystemBars(appearanceSettings.theme)
+            AppTheme(
+                useDynamicColor = false,
+                themeMode = appearanceSettings.theme,
+                language = appearanceSettings.language
+            ) {
+                QrScannerScreen(
+                    onClose = { finish() },
+                    onPreviewReady = { preview ->
+                        previewView = preview
+                        maybeStartCamera()
+                    }
+                )
+            }
         }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
@@ -282,29 +292,27 @@ private fun QrScannerScreen(
     onClose: () -> Unit,
     onPreviewReady: (PreviewView) -> Unit
 ) {
-    AppTheme {
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.surface,
-            topBar = {
-                QrScannerTopBar(onClose = onClose)
-            }
-        ) { innerPadding ->
-            Column(
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.surface,
+        topBar = {
+            QrScannerTopBar(onClose = onClose)
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(horizontal = 32.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            QrScannerPreview(
+                onPreviewReady = onPreviewReady,
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(horizontal = 32.dp, vertical = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                QrScannerPreview(
-                    onPreviewReady = onPreviewReady,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                QrScannerStatusPanel(modifier = Modifier.fillMaxWidth())
-            }
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            QrScannerStatusPanel(modifier = Modifier.fillMaxWidth())
         }
     }
 }

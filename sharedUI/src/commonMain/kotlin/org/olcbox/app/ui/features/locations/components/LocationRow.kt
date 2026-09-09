@@ -151,7 +151,9 @@ fun LocationRow(
                 text = cleanName,
                 color = textColor,
                 fontSize = 16.sp,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
 
             Text(
@@ -345,4 +347,4 @@ private fun ShimmeringPingSkeleton() {
     )
 }
 
-private const val PROFILE_DRAG_LONG_PRESS_TIMEOUT_MS = 300L
+private const val PROFILE_DRAG_LONG_PRESS_TIMEOUT_MS = 200L

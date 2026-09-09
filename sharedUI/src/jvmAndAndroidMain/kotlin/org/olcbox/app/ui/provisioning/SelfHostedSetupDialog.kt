@@ -51,7 +51,8 @@ fun SelfHostedSetupDialog(
     val provisioner = remember { SelfHostedProvisioner() }
     var host by rememberSaveable { mutableStateOf("") }
     var port by rememberSaveable { mutableStateOf("22") }
-    var username by rememberSaveable { mutableStateOf("root") }
+    var username by rememberSaveable { mutableStateOf("") }
+    var expectedFingerprint by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var trustedHost by remember { mutableStateOf<SshHostIdentity?>(null) }
@@ -98,7 +99,7 @@ fun SelfHostedSetupDialog(
                 when {
                     identity != null -> {
                         Text(
-                            text = "Confirm this host-key fingerprint before installing on $host.",
+                            text = "The SSH host key matches the fingerprint obtained independently from your server console or provider.",
                             style = MaterialTheme.typography.bodyMedium
                         )
                         SelectionContainer {
@@ -112,7 +113,7 @@ fun SelfHostedSetupDialog(
                             )
                         }
                         Text(
-                            text = "The client private key stays on this device. The SSH password is used only during setup.",
+                            text = "The host key was read without authenticating. The client private key stays on this device, and the SSH password is used only after this match.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -142,6 +143,20 @@ fun SelfHostedSetupDialog(
                             enabled = !isWorking,
                             singleLine = true,
                             label = { Text("SSH login") }
+                        )
+                        OutlinedTextField(
+                            value = expectedFingerprint,
+                            onValueChange = { expectedFingerprint = it; error = null },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isWorking,
+                            singleLine = true,
+                            label = { Text("Expected SSH SHA256 fingerprint") },
+                            supportingText = {
+                                Text("Obtain SHA256:... from the server console or hosting provider, not from this connection.")
+                            },
+                            textStyle = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            )
                         )
                         OutlinedTextField(
                             value = password,
@@ -184,14 +199,26 @@ fun SelfHostedSetupDialog(
         confirmButton = {
             if (identity == null) {
                 Button(
-                    enabled = !isWorking && host.isNotBlank() && username.isNotBlank() && password.isNotEmpty(),
+                    enabled = !isWorking && host.isNotBlank() && username.isNotBlank() &&
+                        expectedFingerprint.isNotBlank() && password.isNotEmpty(),
                     onClick = {
                         val server = credentials() ?: return@Button
+                        val expected = expectedFingerprint.trim()
+                        if (!SSH_SHA256_FINGERPRINT.matches(expected)) {
+                            error = "Enter a complete SHA256 SSH fingerprint from an independent source"
+                            return@Button
+                        }
                         error = null
-                        progress = "Checking SSH credentials"
+                        progress = "Reading SSH host key"
                         operation = scope.launch {
                             try {
-                                trustedHost = provisioner.inspectHost(server)
+                                val inspected = provisioner.inspectHost(server)
+                                if (inspected.fingerprint != expected) {
+                                    error = "SSH host fingerprint does not match the trusted value"
+                                    trustedHost = null
+                                } else {
+                                    trustedHost = inspected
+                                }
                                 passwordVisible = false
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
@@ -211,7 +238,7 @@ fun SelfHostedSetupDialog(
                             strokeWidth = 2.dp
                         )
                     }
-                    Text("Check server")
+                    Text("Read host key")
                 }
             } else {
                 Button(
@@ -259,3 +286,5 @@ fun SelfHostedSetupDialog(
         }
     )
 }
+
+private val SSH_SHA256_FINGERPRINT = Regex("^SHA256:[A-Za-z0-9+/]{43}$")

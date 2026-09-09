@@ -8,6 +8,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.olcbox.app.CurrentAppInfo
+import org.olcbox.app.data.logging.sanitizeOlcRtcDiagnosticOutput
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
@@ -22,7 +23,6 @@ import java.net.Proxy
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
-import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
@@ -117,7 +117,11 @@ internal object OlcRtcConnectionChecker {
                         )
                         if (latency >= 0) latency else null
                     }.onFailure {
-                        println("OlcRtcConnectionChecker: Native ping failed: ${it.message}")
+                        val detail = sanitizeOlcRtcDiagnosticOutput(
+                            it.message ?: it::class.java.simpleName,
+                            config.id
+                        )
+                        println("OlcRtcConnectionChecker: Native ping failed: $detail")
                     }.getOrNull()
 
                     if (result != null && result >= 0L) {
@@ -134,7 +138,11 @@ internal object OlcRtcConnectionChecker {
                         privileged = privileged
                     )
                 }.onFailure {
-                    println("OlcRtcConnectionChecker: HTTP ping failed: ${it.message}")
+                    val detail = sanitizeOlcRtcDiagnosticOutput(
+                        it.message ?: it::class.java.simpleName,
+                        config.id
+                    )
+                    println("OlcRtcConnectionChecker: HTTP ping failed: $detail")
                 }.getOrNull()
 
                 if (result != null && result >= 0L) {
@@ -232,7 +240,8 @@ internal object OlcRtcConnectionChecker {
                 }
 
                 println(
-                    "OlcRtcConnectionChecker: olcRTC start failed for ${binary.fileName}: ${e.message}. " +
+                    "OlcRtcConnectionChecker: olcRTC start failed for ${binary.fileName}: " +
+                            "${sanitizeOlcRtcDiagnosticOutput(e.message.orEmpty(), config.id)}. " +
                             "Retrying with fallback binary."
                 )
             }
@@ -288,10 +297,12 @@ internal object OlcRtcConnectionChecker {
 
     private fun writeOlcRtcClientConfig(command: OlcRtcCommand): Path {
         val runtimeDir = DesktopNativeAssets.resolveOlcRtcDataDir().parent.resolve("runtime")
-        Files.createDirectories(runtimeDir)
-        val path = Files.createTempFile(runtimeDir, "olcrtc-check-", ".yaml")
-        Files.writeString(path, command.yaml(), StandardCharsets.UTF_8)
-        return path
+        return DesktopPaths.writePrivateTempString(
+            runtimeDir,
+            "olcrtc-check-",
+            ".yaml",
+            command.yaml()
+        )
     }
 
     private fun coroutineScopeReader(

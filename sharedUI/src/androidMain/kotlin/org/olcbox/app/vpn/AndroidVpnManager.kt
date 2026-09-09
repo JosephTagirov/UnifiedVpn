@@ -325,20 +325,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override fun subscriptionFetchProxy(): SubscriptionFetchProxy? {
-        val currentStatus = status.value
-        if (currentStatus !is VpnStatus.Connected &&
-            currentStatus !is VpnStatus.Reconnecting
-        ) {
-            return null
-        }
-
-        val proxy = _proxySettings.value
-        return SubscriptionFetchProxy(
-            host = AndroidSocksProxySettings.connectHost(proxy.host),
-            port = proxy.port,
-            username = proxy.username,
-            password = proxy.password
-        )
+        return OlcboxVpnState.connectedProxy()
     }
 
     private suspend fun ensureProxySettings() {

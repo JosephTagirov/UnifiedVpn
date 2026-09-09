@@ -1,8 +1,11 @@
 package org.olcbox.app.provisioning
 
 import com.jcraft.jsch.ChannelExec
+import com.jcraft.jsch.HostKey
+import com.jcraft.jsch.HostKeyRepository
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.Session
+import com.jcraft.jsch.UserInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
@@ -40,18 +43,30 @@ data class SshHostIdentity(
     val fingerprint: String
 )
 
+internal const val PINNED_AMNEZIA_WG_IMAGE =
+    "amneziavpn/amnezia-wg@sha256:ea050861bd2012a6265817636ce7c0c15764ef955782d953cef42e05c1381250"
+
 class SelfHostedProvisioner {
+    internal fun provisioningScriptForSecurityTest(): String = PROVISION_SCRIPT
+
     suspend fun inspectHost(server: SelfHostedServer): SshHostIdentity = runInterruptible(Dispatchers.IO) {
         val normalized = server.normalized().also { it.validate() }
-        val session = createSession(normalized, strictHostKeyChecking = false)
-        try {
-            session.connect(CONNECT_TIMEOUT_MS)
-            val hostKey = session.hostKey ?: error("SSH server did not provide a host key")
+        val repository = RejectingHostKeyRepository { hostKey ->
             SshHostIdentity(
                 algorithm = hostKey.type,
                 publicKeyBase64 = hostKey.key,
                 fingerprint = sha256Fingerprint(hostKey.key)
             )
+        }
+        val jsch = JSch().apply { hostKeyRepository = repository }
+        val session = createHostKeyProbeSession(normalized, jsch)
+        try {
+            try {
+                session.connect(CONNECT_TIMEOUT_MS)
+            } catch (failure: Exception) {
+                return@runInterruptible repository.identity ?: throw failure
+            }
+            repository.identity ?: error("SSH server did not provide a host key")
         } finally {
             session.disconnect()
         }
@@ -68,7 +83,7 @@ class SelfHostedProvisioner {
             val knownHost = knownHostLine(normalized, trustedHost)
             setKnownHosts(ByteArrayInputStream(knownHost.toByteArray(Charsets.US_ASCII)))
         }
-        val session = createSession(normalized, strictHostKeyChecking = true, jsch = jsch)
+        val session = createPinnedSession(normalized, jsch)
         var channel: ChannelExec? = null
         try {
             onProgress("Connecting over SSH")
@@ -122,16 +137,25 @@ class SelfHostedProvisioner {
         }
     }
 
-    private fun createSession(
+    private fun createPinnedSession(
         server: SelfHostedServer,
-        strictHostKeyChecking: Boolean,
         jsch: JSch = JSch()
     ): Session {
         return jsch.getSession(server.username, server.host, server.port).apply {
             setPassword(server.password)
-            setConfig("StrictHostKeyChecking", if (strictHostKeyChecking) "yes" else "no")
+            setConfig("StrictHostKeyChecking", "yes")
             setConfig("PreferredAuthentications", "password,keyboard-interactive")
             setConfig("MaxAuthTries", "2")
+            serverAliveInterval = SERVER_ALIVE_INTERVAL_MS
+            serverAliveCountMax = SERVER_ALIVE_COUNT
+        }
+    }
+
+    private fun createHostKeyProbeSession(server: SelfHostedServer, jsch: JSch): Session {
+        return jsch.getSession(server.username, server.host, server.port).apply {
+            // The rejecting repository captures the KEX host key and aborts before user authentication.
+            setConfig("StrictHostKeyChecking", "yes")
+            setConfig("PreferredAuthentications", "none")
             serverAliveInterval = SERVER_ALIVE_INTERVAL_MS
             serverAliveCountMax = SERVER_ALIVE_COUNT
         }
@@ -260,7 +284,7 @@ class SelfHostedProvisioner {
             CLIENT_PUBLIC_KEY='$CLIENT_PUBLIC_KEY_PLACEHOLDER'
             SUDO_PASSWORD='$SUDO_PASSWORD_PLACEHOLDER'
             CONTAINER_NAME='olcbox-amnezia-awg'
-            IMAGE='amneziavpn/amnezia-wg:latest'
+            IMAGE='$PINNED_AMNEZIA_WG_IMAGE'
             DATA_DIR='/opt/olcbox/amnezia-awg'
             CONFIG="${'$'}DATA_DIR/wg0.conf"
             SERVER_PRIVATE_FILE="${'$'}DATA_DIR/server-private.key"
@@ -393,13 +417,15 @@ class SelfHostedProvisioner {
             stage 'Starting AmneziaWG'
             docker_cmd rm -f "${'$'}CONTAINER_NAME" >/dev/null 2>&1 || true
             docker_cmd run -d \
+              --pull=never \
               --log-driver none \
               --restart always \
-              --privileged \
+              --cap-drop=ALL \
               --cap-add=NET_ADMIN \
               --cap-add=SYS_MODULE \
+              --security-opt=no-new-privileges \
               -p "${'$'}PORT:${'$'}PORT/udp" \
-              -v /lib/modules:/lib/modules \
+              -v /lib/modules:/lib/modules:ro \
               -v "${'$'}DATA_DIR:/opt/amnezia/awg" \
               --sysctl='net.ipv4.conf.all.src_valid_mark=1' \
               --name "${'$'}CONTAINER_NAME" \
@@ -424,5 +450,32 @@ class SelfHostedProvisioner {
             printf 'OLCBOX_RESULT h4=%s\n' "${'$'}H4"
             stage 'Server is ready'
         """.trimIndent() + "\n"
+    }
+
+    private class RejectingHostKeyRepository(
+        private val toIdentity: (HostKey) -> SshHostIdentity
+    ) : HostKeyRepository {
+        @Volatile
+        var identity: SshHostIdentity? = null
+            private set
+
+        override fun check(host: String?, key: ByteArray?): Int {
+            if (key != null) {
+                identity = runCatching { toIdentity(HostKey(host.orEmpty(), key)) }.getOrNull()
+            }
+            return HostKeyRepository.NOT_INCLUDED
+        }
+
+        override fun add(hostkey: HostKey?, userinfo: UserInfo?) = Unit
+
+        override fun remove(host: String?, type: String?) = Unit
+
+        override fun remove(host: String?, type: String?, key: ByteArray?) = Unit
+
+        override fun getKnownHostsRepositoryID(): String = "unified-vpn-host-key-probe"
+
+        override fun getHostKey(): Array<HostKey> = emptyArray()
+
+        override fun getHostKey(host: String?, type: String?): Array<HostKey> = emptyArray()
     }
 }

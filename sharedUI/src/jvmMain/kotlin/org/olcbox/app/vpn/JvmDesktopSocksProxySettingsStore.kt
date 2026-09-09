@@ -16,8 +16,7 @@ class JvmDesktopSocksProxySettingsStore(
     }
 
     suspend fun save(settings: DesktopSocksProxySettings) {
-        Files.createDirectories(file.parent)
-        Files.writeString(
+        DesktopPaths.writePrivateString(
             file,
             json.encodeToString(DesktopSocksProxySettings.serializer(), settings.normalized())
         )

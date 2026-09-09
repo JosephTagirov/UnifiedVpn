@@ -1,16 +1,34 @@
 package org.olcbox.app.update
 
+import com.sun.jna.Native
+import com.sun.jna.WString
+import com.sun.jna.win32.StdCallLibrary
+import org.olcbox.app.desktop.WindowsProcessSecurity
+import org.olcbox.app.desktop.WindowsTrustedExecutables
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.MessageDigest
+import java.util.Base64
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
+import java.util.zip.GZIPOutputStream
+
+internal data class ValidatedPortableArchive(
+    val archive: Path,
+    val sha256: String,
+    val expectedVersion: String,
+    val archivePrefix: String
+)
 
 internal object WindowsPortableUpdater {
     private const val LAUNCHER_NAME = "UnifiedVPN.exe"
     private const val MAX_ARCHIVE_ENTRIES = 1_024
     private const val MAX_EXTRACTED_BYTES = 1_000_000_000L
+    private const val MAX_CONFIG_BYTES = 1_048_576L
+    private const val MAX_WINDOWS_COMMAND_CHARS = 30_000
     private val requiredRelativePaths = listOf(
         LAUNCHER_NAME,
         "app/UnifiedVPN.cfg",
@@ -46,161 +64,232 @@ internal object WindowsPortableUpdater {
             }
     }
 
-    fun stage(
+    fun canReplaceInPlace(targetRoot: Path): Boolean {
+        val target = targetRoot.toAbsolutePath().normalize()
+        if (target.parent == null || target == target.root) return false
+        if (requiredRelativePaths.any { !Files.isRegularFile(target.resolve(it)) }) return false
+        if (listOf(
+                target,
+                target.resolve("app"),
+                target.resolve("runtime"),
+                target.resolve(LAUNCHER_NAME)
+            ).any(::isReparsePoint)
+        ) {
+            return false
+        }
+        return canWriteDirectory(target)
+    }
+
+    fun validateArchive(
         archive: Path,
-        stagingParent: Path,
-        expectedVersion: String
-    ): Path {
-        require(Files.isRegularFile(archive) && Files.size(archive) > 0L) {
+        expectedVersion: String,
+        expectedSha256: String
+    ): ValidatedPortableArchive {
+        require(expectedVersion.matches(Regex("[A-Za-z0-9._+-]{1,64}"))) {
+            "Portable update version is invalid"
+        }
+        val expectedDigest = normalizeSha256(expectedSha256)
+        val source = archive.toAbsolutePath().normalize()
+        require(Files.isRegularFile(source) && Files.size(source) > 0L) {
             "Portable update archive is missing or empty"
         }
-        val parent = stagingParent.toAbsolutePath().normalize()
-        Files.createDirectories(parent)
-        val stagingRoot = parent.resolve(
-            "unifiedvpn-${expectedVersion.fileToken()}-${UUID.randomUUID()}"
-        ).normalize()
-        require(stagingRoot.parent == parent) { "Invalid update staging path" }
-        Files.createDirectories(stagingRoot)
+        require(sha256(source) == expectedDigest) {
+            "Portable update SHA-256 mismatch"
+        }
 
-        try {
-            ZipFile(archive.toFile()).use { zip ->
-                val entries = zip.entries().asSequence().toList()
-                require(entries.size <= MAX_ARCHIVE_ENTRIES) {
-                    "Portable update contains too many files"
+        var configText: String? = null
+        val archivePrefix = ZipFile(source.toFile()).use { zip ->
+            val entries = zip.entries().asSequence().toList()
+            require(entries.isNotEmpty() && entries.size <= MAX_ARCHIVE_ENTRIES) {
+                "Portable update contains an invalid number of files"
+            }
+            val normalizedEntries = entries.map { entry ->
+                entry to normalizeEntryName(entry.name)
+            }
+            val collisionKeys = normalizedEntries.map { (_, name) -> name.lowercase(Locale.ROOT) }
+            require(collisionKeys.distinct().size == collisionKeys.size) {
+                "Portable update contains duplicate paths"
+            }
+            val fileNames = normalizedEntries
+                .filterNot { (entry, _) -> entry.isDirectory }
+                .map { (_, name) -> name }
+            require(fileNames.none { fileName ->
+                normalizedEntries.any { (_, otherName) ->
+                    otherName != fileName && otherName.startsWith("$fileName/", ignoreCase = true)
                 }
-                val normalizedNames = entries.map { entry -> normalizeEntryName(entry.name) }
-                val launcherEntries = normalizedNames.filter { name ->
-                    name == LAUNCHER_NAME || name.endsWith("/$LAUNCHER_NAME")
-                }
-                require(launcherEntries.size == 1) {
-                    "Portable update must contain exactly one $LAUNCHER_NAME"
-                }
-                val archivePrefix = launcherEntries.single().removeSuffix(LAUNCHER_NAME)
-                require(requiredRelativePaths.all { required ->
-                    normalizedNames.contains(archivePrefix + required)
-                }) {
-                    "Portable update is missing the embedded JVM or application files"
-                }
-                require(normalizedNames.all { name ->
-                    name == archivePrefix.removeSuffix("/") || name.startsWith(archivePrefix)
-                }) {
-                    "Portable update contains files outside its application directory"
-                }
+            }) {
+                "Portable update contains a file-directory path collision"
+            }
 
-                var extractedBytes = 0L
-                entries.zip(normalizedNames).forEach { (entry, normalizedName) ->
-                    val relativeName = normalizedName.removePrefix(archivePrefix)
-                    if (relativeName.isBlank()) return@forEach
-                    val target = stagingRoot.resolve(relativeName).normalize()
-                    require(target.startsWith(stagingRoot)) {
-                        "Portable update contains an unsafe path"
-                    }
-                    if (entry.isDirectory) {
-                        Files.createDirectories(target)
-                    } else {
-                        Files.createDirectories(target.parent)
-                        zip.getInputStream(entry).use { input ->
-                            Files.newOutputStream(target).use { output ->
-                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                                while (true) {
-                                    val read = input.read(buffer)
-                                    if (read < 0) break
-                                    extractedBytes += read
-                                    require(extractedBytes <= MAX_EXTRACTED_BYTES) {
-                                        "Portable update is larger than the allowed limit"
-                                    }
-                                    output.write(buffer, 0, read)
-                                }
+            val launcherEntries = normalizedEntries.filter { (entry, name) ->
+                !entry.isDirectory && (name == LAUNCHER_NAME || name.endsWith("/$LAUNCHER_NAME"))
+            }
+            require(launcherEntries.size == 1) {
+                "Portable update must contain exactly one $LAUNCHER_NAME"
+            }
+            val prefix = launcherEntries.single().second.removeSuffix(LAUNCHER_NAME)
+            require(requiredRelativePaths.all { required ->
+                normalizedEntries.any { (entry, name) ->
+                    !entry.isDirectory && name.equals(prefix + required, ignoreCase = true)
+                }
+            }) {
+                "Portable update is missing the embedded JVM or application files"
+            }
+            require(normalizedEntries.all { (_, name) ->
+                prefix.isEmpty() ||
+                    name.equals(prefix.removeSuffix("/"), ignoreCase = true) ||
+                    name.startsWith(prefix, ignoreCase = true)
+            }) {
+                "Portable update contains files outside its application directory"
+            }
+
+            var extractedBytes = 0L
+            normalizedEntries.forEach { (entry, normalizedName) ->
+                if (entry.isDirectory) return@forEach
+                val isConfig = normalizedName.equals(
+                    prefix + "app/UnifiedVPN.cfg",
+                    ignoreCase = true
+                )
+                val config = if (isConfig) java.io.ByteArrayOutputStream() else null
+                zip.getInputStream(entry).use { input ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        extractedBytes += read
+                        require(extractedBytes <= MAX_EXTRACTED_BYTES) {
+                            "Portable update is larger than the allowed limit"
+                        }
+                        config?.let {
+                            require(it.size().toLong() + read <= MAX_CONFIG_BYTES) {
+                                "Portable update configuration is too large"
                             }
+                            it.write(buffer, 0, read)
                         }
                     }
                 }
-            }
-
-            requiredRelativePaths.forEach { relative ->
-                val file = stagingRoot.resolve(relative)
-                require(Files.isRegularFile(file) && Files.size(file) > 0L) {
-                    "Portable update did not extract $relative"
+                if (config != null) {
+                    configText = config.toString(StandardCharsets.UTF_8)
                 }
             }
-            val config = Files.readString(stagingRoot.resolve("app/UnifiedVPN.cfg"))
-            require("java-options=-Djpackage.app-version=$expectedVersion" in config) {
-                "Portable update version does not match $expectedVersion"
-            }
-            return stagingRoot
-        } catch (error: Throwable) {
-            deleteTree(stagingRoot, parent)
-            throw error
+            prefix.removeSuffix("/")
         }
+
+        require(configText.orEmpty().lineSequence().any { line ->
+            line.trim() == "java-options=-Djpackage.app-version=$expectedVersion"
+        }) {
+            "Portable update version does not match $expectedVersion"
+        }
+        return ValidatedPortableArchive(
+            archive = source,
+            sha256 = expectedDigest,
+            expectedVersion = expectedVersion,
+            archivePrefix = archivePrefix
+        )
     }
 
     fun launch(
-        stagedRoot: Path,
+        validatedArchive: ValidatedPortableArchive,
         targetRoot: Path,
-        workingDirectory: Path,
         parentPid: Long
     ) {
-        val staged = stagedRoot.toAbsolutePath().normalize()
+        check(!WindowsProcessSecurity.shouldRefuseCurrentProcess()) {
+            "Automatic replacement is disabled while Unified VPN runs as administrator. " +
+                "Restart Unified VPN normally and check for updates again."
+        }
+        require(parentPid > 0L) { "Invalid updater parent process" }
         val target = targetRoot.toAbsolutePath().normalize()
-        require(staged != target && target.parent != null) { "Invalid update target directory" }
+        require(target.parent != null && target != target.root) { "Invalid update target directory" }
+        require(Files.isRegularFile(validatedArchive.archive)) {
+            "Validated portable update archive is missing"
+        }
         requiredRelativePaths.forEach { relative ->
-            require(Files.isRegularFile(staged.resolve(relative))) {
-                "Staged update is missing $relative"
+            require(Files.isRegularFile(target.resolve(relative))) {
+                "Current Unified VPN installation is missing $relative"
             }
         }
-        require(Files.isRegularFile(target.resolve(LAUNCHER_NAME))) {
-            "Current Unified VPN launcher was not found"
+        listOf(
+            target,
+            target.resolve("app"),
+            target.resolve("runtime"),
+            target.resolve(LAUNCHER_NAME)
+        ).forEach { path ->
+            check(!isReparsePoint(path)) {
+                "Automatic replacement does not support reparse points in the installation"
+            }
+        }
+        check(canReplaceInPlace(target)) {
+            "Automatic replacement is unavailable for this system-wide installation. " +
+                "Use the verified Unified VPN installer update instead."
         }
 
-        Files.createDirectories(workingDirectory)
-        val script = workingDirectory.resolve("apply-windows-update-${UUID.randomUUID()}.ps1")
-        val log = workingDirectory.resolve("windows-update.log")
-        Files.writeString(script, updaterScript(), StandardCharsets.UTF_8)
+        val powershell = WindowsTrustedExecutables.powerShellPath().toString()
+        val encodedCommand = encodedUpdaterCommand(
+            validatedArchive = validatedArchive,
+            targetRoot = target,
+            parentPid = parentPid
+        )
+        check(encodedCommand.length < MAX_WINDOWS_COMMAND_CHARS) {
+            "Bundled Windows updater command is too large to launch safely"
+        }
         val updaterArguments = listOf(
             "-NoProfile",
+            "-NonInteractive",
             "-ExecutionPolicy", "Bypass",
             "-WindowStyle", "Hidden",
-            "-File", script.toString(),
-            "-ParentPid", parentPid.toString(),
-            "-StagedRoot", staged.toString(),
-            "-TargetRoot", target.toString(),
-            "-LauncherName", LAUNCHER_NAME,
-            "-LogFile", log.toString()
+            "-EncodedCommand", encodedCommand
         )
 
-        if (canWriteDirectory(target)) {
-            ProcessBuilder(listOf("powershell.exe") + updaterArguments)
-                .directory(workingDirectory.toFile())
-                .start()
-            return
-        }
-
-        val elevatedArgumentLine = updaterArguments.joinToString(" ", transform = ::windowsQuote)
-        val elevationCommand = buildString {
-            append("\$ErrorActionPreference = 'Stop'; ")
-            append("\$process = Start-Process -FilePath 'powershell.exe' ")
-            append("-ArgumentList ")
-            append(elevatedArgumentLine.powershellLiteral())
-            append(" -Verb RunAs -WindowStyle Hidden -PassThru; ")
-            append("if (\$null -eq \$process) { throw 'Updater elevation was cancelled' }")
-        }
-        val process = ProcessBuilder(
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-WindowStyle", "Hidden",
-            "-Command", elevationCommand
-        )
+        val process = ProcessBuilder(listOf(powershell) + updaterArguments)
             .redirectErrorStream(true)
             .start()
-        check(process.waitFor(120, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            "Timed out waiting for updater permission"
+        check(!process.waitFor(500, TimeUnit.MILLISECONDS)) {
+            process.inputStream.bufferedReader().use { it.readText() }.trim()
+                .ifBlank { "Windows updater exited before Unified VPN closed" }
         }
-        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
-        check(process.exitValue() == 0) {
-            output.ifBlank { "Windows updater permission was denied" }
+    }
+
+    internal fun updaterCommand(
+        validatedArchive: ValidatedPortableArchive,
+        targetRoot: Path,
+        parentPid: Long
+    ): String = buildString {
+        appendLine("\$ParentPid = $parentPid")
+        appendLine("\$ArchivePath = ${validatedArchive.archive.toString().powershellLiteral()}")
+        appendLine("\$ExpectedSha256 = ${validatedArchive.sha256.powershellLiteral()}")
+        appendLine("\$ExpectedVersion = ${validatedArchive.expectedVersion.powershellLiteral()}")
+        appendLine("\$ArchivePrefix = ${validatedArchive.archivePrefix.powershellLiteral()}")
+        appendLine("\$TargetRoot = ${targetRoot.toAbsolutePath().normalize().toString().powershellLiteral()}")
+        appendLine("\$LauncherName = ${LAUNCHER_NAME.powershellLiteral()}")
+        append(updaterScript())
+    }
+
+    internal fun encodedUpdaterCommand(
+        validatedArchive: ValidatedPortableArchive,
+        targetRoot: Path,
+        parentPid: Long
+    ): String {
+        val compressed = java.io.ByteArrayOutputStream().use { output ->
+            GZIPOutputStream(output).use { gzip ->
+                gzip.write(
+                    updaterCommand(validatedArchive, targetRoot, parentPid)
+                        .toByteArray(StandardCharsets.UTF_8)
+                )
+            }
+            output.toByteArray()
         }
+        val payload = Base64.getEncoder().encodeToString(compressed)
+        val bootstrap = buildString {
+            append("\$b=[Convert]::FromBase64String(")
+            append(payload.powershellLiteral())
+            append(");\$m=[IO.MemoryStream]::new(\$b);\$g=[IO.Compression.GZipStream]::new(")
+            append("\$m,[IO.Compression.CompressionMode]::Decompress);\$r=[IO.StreamReader]::new(")
+            append("\$g,[Text.Encoding]::UTF8);\$s=\$r.ReadToEnd();\$r.Dispose();")
+            append("\$g.Dispose();\$m.Dispose();&([ScriptBlock]::Create(\$s))")
+        }
+        return Base64.getEncoder().encodeToString(
+            bootstrap.toByteArray(StandardCharsets.UTF_16LE)
+        )
     }
 
     internal fun updaterScript(): String =
@@ -217,7 +306,15 @@ internal object WindowsPortableUpdater {
             "Portable update contains an absolute path"
         }
         val parts = name.split('/')
-        require(parts.none { it.isBlank() || it == "." || it == ".." }) {
+        require(parts.none { part ->
+            part.isBlank() ||
+                part == "." ||
+                part == ".." ||
+                part.endsWith(' ') ||
+                part.endsWith('.') ||
+                INVALID_WINDOWS_PATH_CHAR.containsMatchIn(part) ||
+                isReservedWindowsName(part)
+        }) {
             "Portable update contains an unsafe path"
         }
         return name
@@ -235,22 +332,59 @@ internal object WindowsPortableUpdater {
         }
     }
 
-    private fun deleteTree(target: Path, allowedParent: Path) {
-        val normalized = target.toAbsolutePath().normalize()
-        require(normalized.parent == allowedParent.toAbsolutePath().normalize()) {
-            "Refusing to delete an unsafe staging directory"
+    private fun isReparsePoint(path: Path): Boolean {
+        val attributes = systemDirectoryApi.GetFileAttributesW(WString(path.toString()))
+        check(attributes != INVALID_FILE_ATTRIBUTES) {
+            "Windows installation path attributes could not be read"
         }
-        if (!Files.exists(normalized)) return
-        Files.walk(normalized).use { paths ->
-            paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
-        }
+        return attributes and FILE_ATTRIBUTE_REPARSE_POINT != 0
     }
 
-    private fun String.fileToken(): String =
-        replace(Regex("[^A-Za-z0-9._-]"), "_").take(64).ifBlank { "unknown" }
+    private fun sha256(path: Path): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        Files.newInputStream(path).use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().toHex()
+    }
 
-    private fun windowsQuote(value: String): String =
-        "\"${value.replace("\"", "\\\"")}\""
+    private fun normalizeSha256(value: String): String {
+        val normalized = value.trim().lowercase(Locale.ROOT)
+        require(SHA256_PATTERN.matches(normalized)) {
+            "Portable update requires a valid SHA-256 digest"
+        }
+        return normalized
+    }
+
+    private fun isReservedWindowsName(part: String): Boolean {
+        val baseName = part.substringBefore('.').uppercase(Locale.ROOT)
+        return baseName in RESERVED_WINDOWS_NAMES ||
+            RESERVED_WINDOWS_DEVICE_PATTERN.matches(baseName)
+    }
+
+    private fun ByteArray.toHex(): String =
+        joinToString(separator = "") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
 
     private fun String.powershellLiteral(): String = "'${replace("'", "''")}'"
+
+    private val SHA256_PATTERN = Regex("[a-f0-9]{64}")
+    private val INVALID_WINDOWS_PATH_CHAR = Regex("[<>:\"|?*\\u0000-\\u001F]")
+    private val RESERVED_WINDOWS_NAMES = setOf("CON", "PRN", "AUX", "NUL")
+    private val RESERVED_WINDOWS_DEVICE_PATTERN = Regex("(?:COM|LPT)[1-9]")
+    private const val INVALID_FILE_ATTRIBUTES = -1
+    private const val FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+    private val systemDirectoryApi: Kernel32SystemDirectory by lazy {
+        Native.load("kernel32", Kernel32SystemDirectory::class.java)
+    }
+
+    private interface Kernel32SystemDirectory : StdCallLibrary {
+        fun GetFileAttributesW(path: WString): Int
+    }
 }

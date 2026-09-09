@@ -4,7 +4,9 @@ import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.TaskAction
+import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import groovy.json.JsonSlurper
 import java.util.Properties
 
 plugins {
@@ -31,6 +33,11 @@ val olcrtcCommitSha = providers.gradleProperty("olcbox.olcrtcSha")
     .orElse(detectedOlcrtcSha)
 val olcrtcAndroidAar = layout.buildDirectory.file("generated/olcrtc/olcrtc.aar")
 val olcrtcAndroidAarFile = olcrtcAndroidAar.get().asFile
+val olcrtcAndroidBindDir = rootProject.file("tools/olcrtc-android-bind")
+val olcrtcAndroidModule = "github.com/openlibrecommunity/olcrtc"
+val olcrtcAndroidModuleVersion = "v0.0.2-0.20260818184357-f616f57bb3a9"
+val olcrtcAndroidModuleCommit = "f616f57bb3a90740f1755922ffeaa7acc5cfe4ed"
+val olcrtcAndroidModuleSum = "h1:bv0Tec2WwlWvhoaP9T94SnSFKBw1VQURo5bofHzMj08="
 val localProperties = Properties().apply {
     rootProject.file("local.properties")
         .takeIf { it.isFile }
@@ -102,25 +109,63 @@ olcrtcAndroidAarFile.parentFile.mkdirs()
 
 val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
     group = "build"
-    description = "Builds olcrtc Android AAR from OLCRTC_REPO using gomobile."
+    description = "Builds the pinned versioned olcrtc Android module using gomobile."
     dependsOn(":verifyOlcRtcSource")
 
-    inputs.dir(olcrtcRepoDir.resolve("mobile"))
-    inputs.dir(olcrtcRepoDir.resolve("internal"))
-    inputs.files(olcrtcRepoDir.resolve("go.mod"), olcrtcRepoDir.resolve("go.sum"))
-    inputs.property("olcrtcRepositoryPath", olcrtcRepoDir.canonicalPath)
+    inputs.files(
+        olcrtcAndroidBindDir.resolve("go.mod"),
+        olcrtcAndroidBindDir.resolve("go.sum"),
+        olcrtcAndroidBindDir.resolve("pin.go")
+    )
     inputs.property("olcrtcCommit", olcrtcCommitSha)
+    inputs.property("olcrtcModuleVersion", olcrtcAndroidModuleVersion)
+    inputs.property("olcrtcModuleSum", olcrtcAndroidModuleSum)
     outputs.file(olcrtcAndroidAar)
 
-    workingDir = olcrtcRepoDir
+    workingDir = olcrtcAndroidBindDir
     environment("ANDROID_HOME", androidSdkPath.get())
     environment("ANDROID_SDK_ROOT", androidSdkPath.get())
+    environment("GOWORK", "off")
+    environment("GOFLAGS", "")
 
     doFirst {
         val sdkDir = rootProject.file(androidSdkPath.get())
         require(androidSdkPath.get().isNotBlank() && sdkDir.isDirectory) {
             "Android SDK was not found. Set sdk.dir in local.properties or ANDROID_HOME."
         }
+        check(olcrtcCommitSha.get().trim().lowercase() == olcrtcAndroidModuleCommit) {
+            "The Android module pin must be updated with olcbox.olcrtcSha."
+        }
+
+        fun go(vararg arguments: String): String {
+            val process = ProcessBuilder(listOf("go") + arguments)
+                .directory(olcrtcAndroidBindDir)
+                .redirectErrorStream(true)
+                .apply {
+                    environment()["GOWORK"] = "off"
+                    environment()["GOFLAGS"] = ""
+                }
+                .start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+            check(process.waitFor() == 0) { "Cannot verify the olcRTC Android module: $output" }
+            return output
+        }
+
+        val manifest = JsonSlurper().parseText(go("mod", "edit", "-json")) as Map<*, *>
+        check((manifest["Replace"] as? List<*>).isNullOrEmpty()) {
+            "The Android bind module must not contain local or version replacements."
+        }
+        val module = JsonSlurper().parseText(
+            go("list", "-mod=readonly", "-m", "-json", olcrtcAndroidModule)
+        ) as Map<*, *>
+        check(module["Version"] == olcrtcAndroidModuleVersion && module["Replace"] == null) {
+            "The Android bind module does not select the pinned olcRTC version."
+        }
+        check(module["Sum"] == olcrtcAndroidModuleSum) {
+            "The Android olcRTC module checksum does not match the verified pin."
+        }
+        go("mod", "verify")
+        logger.lifecycle("Verified Android olcRTC module $olcrtcAndroidModuleVersion")
     }
     commandLine(
         "gomobile",
@@ -128,11 +173,12 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
         "-target=android/arm,android/arm64,android/amd64",
         "-androidapi",
         "21",
+        "-trimpath",
         "-ldflags",
         "-s -w -checklinkname=0",
         "-o",
         olcrtcAndroidAarFile.absolutePath,
-        "./mobile"
+        "$olcrtcAndroidModule/mobile"
     )
 }
 
@@ -234,5 +280,25 @@ kotlin {
             }
         }
 
+    }
+}
+
+tasks.withType<Test>().configureEach {
+    val isolatedRoot = temporaryDir.resolve("isolated-user-data")
+    val isolatedHome = isolatedRoot.resolve("Home")
+    val isolatedRoaming = isolatedRoot.resolve("Roaming")
+    val isolatedLocal = isolatedRoot.resolve("Local")
+    environment("APPDATA", isolatedRoaming.absolutePath)
+    environment("LOCALAPPDATA", isolatedLocal.absolutePath)
+    environment("UNIFIEDVPN_TEST_APPDATA_ROOT", isolatedRoot.absolutePath)
+    systemProperty("user.home", isolatedHome.absolutePath)
+    doFirst {
+        val buildRoot = layout.buildDirectory.get().asFile.toPath().toAbsolutePath().normalize()
+        val target = isolatedRoot.toPath().toAbsolutePath().normalize()
+        require(target.startsWith(buildRoot)) { "Refusing to clean test data outside the build directory" }
+        project.delete(isolatedRoot)
+        isolatedHome.mkdirs()
+        isolatedRoaming.mkdirs()
+        isolatedLocal.mkdirs()
     }
 }

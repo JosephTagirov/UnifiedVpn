@@ -84,7 +84,7 @@ fun AddConfigurationSheet(
 
                 AddSheetAction(
                     title = "Paste link, URI, or friend package",
-                    value = "unifiedvpn-friend-v1:, VLESS, AWG, olcRTC",
+                    value = "unifiedvpn-friend-v2:, VLESS, AWG, olcRTC",
                     icon = Icons.AutoMirrored.Outlined.Input,
                     onClick = onPasteLinkClick
                 )

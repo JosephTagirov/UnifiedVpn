@@ -17,7 +17,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.olcbox.app.data.logging.diagnosticOlcRtcRoomReference
 import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
+import org.olcbox.app.data.logging.sanitizeOlcRtcDiagnosticOutput
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.LocationsRepository
@@ -38,7 +40,6 @@ import org.olcbox.app.vpn.desktop.WindowsTunController
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
@@ -569,7 +570,10 @@ class DesktopVpnManager private constructor(
         val configPath = writeOlcRtcClientConfig(olcRtcCommand)
         val command = olcRtcCommand.args(configPath)
 
-        addLog("Starting olcRTC provider=$provider, transport=${config.transport}, room=${config.id}, port=${socksSettings.port}")
+        addLog(
+            "Starting olcRTC provider=$provider, transport=${config.transport}, " +
+                "${diagnosticOlcRtcRoomReference(config.id)}, port=${socksSettings.port}"
+        )
 
         if (privileged) {
             addLog("Linux TUN mode starts olcRTC with elevated privileges to bypass the TUN route")
@@ -598,7 +602,7 @@ class DesktopVpnManager private constructor(
                         if (!isActive) break
 
                         if (logOutput) {
-                            val message = "rtc: $line"
+                            val message = "rtc: ${sanitizeOlcRtcDiagnosticOutput(line, config.id)}"
                             addLog(message)
                             println(message)
                         }
@@ -710,9 +714,12 @@ class DesktopVpnManager private constructor(
                         if (!isActive) break
 
                         if (logOutput) {
-                            val message = "$engineName: $line"
-                            addLog(message)
-                            println(message)
+                            emitSanitizedDesktopProcessOutput(
+                                source = engineName,
+                                line = line,
+                                logSink = ::addLog,
+                                consoleSink = ::println
+                            )
                         }
 
                         if (
@@ -738,9 +745,12 @@ class DesktopVpnManager private constructor(
 
     private fun writeOlcRtcClientConfig(command: OlcRtcCommand): Path {
         val runtimeDir = DesktopPaths.appDataDir().resolve("runtime")
-        Files.createDirectories(runtimeDir)
-        val path = Files.createTempFile(runtimeDir, "olcrtc-client-", ".yaml")
-        Files.writeString(path, command.yaml(), StandardCharsets.UTF_8)
+        val path = DesktopPaths.writePrivateTempString(
+            runtimeDir,
+            "olcrtc-client-",
+            ".yaml",
+            command.yaml()
+        )
         deleteOlcRtcConfig()
         olcRtcConfigPath = path
         return path
@@ -748,9 +758,12 @@ class DesktopVpnManager private constructor(
 
     private fun writeEngineClientConfig(prefix: String, config: String): Path {
         val runtimeDir = DesktopPaths.appDataDir().resolve("runtime")
-        Files.createDirectories(runtimeDir)
-        val path = Files.createTempFile(runtimeDir, "$prefix-", ".json")
-        Files.writeString(path, config, StandardCharsets.UTF_8)
+        val path = DesktopPaths.writePrivateTempString(
+            runtimeDir,
+            "$prefix-",
+            ".json",
+            config
+        )
         deleteOlcRtcConfig()
         olcRtcConfigPath = path
         return path
@@ -772,9 +785,12 @@ class DesktopVpnManager private constructor(
                     for (line in lines) {
                         if (!isActive) break
 
-                        val message = "tun: $line"
-                        addLog(message)
-                        println(message)
+                        emitSanitizedDesktopProcessOutput(
+                            source = "tun",
+                            line = line,
+                            logSink = ::addLog,
+                            consoleSink = ::println
+                        )
                     }
                 }
             } catch (_: IOException) {
@@ -996,6 +1012,17 @@ class DesktopVpnManager private constructor(
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
 
     }
+}
+
+internal fun emitSanitizedDesktopProcessOutput(
+    source: String,
+    line: String,
+    logSink: (String) -> Unit,
+    consoleSink: (String) -> Unit
+) {
+    val sanitized = sanitizeDiagnosticLogLine("$source: $line")
+    logSink(sanitized)
+    consoleSink(sanitized)
 }
 
 internal fun isDesktopEngineReady(

@@ -57,7 +57,7 @@ internal class LinuxTunController(
         downScript: Path
     ): Path {
         val config = DesktopPaths.appDataDir().resolve("linux-tun.yml")
-        Files.writeString(
+        DesktopPaths.writePrivateString(
             config,
             configContent(
                 socksPort = socksPort,
@@ -90,7 +90,7 @@ internal class LinuxTunController(
 
     private fun writeScript(name: String, body: String): Path {
         val script = DesktopPaths.appDataDir().resolve(name)
-        Files.writeString(script, body)
+        DesktopPaths.writePrivateString(script, body)
         script.toFile().setExecutable(true, true)
         return script
     }

@@ -21,7 +21,7 @@ enum class DesktopRoutingMode {
 
     fun description(): String = when (this) {
         Auto -> "Use local SOCKS for olcRTC and the recommended mode for other profiles"
-        Tun -> "Route all traffic through a virtual adapter; Windows asks for administrator rights"
+        Tun -> "Route all traffic through a virtual adapter"
         SystemProxy -> "Configure the operating system proxy automatically"
         LocalSocks -> "Expose SOCKS5 without changing system routing"
     }
@@ -43,7 +43,9 @@ enum class DesktopRoutingMode {
     internal fun resolveFor(os: DesktopOs): DesktopRoutingMode = resolveFor(os, false)
 
     internal fun resolveFor(os: DesktopOs, isOlcRtcProfile: Boolean): DesktopRoutingMode {
-        if (this != Auto) return this
+        if (this != Auto) {
+            return if (this == Tun && os == DesktopOs.Windows) SystemProxy else this
+        }
         if (isOlcRtcProfile) return LocalSocks
         return when (os) {
             DesktopOs.Linux -> Tun
@@ -55,7 +57,7 @@ enum class DesktopRoutingMode {
     companion object {
         fun availableForCurrentPlatform(): List<DesktopRoutingMode> = buildList {
             add(Auto)
-            if (DesktopPaths.os == DesktopOs.Linux || DesktopPaths.os == DesktopOs.Windows) {
+            if (DesktopPaths.os == DesktopOs.Linux) {
                 add(Tun)
             }
             if (DesktopPaths.os == DesktopOs.Windows) {

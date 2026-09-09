@@ -23,7 +23,6 @@ import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.repository.LocationImportResult
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.FriendAccessPackageCodec
-import org.olcbox.app.data.share.FriendAmneziaServer
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.vpn.VpnManager
 import org.olcbox.app.vpn.VpnStatus
@@ -223,7 +222,7 @@ class HomeScreenViewModel(
 
     fun onCreateFriendAccessPackage(
         vlessUri: String,
-        amnezia: FriendAmneziaServer,
+        awgConfig: String,
         onCreated: (String) -> Unit,
         onError: (String) -> Unit = {}
     ) {
@@ -233,7 +232,7 @@ class HomeScreenViewModel(
                     FriendAccessPackageCodec.create(
                         source = locationsRepository.getBundle(),
                         vlessUri = vlessUri,
-                        amnezia = amnezia
+                        awgConfig = awgConfig
                     )
                 )
             }.onSuccess(onCreated).onFailure { failure ->

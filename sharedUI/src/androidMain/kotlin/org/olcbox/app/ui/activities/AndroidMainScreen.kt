@@ -44,6 +44,7 @@ import org.olcbox.app.ui.navigation.AppScreen
 import org.olcbox.app.ui.provisioning.FriendAccessPackageCreatorDialog
 import org.olcbox.app.ui.provisioning.FriendAccessPackageInstallDialog
 import org.olcbox.app.ui.provisioning.SelfHostedSetupDialog
+import org.olcbox.app.ui.settings.AppAppearanceSettings
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSplitTunnelList
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
@@ -56,7 +57,9 @@ fun AndroidMainScreen(
     viewModel: HomeScreenViewModel,
     locationViewModel: LocationViewModel,
     vpnManager: AndroidVpnManager,
-    appUpdateService: AppUpdateService? = null
+    appUpdateService: AppUpdateService? = null,
+    appearanceSettings: AppAppearanceSettings = AppAppearanceSettings(),
+    onAppearanceSettingsChanged: (AppAppearanceSettings) -> Unit = {}
 ) {
 
     var currentScreenRoute by rememberSaveable { mutableStateOf("home") }
@@ -85,13 +88,16 @@ fun AndroidMainScreen(
     val scope = rememberCoroutineScope()
 
     fun showLocalizedToast(message: String?, duration: Int = Toast.LENGTH_SHORT) {
-        Toast.makeText(context, context.androidUiText(message.orEmpty()), duration).show()
+        Toast.makeText(
+            context,
+            context.androidUiText(message.orEmpty(), appearanceSettings.language),
+            duration
+        ).show()
     }
     val connectionMode by vpnManager.connectionMode.collectAsState()
     val proxySettings by vpnManager.proxySettings.collectAsState()
     val splitTunnelProfile by vpnManager.splitTunnelProfile.collectAsState()
     val splitTunnelSettings by vpnManager.splitTunnelSettings.collectAsState()
-    val dynamicThemeEnabled by vpnManager.dynamicThemeEnabled.collectAsState()
     val installedApps by vpnManager.installedApps.collectAsState()
     val homeState by viewModel.state.collectAsState()
     val logs by viewModel.logs.collectAsState()
@@ -121,6 +127,7 @@ fun AndroidMainScreen(
     var updateDownloadProgress by remember { mutableStateOf<Float?>(null) }
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var relaunchAfterInstall by remember { mutableStateOf(false) }
+    var pendingUpdateInstall by remember { mutableStateOf<AppUpdateInfo?>(null) }
     val subscriptionShareItems = locationViewModel.locations.toList()
         .mapNotNull { item ->
             val url = item.subscriptionUrl
@@ -151,6 +158,8 @@ fun AndroidMainScreen(
     val updateInstallLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result: ActivityResult ->
+        val pendingInfo = pendingUpdateInstall
+        pendingUpdateInstall = null
         if (relaunchAfterInstall && result.resultCode == Activity.RESULT_OK) {
             relaunchAfterInstall = false
             updateInstaller.relaunchIntent()?.let { intent ->
@@ -158,6 +167,10 @@ fun AndroidMainScreen(
             }
         } else {
             relaunchAfterInstall = false
+            if (pendingInfo != null) {
+                updateOffer = pendingInfo
+                updateStatusText = "Update installation was canceled or failed"
+            }
         }
     }
 
@@ -232,40 +245,49 @@ fun AndroidMainScreen(
     }
 
     fun downloadUpdate(info: AppUpdateInfo) {
-        scope.launch {
-            if (!updateInstaller.canRequestPackageInstalls()) {
-                updateInstaller.openUnknownSourcesSettings()
-                updateStatusText = "Allow Unified VPN to install updates, then tap Download again"
-                showLocalizedToast(updateStatusText, Toast.LENGTH_LONG)
-                return@launch
-            }
+        if (updateDownloadProgress != null || pendingUpdateInstall != null) return
+        if (!updateInstaller.canRequestPackageInstalls()) {
+            val result = updateInstaller.openUnknownSourcesSettings()
+            updateStatusText = result.exceptionOrNull()?.let { error ->
+                "Installation failed: ${error.message ?: "unknown error"}"
+            } ?: "Allow Unified VPN to install updates, then tap Download again"
+            showLocalizedToast(updateStatusText, Toast.LENGTH_LONG)
+            return
+        }
 
-            updateDownloadProgress = 0f
-            updateStatusText = "Downloading ${info.asset.name}..."
-            val result = updateInstaller.download(info.asset) { progress ->
-                updateDownloadProgress = progress
-            }
-            val file = result.getOrElse { error ->
-                updateStatusText = "Download failed: ${error.message ?: "unknown error"}"
+        updateDownloadProgress = 0f
+        scope.launch {
+            try {
+                updateStatusText = "Downloading ${info.asset.name}..."
+                val result = updateInstaller.download(info.asset) { progress ->
+                    updateDownloadProgress = progress
+                }
+                val file = result.getOrElse { error ->
+                    updateStatusText = "Download failed: ${error.message ?: "unknown error"}"
+                    showLocalizedToast(updateStatusText, Toast.LENGTH_LONG)
+                    return@launch
+                }
+                updateStatusText = "Installing ${info.asset.name}"
+                saveUpdateSettings(updateSettings.copy(lastCheckAtEpochMs = null))
+                relaunchAfterInstall = true
+                pendingUpdateInstall = info
+                runCatching {
+                    updateInstallLauncher.launch(updateInstaller.installIntent(file))
+                }.onFailure { error ->
+                    relaunchAfterInstall = false
+                    pendingUpdateInstall = null
+                    updateOffer = info
+                    updateStatusText = "Installation failed: ${error.message ?: "unknown error"}"
+                    showLocalizedToast(updateStatusText, Toast.LENGTH_LONG)
+                }
+            } finally {
                 updateDownloadProgress = null
-                showLocalizedToast(updateStatusText, Toast.LENGTH_LONG)
-                return@launch
             }
-            updateStatusText = "Installing ${info.asset.name}"
-            saveUpdateSettings(
-                updateSettings.copy(
-                    lastSeenUpdateVersion = info.identity(),
-                    lastDownloadedUpdateVersion = info.identity()
-                )
-            )
-            updateOffer = null
-            updateDownloadProgress = null
-            relaunchAfterInstall = true
-            updateInstallLauncher.launch(updateInstaller.installIntent(file))
         }
     }
 
     fun postponeUpdate(info: AppUpdateInfo) {
+        if (updateDownloadProgress != null || pendingUpdateInstall != null) return
         scope.launch {
             saveUpdateSettings(updateSettings.copy(lastSeenUpdateVersion = info.identity()))
             updateOffer = null
@@ -481,10 +503,10 @@ fun AndroidMainScreen(
     if (isFriendPackageCreatorOpen) {
         FriendAccessPackageCreatorDialog(
             onDismiss = { isFriendPackageCreatorOpen = false },
-            onVerified = { vlessUri, server, packagePassword ->
+            onProvisioned = { vlessUri, awgConfig, packagePassword ->
                 viewModel.onCreateFriendAccessPackage(
                     vlessUri = vlessUri,
-                    amnezia = server,
+                    awgConfig = awgConfig,
                     onCreated = { plainPackage ->
                         scope.launch {
                             try {
@@ -511,27 +533,19 @@ fun AndroidMainScreen(
         FriendAccessPackageInstallDialog(
             encryptedPackage = encryptedPackage,
             onDismiss = { pendingEncryptedFriendPackage = null },
-            onProvisioned = { packageValue, awgConfig ->
+            onDecoded = { packageValue ->
                 val profiles = FriendAccessPackageCodec.profilesImportText(packageValue)
                 viewModel.onImportFullConfig(
                     rawText = profiles,
                     onComplete = {
-                        viewModel.onImportFullConfig(
-                            rawText = awgConfig,
-                            onComplete = {
-                                reloadLocationsAfterImport {
-                                    pendingEncryptedFriendPackage = null
-                                    showLocalizedToast(
-                                        "olcRTC, VLESS, and AmneziaWG are ready",
-                                        Toast.LENGTH_LONG
-                                    )
-                                    connectAfterProfileImport()
-                                }
-                            },
-                            onError = { message ->
-                                showLocalizedToast(message, Toast.LENGTH_LONG)
-                            }
-                        )
+                        reloadLocationsAfterImport {
+                            pendingEncryptedFriendPackage = null
+                            showLocalizedToast(
+                                "olcRTC, VLESS, and AmneziaWG are ready",
+                                Toast.LENGTH_LONG
+                            )
+                            connectAfterProfileImport()
+                        }
                     },
                     onError = { message -> showLocalizedToast(message, Toast.LENGTH_LONG) }
                 )
@@ -586,7 +600,7 @@ fun AndroidMainScreen(
             splitTunnelProfile = splitTunnelProfile,
             installedApps = installedApps,
             logs = logs,
-            dynamicThemeEnabled = dynamicThemeEnabled,
+            appearanceSettings = appearanceSettings,
             updateSettings = updateSettings,
             updateStatusText = updateStatusText,
             updateDownloadProgress = updateDownloadProgress,
@@ -663,7 +677,7 @@ fun AndroidMainScreen(
                     }
                 }
             },
-            onDynamicThemeChanged = vpnManager::setDynamicThemeEnabled,
+            onAppearanceSettingsChanged = onAppearanceSettingsChanged,
             onModeSelected = { mode ->
                 if (mode != connectionMode && homeState.isVpnConnected) {
                     val prepIntent = if (mode == AndroidConnectionMode.Tun) {

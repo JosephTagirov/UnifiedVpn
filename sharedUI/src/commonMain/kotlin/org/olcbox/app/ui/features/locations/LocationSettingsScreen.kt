@@ -57,6 +57,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -158,8 +159,7 @@ fun LocationSettingsScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .imePadding(),
+                .padding(innerPadding),
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -616,13 +616,17 @@ private fun SettingsTextField(
     leadingIcon: ImageVector,
     onClear: () -> Unit,
     keyboardOptions: KeyboardOptions,
-    keyboardActions: KeyboardActions = KeyboardActions(),
+    keyboardActions: KeyboardActions? = null,
     visualTransformation: VisualTransformation = VisualTransformation.None,
     sensitive: Boolean = false,
     singleLine: Boolean = true,
     minLines: Int = 1
 ) {
     var sensitiveValueVisible by remember(sensitive, label) { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val resolvedKeyboardActions = keyboardActions ?: KeyboardActions(
+        onDone = { focusManager.clearFocus() }
+    )
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
@@ -640,7 +644,7 @@ private fun SettingsTextField(
             visualTransformation
         },
         keyboardOptions = keyboardOptions,
-        keyboardActions = keyboardActions,
+        keyboardActions = resolvedKeyboardActions,
         modifier = Modifier.fillMaxWidth(),
         trailingIcon = {
             Row(verticalAlignment = Alignment.CenterVertically) {

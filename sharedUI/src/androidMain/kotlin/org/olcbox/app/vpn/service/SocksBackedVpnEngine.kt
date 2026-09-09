@@ -21,6 +21,7 @@ internal interface SocksBackedVpnEngine {
     val profileType: String
     val socksHost: String
     val socksPort: Int
+    val usesAppSocksCredentials: Boolean get() = true
     val isRunning: Boolean
     suspend fun start()
     fun stop()
@@ -100,6 +101,7 @@ private class ExistingSocksEngine(
 ) : SocksBackedVpnEngine {
     override val socksHost: String = host
     override val socksPort: Int = port
+    override val usesAppSocksCredentials: Boolean = false
     override val isRunning: Boolean
         get() = canConnect(socksHost, socksPort)
 

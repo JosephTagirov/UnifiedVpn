@@ -9,6 +9,7 @@ import org.gradle.api.tasks.TaskAction
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.nio.charset.StandardCharsets
 import java.util.Properties
+import java.io.File
 import java.io.FileInputStream
 import java.util.zip.ZipFile
 
@@ -19,6 +20,9 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
 
     @get:Input
     abstract val requiredAbis: ListProperty<String>
+
+    @get:Input
+    abstract val forbiddenBuildPathPrefixes: ListProperty<String>
 
     @TaskAction
     fun verifyBindings() {
@@ -32,17 +36,48 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
         }
 
         apkFiles.forEach { apk ->
-            val missingNativeEngines = ZipFile(apk).use { archive ->
-                requiredAbis.get().flatMap { abi ->
-                    REQUIRED_NATIVE_ENGINES.mapNotNull { library ->
-                        val path = "lib/$abi/$library"
-                        val entry = archive.getEntry(path)
-                        path.takeIf { entry == null || entry.size <= 0L }
+            val expectedNativeLibraries = requiredAbis.get()
+                .flatMap { abi -> EXPECTED_NATIVE_LIBRARIES.map { library -> "lib/$abi/$library" } }
+                .toSet()
+            val archiveEntries = ZipFile(apk).use { archive ->
+                archive.entries().asSequence().toList()
+            }
+            val nativeLibraries = archiveEntries
+                .filter { entry -> !entry.isDirectory && NATIVE_LIBRARY_ENTRY.matches(entry.name) }
+                .associateBy { entry -> entry.name }
+            val missingNativeLibraries = expectedNativeLibraries.filter { path ->
+                nativeLibraries[path]?.size?.let { size -> size > 0L } != true
+            }
+            val unexpectedNativeLibraries = nativeLibraries.keys - expectedNativeLibraries
+            check(missingNativeLibraries.isEmpty()) {
+                "${apk.name} is missing native libraries: ${missingNativeLibraries.sorted().joinToString()}."
+            }
+            check(unexpectedNativeLibraries.isEmpty()) {
+                "${apk.name} contains unexpected native libraries or ABIs: " +
+                    unexpectedNativeLibraries.sorted().joinToString()
+            }
+
+            val forbiddenEntries = archiveEntries
+                .map { entry -> entry.name.replace('\\', '/') }
+                .filter(::isForbiddenArchiveEntry)
+            check(forbiddenEntries.isEmpty()) {
+                "${apk.name} contains forbidden private build inputs: ${forbiddenEntries.sorted().joinToString()}."
+            }
+
+            val forbiddenNativeLibraries = ZipFile(apk).use { archive ->
+                nativeLibraries.keys.mapNotNull { path ->
+                    val containsLocalPath = archive.getInputStream(archive.getEntry(path)).use { input ->
+                        val bytes = input.readBytes()
+                        forbiddenBuildPathPrefixes.get().any { prefix ->
+                            bytes.containsAsciiIgnoreCase(prefix.encodeToByteArray())
+                        }
                     }
+                    path.takeIf { containsLocalPath }
                 }
             }
-            check(missingNativeEngines.isEmpty()) {
-                "${apk.name} is missing native VPN engines: ${missingNativeEngines.sorted().joinToString()}."
+            check(forbiddenNativeLibraries.isEmpty()) {
+                "${apk.name} contains absolute local build paths in native libraries: " +
+                    forbiddenNativeLibraries.sorted().joinToString()
             }
 
             val definedClasses = ZipFile(apk).use { archive ->
@@ -62,6 +97,43 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
                     "The generated olcrtc.aar must be packaged directly into androidApp."
             }
             logger.lifecycle("Verified olcRTC bindings and native VPN engines in ${apk.name}")
+        }
+    }
+
+    private fun isForbiddenArchiveEntry(path: String): Boolean {
+        val normalized = path.lowercase().trimStart('/')
+        val fileName = normalized.substringAfterLast('/')
+        return normalized.contains("private-test-profiles/") ||
+            normalized.endsWith("/locations_v4.json") ||
+            normalized == "locations_v4.json" ||
+            fileName == "keystore.properties" ||
+            fileName == "local.properties" ||
+            fileName == ".env"
+    }
+
+    private fun ByteArray.containsAsciiIgnoreCase(needle: ByteArray): Boolean {
+        if (needle.isEmpty() || needle.size > size) return false
+
+        val lastStart = size - needle.size
+        for (start in 0..lastStart) {
+            var matches = true
+            for (offset in needle.indices) {
+                if (this[start + offset].asciiLowercase() != needle[offset].asciiLowercase()) {
+                    matches = false
+                    break
+                }
+            }
+            if (matches) return true
+        }
+        return false
+    }
+
+    private fun Byte.asciiLowercase(): Byte {
+        val value = toInt() and 0xff
+        return if (value in 'A'.code..'Z'.code) {
+            (value + ('a'.code - 'A'.code)).toByte()
+        } else {
+            this
         }
     }
 
@@ -142,16 +214,22 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
 
     companion object {
         private val DEX_ENTRY = Regex("classes(?:[2-9]|[1-9][0-9]+)?\\.dex")
+        private val NATIVE_LIBRARY_ENTRY = Regex("lib/[^/]+/[^/]+\\.so")
         private val DEX_MAGIC = byteArrayOf('d'.code.toByte(), 'e'.code.toByte(), 'x'.code.toByte(), '\n'.code.toByte())
         private val REQUIRED_BINDINGS = setOf(
             "Lmobile/Mobile;",
             "Lmobile/Runtime;",
             "Lmobile/SocketProtector;",
         )
-        private val REQUIRED_NATIVE_ENGINES = listOf(
+        private val EXPECTED_NATIVE_LIBRARIES = listOf(
+            "libandroidx.graphics.path.so",
+            "libdatastore_shared_counter.so",
+            "libgojni.so",
             "libhev-socks5-tunnel.so",
+            "libimage_processing_util_jni.so",
             "libolcbox_tun2socks.so",
             "libsing-box.so",
+            "libsurface_util_jni.so",
             "libxray.so",
         )
 
@@ -201,6 +279,26 @@ val androidAbiFilters = providers.gradleProperty("olcbox.android.abiFilters")
             .filter { it.isNotEmpty() }
     }
     .getOrElse(defaultAndroidAbiFilters)
+val forbiddenNativeBuildPathPrefixes = providers.provider {
+    val projectDirectory = rootProject.layout.projectDirectory.asFile.canonicalFile
+    val userHome = File(System.getProperty("user.home")).canonicalFile
+    val olcrtcDirectory = providers.gradleProperty("OLCRTC_REPO")
+        .orElse(providers.environmentVariable("OLCRTC_REPO"))
+        .orElse(projectDirectory.parentFile.resolve("olcrtc").absolutePath)
+        .get()
+        .let(::File)
+        .canonicalFile
+
+    val absolutePaths = listOf(projectDirectory, userHome, olcrtcDirectory)
+        .flatMap { directory ->
+            val path = directory.absolutePath
+            listOf(path, path.replace('\\', '/'))
+        }
+        .filter { it.length >= 3 }
+
+    (absolutePaths + listOf(".downloads/", ".downloads\\"))
+        .distinct()
+}
 
 require(androidAbiFilters.isNotEmpty()) {
     "olcbox.android.abiFilters must contain at least one Android ABI"
@@ -313,6 +411,7 @@ listOf("debug", "release").forEach { buildType ->
         description = "Verifies that the $buildType APK contains the olcRTC gomobile bindings."
         apkDirectory.set(layout.buildDirectory.dir("outputs/apk/$buildType"))
         requiredAbis.set(androidAbiFilters)
+        forbiddenBuildPathPrefixes.set(forbiddenNativeBuildPathPrefixes)
     }
 
     tasks.matching { task -> task.name == "assemble$buildTypeName" }.configureEach {
@@ -320,7 +419,15 @@ listOf("debug", "release").forEach { buildType ->
     }
 }
 
-tasks.register<Copy>("packageReleaseUpdateApk") {
+val androidUpdateOutputDir = layout.buildDirectory.dir("outputs/update")
+val releaseUpdateApkName = providers.provider {
+    "UnifiedVPN-${olcboxVersion.get()}-build.${olcboxBuild.get()}-android-universal.apk"
+}
+val debugUpdateApkName = providers.provider {
+    "UnifiedVPN-${olcboxVersion.get()}-build.${olcboxBuild.get()}-android-universal-debug.apk"
+}
+
+tasks.register<Sync>("packageReleaseUpdateApk") {
     group = "distribution"
     description = "Copies the signed release APK to the build-aware GitHub update filename."
     dependsOn("assembleRelease")
@@ -329,11 +436,9 @@ tasks.register<Copy>("packageReleaseUpdateApk") {
 
     from(layout.buildDirectory.dir("outputs/apk/release")) {
         include("*.apk")
-        rename {
-            "UnifiedVPN-${olcboxVersion.get()}-build.${olcboxBuild.get()}-android-universal.apk"
-        }
+        rename { releaseUpdateApkName.get() }
     }
-    into(layout.buildDirectory.dir("outputs/update"))
+    into(androidUpdateOutputDir)
 
     doFirst {
         require(hasReleaseKeystore) {
@@ -347,6 +452,14 @@ tasks.register<Copy>("packageReleaseUpdateApk") {
             "Expected exactly one release APK in ${releaseDirectory.absolutePath}; found ${releaseApks.size}"
         }
     }
+
+    doLast {
+        val files = androidUpdateOutputDir.get().asFile.listFiles().orEmpty().filter { it.isFile }
+        check(files.size == 1 && files.single().name == releaseUpdateApkName.get()) {
+            "Android release update directory must contain exactly ${releaseUpdateApkName.get()}"
+        }
+        check(files.single().length() > 0L) { "Android release update APK is empty" }
+    }
 }
 
 tasks.register<Sync>("packageDebugUpdateApk") {
@@ -358,11 +471,9 @@ tasks.register<Sync>("packageDebugUpdateApk") {
 
     from(layout.buildDirectory.dir("outputs/apk/debug")) {
         include("*.apk")
-        rename {
-            "UnifiedVPN-${olcboxVersion.get()}-build.${olcboxBuild.get()}-android-universal-debug.apk"
-        }
+        rename { debugUpdateApkName.get() }
     }
-    into(layout.buildDirectory.dir("outputs/update"))
+    into(androidUpdateOutputDir)
 
     doFirst {
         val debugDirectory = layout.buildDirectory.dir("outputs/apk/debug").get().asFile
@@ -372,5 +483,14 @@ tasks.register<Sync>("packageDebugUpdateApk") {
         require(debugApks.size == 1) {
             "Expected exactly one debug APK in ${debugDirectory.absolutePath}; found ${debugApks.size}"
         }
+    }
+
+
+    doLast {
+        val files = androidUpdateOutputDir.get().asFile.listFiles().orEmpty().filter { it.isFile }
+        check(files.size == 1 && files.single().name == debugUpdateApkName.get()) {
+            "Android debug update directory must contain exactly ${debugUpdateApkName.get()}"
+        }
+        check(files.single().length() > 0L) { "Android debug update APK is empty" }
     }
 }

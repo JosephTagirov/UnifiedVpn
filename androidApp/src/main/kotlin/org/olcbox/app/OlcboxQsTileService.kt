@@ -14,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import org.olcbox.app.ui.localization.androidUiText
 import org.olcbox.app.vpn.VpnStatus
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
@@ -57,20 +58,22 @@ class OlcboxQsTileService : TileService() {
     override fun onClick() {
         super.onClick()
 
-        val isConnected = OlcboxVpnState.isConnected.value
+        when (OlcboxVpnState.status.value) {
+            is VpnStatus.Connected,
+            is VpnStatus.Connecting,
+            is VpnStatus.Reconnecting -> stopVpn()
 
-        if (isConnected) {
-            stopVpn()
-        } else {
-            // VPN permission must be granted before the service can run.
-            // VpnService.prepare() returns null when the permission is already held.
-            val prepIntent = VpnService.prepare(applicationContext)
-            if (prepIntent == null) {
-                startVpn()
-            } else {
-                // Permission not yet granted – open the main activity so the
-                // system dialog can be shown to the user.
-                openMainApp()
+            else -> {
+                // VPN permission must be granted before the service can run.
+                // VpnService.prepare() returns null when the permission is already held.
+                val prepIntent = VpnService.prepare(applicationContext)
+                if (prepIntent == null) {
+                    startVpn()
+                } else {
+                    // Permission not yet granted - open the main activity so the
+                    // system dialog can be shown to the user.
+                    openMainApp()
+                }
             }
         }
     }
@@ -131,27 +134,27 @@ class OlcboxQsTileService : TileService() {
             is VpnStatus.Connected -> {
                 tile.state = Tile.STATE_ACTIVE
                 tile.label = getString(R.string.qs_tile_label)
-                tile.contentDescription = getString(R.string.qs_tile_connected)
+                tile.contentDescription = androidUiText("Connected")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = getString(R.string.qs_tile_connected)
+                    tile.subtitle = androidUiText("Connected")
                 }
             }
 
             is VpnStatus.Connecting, is VpnStatus.Reconnecting -> {
                 tile.state = Tile.STATE_ACTIVE
                 tile.label = getString(R.string.qs_tile_label)
-                tile.contentDescription = getString(R.string.qs_tile_connecting)
+                tile.contentDescription = androidUiText("Connecting...")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = getString(R.string.qs_tile_connecting)
+                    tile.subtitle = androidUiText("Connecting...")
                 }
             }
 
             else -> {
                 tile.state = Tile.STATE_INACTIVE
                 tile.label = getString(R.string.qs_tile_label)
-                tile.contentDescription = getString(R.string.qs_tile_disconnected)
+                tile.contentDescription = androidUiText("Disconnected")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = getString(R.string.qs_tile_disconnected)
+                    tile.subtitle = androidUiText("Disconnected")
                 }
             }
         }

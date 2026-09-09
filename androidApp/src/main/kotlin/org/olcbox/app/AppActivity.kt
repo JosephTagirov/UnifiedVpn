@@ -3,21 +3,26 @@ package org.olcbox.app
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.AndroidLogExporter
-import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
 import org.olcbox.app.data.importer.AndroidConfigImporter
 import org.olcbox.app.ui.activities.AndroidMainScreen
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationViewModel
+import org.olcbox.app.ui.settings.AndroidAppearanceSettingsStore
 import org.olcbox.app.ui.theme.AppTheme
+import org.olcbox.app.ui.theme.SyncAppSystemBars
 import org.olcbox.app.update.AppUpdateService
 import org.olcbox.app.vpn.AndroidVpnManager
 
@@ -31,6 +36,7 @@ class AppActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
 
         // Request notification permission for Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -42,9 +48,9 @@ class AppActivity : ComponentActivity() {
         val locationsRepository = LocationsRepositoryImpl(locationsDataSource)
         val configImporter = AndroidConfigImporter(this)
         val logExporter = AndroidLogExporter(this)
-        val updateService = AppUpdateService(
-            deviceIdentityProvider = PersistentDeviceIdentityProvider(locationsDataSource)
-        )
+        val updateService = AppUpdateService()
+        val appearanceSettingsStore = AndroidAppearanceSettingsStore(this)
+        val initialAppearanceSettings = appearanceSettingsStore.loadNow()
 
         val viewModel = HomeScreenViewModel(
             vpnManager = vpnManager,
@@ -56,16 +62,29 @@ class AppActivity : ComponentActivity() {
             locationsRepository = locationsRepository
         )
 
-        enableEdgeToEdge()
         setContent {
-            val dynamicThemeEnabled by vpnManager.dynamicThemeEnabled.collectAsState()
+            var appearanceSettings by remember { mutableStateOf(initialAppearanceSettings) }
+            val scope = rememberCoroutineScope()
 
-            AppTheme(useDynamicColor = dynamicThemeEnabled) {
+            SyncAppSystemBars(appearanceSettings.theme)
+
+            AppTheme(
+                useDynamicColor = false,
+                themeMode = appearanceSettings.theme,
+                language = appearanceSettings.language
+            ) {
                 AndroidMainScreen(
                     viewModel = viewModel,
                     locationViewModel = locationViewModel,
                     vpnManager = vpnManager,
-                    appUpdateService = updateService
+                    appUpdateService = updateService,
+                    appearanceSettings = appearanceSettings,
+                    onAppearanceSettingsChanged = { settings ->
+                        appearanceSettings = settings
+                        scope.launch {
+                            runCatching { appearanceSettingsStore.save(settings) }
+                        }
+                    }
                 )
             }
         }

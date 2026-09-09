@@ -16,8 +16,10 @@ class JvmUpdateSettingsStore(
     }
 
     override suspend fun save(settings: AppUpdateSettings) {
-        Files.createDirectories(file.parent)
-        Files.writeString(file, json.encodeToString(AppUpdateSettings.serializer(), settings.normalized()))
+        DesktopPaths.writePrivateString(
+            file,
+            json.encodeToString(AppUpdateSettings.serializer(), settings.normalized())
+        )
     }
 
     private companion object {

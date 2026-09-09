@@ -16,6 +16,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
+import org.olcbox.app.ui.theme.LocalAppLanguagePreference
 
 @Composable
 fun AppText(
@@ -37,7 +38,9 @@ fun AppText(
     onTextLayout: (TextLayoutResult) -> Unit = {},
     style: TextStyle = LocalTextStyle.current
 ) {
-    val language = Locale.current.language
+    val systemLanguage = Locale.current.language
+    val languagePreference = LocalAppLanguagePreference.current
+    val language = languagePreference.resolve(systemLanguage)
     val localizedText = remember(text, language) {
         localizeUiText(text, language)
     }
@@ -71,10 +74,15 @@ fun localizeUiText(text: String, language: String): String {
         text.startsWith("Connected ") && text.endsWith("ms") ->
             "Подключено за ${text.removePrefix("Connected ").removeSuffix("ms")} мс"
         text.endsWith(" Connected") -> "${text.removeSuffix(" Connected")} подключён"
+        text.endsWith(" connected") -> "${text.removeSuffix(" connected")} подключён"
+        text.startsWith("Starting ") && text.endsWith("...") ->
+            "Запуск ${text.removePrefix("Starting ").removeSuffix("...")}..."
         text.startsWith("Updated ") -> "Обновлено ${text.removePrefix("Updated ")}"
         text.startsWith("Checked ") -> "Проверено ${text.removePrefix("Checked ")}"
         text.startsWith("Downloading ") -> "Загрузка ${text.removePrefix("Downloading ")}"
         text.startsWith("Installing ") -> "Установка ${text.removePrefix("Installing ")}"
+        text.startsWith("Installation failed: ") ->
+            "Ошибка установки: ${text.removePrefix("Installation failed: ")}"
         text.startsWith("Refresh ") -> "Обновить ${text.removePrefix("Refresh ")}"
         text.startsWith("Unified VPN · every ") ->
             "Unified VPN · каждые ${text.removePrefix("Unified VPN · every ").replaceHourSuffix()}"
@@ -116,8 +124,18 @@ fun localizeUiText(text: String, language: String): String {
 
 private val russianExactText = mapOf(
     "Active" to "Активно",
+    "Appearance" to "Внешний вид",
+    "Dark" to "Тёмная",
+    "English" to "Английский",
+    "Language" to "Язык",
+    "Language and theme" to "Язык и тема",
+    "Light" to "Светлая",
+    "Russian" to "Русский",
+    "System" to "Как в системе",
+    "Theme" to "Тема",
     "Add configuration" to "Добавить подключение",
     "Add connection" to "Добавить подключение",
+    "Add a VPN profile first" to "Сначала добавьте VPN-профиль",
     "Add olcRTC location" to "Добавить профиль olcRTC",
     "Add subscription" to "Добавить подписку",
     "Add VPN profile" to "Добавить VPN-профиль",
@@ -169,6 +187,8 @@ private val russianExactText = mapOf(
     "Connect apps through Unified VPN" to "Подключить приложения через Unified VPN",
     "Connect by SSH and install AmneziaWG" to "Подключиться по SSH и установить AmneziaWG",
     "Connected" to "Подключено",
+    "Duration" to "Длительность",
+    "Connection failed" to "Ошибка подключения",
     "Connection Mode" to "Режим подключения",
     "Connection Settings" to "Настройки подключения",
     "Connection mode saved" to "Режим подключения сохранён",
@@ -179,6 +199,10 @@ private val russianExactText = mapOf(
     "Copied" to "Скопировано",
     "Copied to clipboard" to "Скопировано в буфер обмена",
     "Could not encrypt friend package" to "Не удалось зашифровать пакет для друга",
+    "Could not decrypt or install the friend package" to
+        "Не удалось расшифровать или импортировать пакет для друга",
+    "Could not prepare AmneziaWG" to "Не удалось подготовить AmneziaWG",
+    "Could not verify the SSH server" to "Не удалось проверить SSH-сервер",
     "Copy" to "Копировать",
     "Copy all locations to clipboard" to "Скопировать все профили в буфер обмена",
     "Copy settings" to "Копировать настройки",
@@ -189,6 +213,7 @@ private val russianExactText = mapOf(
     "Custom schedule" to "Своё расписание",
     "DNS server (optional)" to "DNS-сервер (необязательно)",
     "Decrypting package" to "Расшифровка пакета",
+    "Decrypt and import" to "Расшифровать и импортировать",
     "Delete" to "Удалить",
     "Delete subscription" to "Удалить подписку",
     "Delete subscription?" to "Удалить подписку?",
@@ -199,6 +224,12 @@ private val russianExactText = mapOf(
     "Encrypted friend package" to "Зашифрованный пакет для друга",
     "Encryption key" to "Ключ шифрования",
     "Endpoint" to "Адрес подключения",
+    "Enter a valid VLESS link" to "Введите корректную ссылку VLESS",
+    "Enter the independently verified SHA256 SSH fingerprint" to
+        "Введите независимо проверенный SHA256-отпечаток SSH",
+    "Enter the password received through a separate private channel. Unified VPN only decrypts and imports the included profiles." to
+        "Введите пароль, полученный по отдельному приватному каналу. Unified VPN только расшифрует и импортирует профили из пакета.",
+    "Expected SSH fingerprint" to "Ожидаемый отпечаток SSH",
     "Enter olcRTC room, key, provider, and transport" to "Введите комнату olcRTC, ключ, сервис и транспорт",
     "Enter room, key, provider, and transport" to "Введите комнату, ключ, сервис и транспорт",
     "Every app follows the same TUN route" to "Все приложения используют единый маршрут TUN",
@@ -209,7 +240,9 @@ private val russianExactText = mapOf(
     "Expose SOCKS5 without changing system routing" to "Открыть SOCKS5 без изменения системной маршрутизации",
     "Export full configuration" to "Экспортировать полную конфигурацию",
     "Fine-tune stream performance" to "Точная настройка производительности потока",
+    "Fix the olcRTC profile key" to "Исправьте ключ профиля olcRTC",
     "Friend package is damaged or unsupported" to "Пакет повреждён или не поддерживается",
+    "Friend package is too large" to "Пакет для друга слишком большой",
     "Friend package, subscription, AWG .conf, or JSON" to "Пакет для друга, подписка, AWG .conf или JSON",
     "Full tunnel" to "Полный туннель",
     "Generated password" to "Созданный пароль",
@@ -222,6 +255,7 @@ private val russianExactText = mapOf(
     "Import from file" to "Импортировать из файла",
     "Import link or URI" to "Импортировать ссылку или URI",
     "Inactive" to "Неактивно",
+    "Update installation was canceled or failed" to "Установка обновления отменена или завершилась ошибкой",
     "IP address or domain" to "IP-адрес или домен",
     "Last check" to "Последняя проверка",
     "Later" to "Позже",
@@ -239,6 +273,7 @@ private val russianExactText = mapOf(
     "Mode, SOCKS5 proxy, and app routing" to "Режим, прокси SOCKS5 и маршрутизация приложений",
     "Name" to "Название",
     "Next" to "Далее",
+    "Previous" to "Предыдущий",
     "No app list needed" to "Список приложений не требуется",
     "No clipboard data found" to "В буфере обмена нет данных",
     "No apps bypass Unified VPN" to "Нет приложений в обходе Unified VPN",
@@ -249,6 +284,7 @@ private val russianExactText = mapOf(
     "No matching apps" to "Подходящие приложения не найдены",
     "No matching installed apps" to "Подходящие установленные приложения не найдены",
     "No profile selected" to "Профиль не выбран",
+    "No profiles" to "Нет профилей",
     "No RU apps selected" to "Российские приложения не выбраны",
     "No subscriptions" to "Нет подписок",
     "No subscriptions to update" to "Нет подписок для обновления",
@@ -265,6 +301,8 @@ private val russianExactText = mapOf(
     "Package for a friend" to "Пакет для друга",
     "Package password" to "Пароль пакета",
     "Package password (12+ characters)" to "Пароль пакета (от 12 символов)",
+    "Package passwords must match and contain at least 12 characters" to
+        "Пароли пакета должны совпадать и содержать не менее 12 символов",
     "Password" to "Пароль",
     "Password is required" to "Укажите пароль",
     "Password regenerated" to "Пароль создан заново",
@@ -276,22 +314,29 @@ private val russianExactText = mapOf(
     "Ping" to "Пинг",
     "Preparing AmneziaWG" to "Подготовка AmneziaWG",
     "Preparing server" to "Подготовка сервера",
+    "Obtain this SHA256 fingerprint independently from the server administrator before continuing." to
+        "Перед продолжением получите этот SHA256-отпечаток независимо у администратора сервера.",
     "Protecting your connection" to "Защита подключения",
+    "Profile switch failed" to "Не удалось переключить профиль",
     "Profile type" to "Тип профиля",
     "Profile URI (optional)" to "URI профиля (необязательно)",
     "Profiles" to "Профили",
     "Proxy" to "Прокси",
     "Proxy -> VPN" to "Прокси -> VPN",
+    "Proxy -> SOCKS5" to "Прокси -> SOCKS5",
     "Proxy · Local SOCKS5" to "Прокси · локальный SOCKS5",
     "QR code" to "QR-код",
     "QR imported" to "QR-код импортирован",
     "Quit Unified VPN" to "Выйти из Unified VPN",
     "Raw configuration (optional)" to "Исходная конфигурация (необязательно)",
     "Ready to scan" to "Готово к сканированию",
+    "Received" to "Получено",
     "Refresh imported subscription locations" to "Обновить профили из подписок",
     "Refresh now" to "Обновить сейчас",
     "Refresh schedule" to "Расписание обновлений",
     "Refreshing…" to "Обновление…",
+    "Reconnecting..." to "Переподключение...",
+    "Restoring previous profile..." to "Восстановление предыдущего профиля...",
     "Regenerate password" to "Создать новый пароль",
     "Reordering profile" to "Перемещение профиля",
     "Repeat package password" to "Повторите пароль пакета",
@@ -301,10 +346,14 @@ private val russianExactText = mapOf(
     "Room URL" to "URL комнаты",
     "Route all traffic through a virtual adapter; Windows asks for administrator rights" to
         "Направить весь трафик через виртуальный адаптер; Windows запросит права администратора",
+    "Route all traffic through a virtual adapter" to
+        "Направить весь трафик через виртуальный адаптер",
     "Routing" to "Маршрутизация",
     "Routing Behavior" to "Правила маршрутизации",
     "RU bypass on" to "Обход российских приложений включён",
     "Save" to "Сохранить",
+    "Send the encrypted package and its password through different private channels." to
+        "Отправьте зашифрованный пакет и пароль к нему по разным приватным каналам.",
     "Save Unified VPN Logs" to "Сохранить журнал Unified VPN",
     "Saved for TUN mode" to "Сохранено для режима TUN",
     "Saving restarts the active connection" to "Сохранение перезапустит активное подключение",
@@ -316,6 +365,7 @@ private val russianExactText = mapOf(
     "Selected Apps Only" to "Только выбранные приложения",
     "Selected apps only" to "Только выбранные приложения",
     "Selected location" to "Выбранный профиль",
+    "Sent" to "Отправлено",
     "Self-hosted AmneziaWG" to "Свой сервер AmneziaWG",
     "Self-hosted AmneziaWG is ready" to "Свой сервер AmneziaWG готов",
     "Server IP or domain" to "IP-адрес или домен сервера",
@@ -329,20 +379,30 @@ private val russianExactText = mapOf(
     "Share subscription" to "Поделиться подпиской",
     "SOCKS5 Proxy" to "Прокси SOCKS5",
     "SOCKS5 -> Proxy" to "SOCKS5 -> прокси",
+    "SOCKS5 -> VPN" to "SOCKS5 -> VPN",
     "SOCKS proxy saved" to "Настройки прокси SOCKS сохранены",
     "Source" to "Источник",
+    "Split tunneling error" to "Ошибка раздельного туннелирования",
     "Split Tunneling" to "Раздельное туннелирование",
     "Split tunneling" to "Раздельное туннелирование",
     "SSH login" to "Логин SSH",
     "SSH password" to "Пароль SSH",
     "SSH port" to "Порт SSH",
+    "SSH port must be between 1 and 65535" to "Порт SSH должен быть от 1 до 65535",
+    "SSH fingerprint does not match the expected value" to
+        "Отпечаток SSH не совпадает с ожидаемым значением",
+    "SSH fingerprint matched" to "Отпечаток SSH совпал",
     "Start relay" to "Запустить подключение",
     "START" to "ПУСК",
+    "Starting proxy..." to "Запуск прокси...",
     "Stop" to "Остановить",
+    "Stopping..." to "Остановка...",
     "Stop relay" to "Остановить подключение",
     "STOP" to "СТОП",
     "Subscription" to "Подписка",
     "Subscription link" to "Ссылка подписки",
+    "Subscription or location URI" to "URI подписки или профиля",
+    "subscription or location URI" to "URI подписки или профиля",
     "Subscription not updated" to "Подписка не обновлена",
     "Subscription QR" to "QR-код подписки",
     "Subscription refresh rate" to "Частота обновления подписки",
@@ -354,14 +414,26 @@ private val russianExactText = mapOf(
     "Subscriptions & Sharing" to "Подписки и общий доступ",
     "System proxy" to "Системный прокси",
     "System VPN interface" to "Системный VPN-интерфейс",
+    "Switching profile..." to "Переключение профиля...",
     "TUN (VPN)" to "TUN (VPN)",
     "TUN mode routing rule" to "Правило маршрутизации TUN",
     "TUN · Full tunnel" to "TUN · полный туннель",
+    "Tunnel failed" to "Ошибка туннеля",
+    "Tunnel is still stopping" to "Туннель всё ещё останавливается",
+    "Tunnel restart failed" to "Не удалось перезапустить туннель",
     "The latest version of Unified VPN is already installed" to "Уже установлена самая новая версия Unified VPN",
+    "The package contains ready olcRTC, VLESS, and AmneziaWG client profiles and never performs SSH setup on this device." to
+        "Пакет содержит готовые клиентские профили olcRTC, VLESS и AmneziaWG и никогда не выполняет настройку по SSH на этом устройстве.",
+    "The package includes your olcRTC profiles, this VLESS link, and a ready AmneziaWG client profile. SSH access is never included." to
+        "Пакет включает ваши профили olcRTC, эту ссылку VLESS и готовый клиентский профиль AmneziaWG. Доступ SSH никогда не включается.",
     "This cannot be undone." to "Это действие нельзя отменить.",
     "Transport" to "Транспорт",
     "Trust and install" to "Доверять и установить",
+    "Trust and create" to "Доверять и создать",
     "Unable to open GitHub" to "Не удалось открыть GitHub",
+    "Unified VPN connection" to "Подключение Unified VPN",
+    "Unified VPN cannot run as administrator. Restart it normally. Windows TUN is temporarily unavailable; use System proxy or Local SOCKS." to
+        "Unified VPN нельзя запускать от имени администратора. Перезапустите приложение обычным способом. Windows TUN временно недоступен; используйте системный прокси или локальный SOCKS.",
     "Unified VPN update available" to "Доступно обновление Unified VPN",
     "Unified VPN update check failed" to "Не удалось проверить обновление Unified VPN",
     "Unsaved change" to "Несохранённое изменение",
@@ -379,13 +451,21 @@ private val russianExactText = mapOf(
         "Для olcRTC использовать локальный SOCKS, для остальных профилей — рекомендуемый режим",
     "Using Android system colors" to "Используются системные цвета Android",
     "Using Unified VPN colors" to "Используются цвета Unified VPN",
+    "VLESS link for this friend" to "Ссылка VLESS для этого друга",
     "Verify and create" to "Проверить и создать",
     "Verify SSH server" to "Проверить SSH-сервер",
     "Verifying SSH server" to "Проверка SSH-сервера",
+    "Change server" to "Изменить сервер",
+    "Legacy friend packages are rejected because they may contain SSH credentials" to
+        "Старые пакеты для друга отклонены, потому что они могут содержать данные SSH",
     "VPN Active" to "VPN активен",
     "VPN Inactive" to "VPN неактивен",
     "VPN -> Proxy" to "VPN -> прокси",
     "VPN -> SOCKS5" to "VPN -> SOCKS5",
+    "VPN connection status and controls" to "Состояние подключения VPN и управление",
+    "VPN tunnel error" to "Ошибка VPN-туннеля",
+    "Waiting for network..." to "Ожидание сети...",
+    "Waiting for transport..." to "Ожидание транспорта...",
     "olcRTC, VLESS, and AmneziaWG are ready" to "olcRTC, VLESS и AmneziaWG готовы"
 )
 

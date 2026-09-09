@@ -32,7 +32,12 @@ class JvmConfigImporter : ConfigImporter {
             else -> return null
         }
         return runCatching {
-            ClipboardPayloadCodec.decodeOrOriginal(Files.readString(path))
+            if (Files.size(path) > MAX_IMPORTED_CONFIG_BYTES) {
+                throw ImportSourceTooLargeException(MAX_IMPORTED_CONFIG_BYTES)
+            }
+            Files.newInputStream(path).use { input ->
+                ClipboardPayloadCodec.decodeOrOriginal(input.readBoundedUtf8())
+            }
         }.getOrNull()
     }
 }

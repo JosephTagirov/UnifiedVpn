@@ -48,3 +48,23 @@ The app imports AmneziaWG `.conf`, `awg://`, and Amnezia `vpn://` profiles and s
 Standard self-hosted Amnezia profiles that contain a regular WireGuard config run through the packaged `sing-box` executable. The adapter creates a local SOCKS inbound and routes the Android `VpnService` TUN through the existing `tun2socks` bridge.
 
 When an imported AmneziaWG config includes enabled obfuscation fields (`Jc`, `Jmin`, `Jmax`, `S1`-`S4`, `H1`-`H4`, `I1`-`I5`), the generated `wireguard` endpoint preserves those fields for an AWG-capable `sing-box`-compatible core. Stock upstream `sing-box` supports regular WireGuard configs; true AmneziaWG obfuscation still requires an AWG-capable binary or a native AmneziaWG backend.
+
+Self-hosted provisioning pulls only
+`amneziavpn/amnezia-wg@sha256:ea050861bd2012a6265817636ce7c0c15764ef955782d953cef42e05c1381250`.
+The runtime container drops all capabilities before adding only `NET_ADMIN` and
+`SYS_MODULE`, uses `no-new-privileges`, and mounts `/lib/modules` read-only.
+Changing that digest requires a separate source review and release test.
+
+## Amnezia на русском
+
+Приложение импортирует профили AmneziaWG `.conf`, `awg://` и Amnezia `vpn://`
+как отдельные выбираемые профили. Обычный WireGuard запускается через
+встроенный `sing-box`; настоящий AmneziaWG с полями обфускации требует
+AWG-совместимый core.
+
+Self-hosted настройка загружает только образ
+`amneziavpn/amnezia-wg@sha256:ea050861bd2012a6265817636ce7c0c15764ef955782d953cef42e05c1381250`.
+Контейнер сначала сбрасывает все capabilities, затем получает только
+`NET_ADMIN` и `SYS_MODULE`, использует `no-new-privileges` и подключает
+`/lib/modules` только для чтения. Смена digest требует отдельной проверки
+исходников и release-теста.

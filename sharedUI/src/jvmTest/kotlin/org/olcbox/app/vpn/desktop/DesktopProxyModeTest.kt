@@ -18,13 +18,13 @@ import kotlin.test.assertTrue
 class DesktopProxyModeTest {
 
     @Test
-    fun windowsSupportsBothSystemProxyAndAdministratorTun() {
+    fun windowsUsesProxyModesUntilProtectedTunHelperExists() {
         assertEquals(
             DesktopRoutingMode.SystemProxy,
             DesktopRoutingMode.SystemProxy.resolveFor(DesktopOs.Windows)
         )
         assertEquals(
-            DesktopRoutingMode.Tun,
+            DesktopRoutingMode.SystemProxy,
             DesktopRoutingMode.Tun.resolveFor(DesktopOs.Windows)
         )
         assertEquals(
@@ -48,7 +48,7 @@ class DesktopProxyModeTest {
         ).normalized()
 
         assertEquals(DesktopRoutingMode.Auto, settings.routingModeFor(isOlcRtcProfile = true))
-        assertEquals(DesktopRoutingMode.Tun, settings.routingModeFor(isOlcRtcProfile = false))
+        assertEquals(DesktopRoutingMode.Auto, settings.routingModeFor(isOlcRtcProfile = false))
         assertEquals(
             DesktopRoutingMode.LocalSocks,
             settings.routingModeFor(isOlcRtcProfile = true)
@@ -316,8 +316,12 @@ class DesktopProxyModeTest {
 
     @Test
     fun windowsProxyCommandsBackupShapeIsRestorable() {
-        val enable = WindowsProxyController.enableCommands("http://127.0.0.1:10809/proxy.pac")
-        assertEquals("reg", enable.first().first())
+        val trustedReg = "C:\\Windows\\System32\\reg.exe"
+        val enable = WindowsProxyController.enableCommands(
+            "http://127.0.0.1:10809/proxy.pac",
+            trustedReg
+        )
+        assertEquals(trustedReg, enable.first().first())
         assertContains(enable.flatten(), "AutoConfigURL")
         assertContains(enable.flatten(), "http://127.0.0.1:10809/proxy.pac")
 
@@ -327,7 +331,8 @@ class DesktopProxyModeTest {
                 proxyServer = "127.0.0.1:8888",
                 proxyOverride = "<local>",
                 autoConfigUrl = null
-            )
+            ),
+            trustedReg
         )
 
         assertContains(restore.flatten(), "ProxyEnable")
@@ -339,10 +344,13 @@ class DesktopProxyModeTest {
 
     @Test
     fun windowsProxyRefreshCommandUsesFullyQualifiedWinInetSignature() {
-        val refresh = WindowsProxyController.refreshCommand()
+        val trustedPowerShell =
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        val refresh = WindowsProxyController.refreshCommand(trustedPowerShell)
         val script = refresh.last()
 
-        assertEquals("powershell.exe", refresh.first())
+        assertEquals(trustedPowerShell, refresh.first())
+        assertContains(refresh, "-NonInteractive")
         assertContains(script, "System.Runtime.InteropServices.DllImport")
         assertContains(script, "System.IntPtr")
         assertContains(script, "InternetSetOption")
@@ -380,23 +388,6 @@ class DesktopProxyModeTest {
         assertContains(command, "socks5://user%20name:p%40ss%3Aword@127.0.0.1:10812")
         assertContains(command, "--mtu")
         assertContains(command, "1500")
-    }
-
-    @Test
-    fun windowsTunAdministratorRestartUsesRunAsAndPreservesArguments() {
-        val script = WindowsTunController.restartAsAdministratorScript(
-            command = "C:/Olc's/Olcbox.exe",
-            arguments = listOf("--flag", "C:/Path With Space/data"),
-            workingDirectory = "C:/Olcbox Data"
-        )
-
-        assertContains(script, "FilePath = 'C:/Olc''s/Olcbox.exe'")
-        assertContains(script, "Verb = 'RunAs'")
-        assertContains(script, "ArgumentList = '--flag \"C:/Path With Space/data\"'")
-        assertContains(script, "WorkingDirectory = 'C:/Olcbox Data'")
-        assertContains(script, "Start-Process @startArgs")
-        assertContains(script, "-PassThru")
-        assertContains(script, "${'$'}process.Id")
     }
 
     @Test
@@ -457,5 +448,16 @@ class DesktopProxyModeTest {
         )
 
         assertEquals("192.168.1.1:53", dns)
+    }
+
+    @Test
+    fun windowsDnsResolverUsesProvidedTrustedPowerShell() {
+        val trustedPowerShell =
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        val command = DesktopDnsResolver.windowsDnsCommand(trustedPowerShell)
+
+        assertEquals(trustedPowerShell, command.first())
+        assertContains(command, "-NonInteractive")
+        assertContains(command.last(), "Get-DnsClientServerAddress")
     }
 }

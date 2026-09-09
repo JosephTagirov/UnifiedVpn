@@ -5,7 +5,6 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpStatusCode
 import kotlinx.coroutines.test.runTest
-import org.olcbox.app.data.identity.DeviceIdentityProvider
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -64,7 +63,7 @@ class AppUpdateServiceTest {
     }
 
     @Test
-    fun newestBuildAssetWinsWithinPreferredFileType() {
+    fun newestBuildWinsBeforePreferredFileType() {
         val selected = AppUpdateService.selectAsset(
             assets = listOf(
                 GithubReleaseAsset(
@@ -84,8 +83,37 @@ class AppUpdateServiceTest {
         )
 
         assertEquals(
-            "UnifiedVPN-0.0.10-build.2026090203-windows-amd64-portable.zip",
+            "UnifiedVPN-0.0.10-build.2026090204-windows-amd64-installer.exe",
             selected?.name
+        )
+    }
+
+    @Test
+    fun windowsInstallerMustMatchTheSelectedBuild() {
+        val assets = listOf(
+            GithubReleaseAsset(
+                "UnifiedVPN-0.0.12-build.2026090401-windows-amd64-portable.zip",
+                "https://example/portable.zip"
+            ),
+            GithubReleaseAsset(
+                "UnifiedVPN-0.0.12-build.2026090400-windows-amd64-installer.exe",
+                "https://example/old-installer.exe"
+            ),
+            GithubReleaseAsset(
+                "UnifiedVPN-0.0.12-build.2026090401-windows-amd64-installer.exe",
+                "https://example/installer.exe"
+            )
+        )
+
+        val installer = AppUpdateService.selectWindowsInstallerAsset(
+            assets = assets,
+            platform = UpdatePlatform("windows", "amd64"),
+            requiredBuild = 2026090401L
+        )
+
+        assertEquals(
+            "UnifiedVPN-0.0.12-build.2026090401-windows-amd64-installer.exe",
+            installer?.name
         )
     }
 
@@ -119,7 +147,6 @@ class AppUpdateServiceTest {
         }
         val service = AppUpdateService(
             httpClient = HttpClient(engine),
-            deviceIdentityProvider = StaticIdentityProvider("hwid"),
             currentVersion = "1.0.42",
             platform = UpdatePlatform("android", "arm64")
         )
@@ -142,7 +169,7 @@ class AppUpdateServiceTest {
             platform = UpdatePlatform("windows", "amd64")
         )
 
-        assertEquals("Olcbox-1.0.0-windows-amd64-portable.zip", selected?.name)
+        assertEquals("Olcbox-1.0.0-windows-amd64.msi", selected?.name)
     }
 
     @Test
@@ -307,11 +334,5 @@ class AppUpdateServiceTest {
             "The latest version of Unified VPN is already installed",
             info.updateStatusMessage(AppUpdateSettings())
         )
-    }
-
-    private class StaticIdentityProvider(
-        private val value: String
-    ) : DeviceIdentityProvider {
-        override suspend fun hwid(): String = value
     }
 }

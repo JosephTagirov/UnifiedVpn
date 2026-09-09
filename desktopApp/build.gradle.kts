@@ -10,13 +10,29 @@ import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
+import org.gradle.work.InputChanges
 import org.gradle.internal.os.OperatingSystem
 import org.gradle.api.tasks.bundling.Zip
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 import java.net.URI
+import java.net.HttpURLConnection
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
+import javax.inject.Inject
+import javax.xml.XMLConstants
+import javax.xml.parsers.DocumentBuilderFactory
+import javax.xml.transform.TransformerFactory
+import javax.xml.transform.dom.DOMSource
+import javax.xml.transform.stream.StreamResult
+import org.w3c.dom.Element
 
 plugins {
     alias(libs.plugins.compose.compiler)
@@ -40,24 +56,43 @@ abstract class DownloadFileTask : DefaultTask() {
     abstract val outputFile: RegularFileProperty
 
     init {
+        outputs.upToDateWhen { hasValidCachedArchive() }
         onlyIf("download archive is not cached") {
-            val cached = outputFile.orNull?.asFile
-            cached == null || !cached.isFile || cached.length() == 0L
+            !hasValidCachedArchive()
         }
+    }
+
+    private fun hasValidCachedArchive(): Boolean {
+        val cached = outputFile.orNull?.asFile ?: return false
+        return cached.isFile && runCatching { ZipFile(cached).use { it.size() > 0 } }.getOrDefault(false)
     }
 
     @TaskAction
     fun download() {
         val output = outputFile.get().asFile
         output.parentFile.mkdirs()
-        URI(sourceUrl.get())
-            .toURL()
-            .openStream()
-            .use { input ->
-                output.outputStream().use { outputStream ->
-                    input.copyTo(outputStream)
+        val source = URI(sourceUrl.get()).toURL()
+        require(source.protocol == "https") { "Build dependencies require HTTPS" }
+        val connection = source.openConnection() as HttpURLConnection
+        connection.connectTimeout = 15_000
+        connection.readTimeout = 60_000
+        val partial = Files.createTempFile(output.parentFile.toPath(), "dependency-", ".part")
+        try {
+            require(connection.responseCode in 200..299) { "Dependency download failed with HTTP ${connection.responseCode}" }
+            require(connection.url.protocol == "https") { "Dependency redirect must use HTTPS" }
+            connection.inputStream.use { input ->
+                Files.newOutputStream(partial).use { outputStream ->
+                    val copied = input.copyTo(outputStream)
+                    val expected = connection.contentLengthLong
+                    require(expected < 0L || copied == expected) { "Dependency download is incomplete" }
                 }
             }
+            ZipFile(partial.toFile()).use { require(it.size() > 0) { "Dependency archive is empty" } }
+            Files.move(partial, output.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(partial)
+            connection.disconnect()
+        }
     }
 }
 
@@ -103,13 +138,42 @@ abstract class VerifyNativeResourcesTask : DefaultTask() {
     @TaskAction
     fun verify() {
         val root = resourcesDir.get().asFile
-        val missing = requiredPaths.get()
+        val expected = requiredPaths.get().toSet()
+        val missing = expected
             .map { root.resolve(it) }
-            .filterNot { it.isFile }
+            .filterNot { file ->
+                Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS) && file.length() > 0L
+            }
 
         require(missing.isEmpty()) {
             "Missing desktop native resources:\n" +
                     missing.joinToString(separator = "\n") { "- ${it.relativeTo(root).invariantSeparatorsPath}" }
+        }
+
+        val rootPath = root.toPath().toAbsolutePath().normalize()
+        val unexpected = Files.walk(rootPath).use { paths ->
+            paths
+                .filter { path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) }
+                .map { path -> rootPath.relativize(path.toAbsolutePath().normalize()).toString().replace('\\', '/') }
+                .filter { relative -> relative !in expected }
+                .sorted()
+                .toList()
+        }
+        require(unexpected.isEmpty()) {
+            "Unexpected desktop native resources:\n" +
+                unexpected.joinToString(separator = "\n") { "- $it" }
+        }
+
+        val links = Files.walk(rootPath).use { paths ->
+            paths
+                .filter(Files::isSymbolicLink)
+                .map { path -> rootPath.relativize(path.toAbsolutePath().normalize()).toString().replace('\\', '/') }
+                .sorted()
+                .toList()
+        }
+        require(links.isEmpty()) {
+            "Symbolic links are not allowed in desktop native resources:\n" +
+                links.joinToString(separator = "\n") { "- $it" }
         }
     }
 }
@@ -169,6 +233,10 @@ abstract class VerifyDesktopAppImageTask : DefaultTask() {
 
         val smokeRoot = temporaryDir.resolve("isolated-user-data")
         val outputFile = temporaryDir.resolve("launcher-smoke.log")
+        val markerFile = temporaryDir.resolve(
+            "unifiedvpn-native-assets-${System.nanoTime()}.ok"
+        )
+        markerFile.delete()
         val process = ProcessBuilder(launcher.absolutePath, "--verify-native-assets")
             .directory(appImage)
             .redirectErrorStream(true)
@@ -177,6 +245,7 @@ abstract class VerifyDesktopAppImageTask : DefaultTask() {
                 builder.environment()["APPDATA"] = smokeRoot.resolve("Roaming").absolutePath
                 builder.environment()["LOCALAPPDATA"] = smokeRoot.resolve("Local").absolutePath
                 builder.environment()["JPACKAGE_DEBUG"] = "true"
+                builder.environment()["UNIFIEDVPN_NATIVE_VERIFY_MARKER"] = markerFile.absolutePath
             }
             .start()
 
@@ -193,7 +262,173 @@ abstract class VerifyDesktopAppImageTask : DefaultTask() {
                 if (output.isNotBlank()) append(":\n").append(output)
             }
         }
+        val marker = markerFile.takeIf { it.isFile }?.readText().orEmpty().trim()
+        check(marker.lineSequence().any { line ->
+            line.startsWith("Verified ") && line.endsWith(" desktop native assets")
+        }) {
+            "Windows launcher exited without creating its native-assets verification marker" +
+                output.takeIf { it.isNotBlank() }?.let { ":\n$it" }.orEmpty()
+        }
         logger.lifecycle("Verified Windows JVM launch and bundled native assets in ${appImage.name}")
+    }
+}
+
+abstract class BuildAwareWindowsInstallerTask @Inject constructor(format: TargetFormat) :
+    AbstractJPackageTask(format) {
+    @get:Input
+    abstract val unifiedVpnBuild: Property<Long>
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val installerVerifier: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    val packagingJmod: File
+        get() = File(javaHome.get(), "jmods/jdk.jpackage.jmod")
+
+    fun productCode(): String = UUID.nameUUIDFromBytes(
+        listOf(
+            "UnifiedVPN.WindowsInstaller.ProductCode.v1",
+            packageVendor.getOrElse("Unknown"),
+            packageName.get(),
+            packageVersion.get(),
+            unifiedVpnBuild.get().toString()
+        ).map { requireNotNull(it) { "Windows installer identity is incomplete" } }
+            .onEach { require('\u0000' !in it) { "Installer identity contains an invalid character" } }
+            .joinToString("\u0000").toByteArray(Charsets.UTF_8)
+    ).toString().uppercase()
+
+    override fun prepareWorkingDir(inputChanges: InputChanges) {
+        super.prepareWorkingDir(inputChanges)
+        // Compose clears this directory in super; install the override afterwards.
+        val template = Files.newInputStream(packagingJmod.toPath()).use { input ->
+            check(input.readNBytes(4).contentEquals(byteArrayOf(0x4a, 0x4d, 0x01, 0x00))) {
+                "The packaging JDK does not contain a supported jpackage JMOD"
+            }
+            ZipInputStream(input).use { archive ->
+                var source: ByteArray? = null
+                while (true) {
+                    val entry = archive.nextEntry ?: break
+                    if (entry.name == "classes/jdk/jpackage/internal/resources/main.wxs") {
+                        check(source == null) { "Duplicate jpackage main.wxs resource" }
+                        val bytes = archive.readNBytes(256 * 1024 + 1)
+                        check(bytes.size <= 256 * 1024) { "Unexpectedly large jpackage main.wxs" }
+                        source = bytes
+                    }
+                }
+                checkNotNull(source) { "The packaging JDK does not provide the WiX main.wxs template" }
+            }
+        }
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            isNamespaceAware = true
+            isXIncludeAware = false
+            isExpandEntityReferences = false
+            setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+            setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "")
+            setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "")
+        }
+        val document = factory.newDocumentBuilder().parse(ByteArrayInputStream(template))
+        val namespace = "http://schemas.microsoft.com/wix/2006/wi"
+        check(document.documentElement.localName == "Wix" && document.documentElement.namespaceURI == namespace) {
+            "Unsupported jpackage WiX schema; installer template needs review"
+        }
+        fun single(parent: Element, name: String): Element {
+            val matches = (0 until parent.childNodes.length)
+                .map { parent.childNodes.item(it) }
+                .filterIsInstance<Element>()
+                .filter { it.localName == name && it.namespaceURI == namespace }
+            check(matches.size == 1) { "Expected one direct WiX $name element" }
+            return matches.single()
+        }
+        fun expect(element: Element, attribute: String, expected: String) {
+            check(element.getAttribute(attribute) == expected) {
+                "Unexpected WiX ${element.localName}/@$attribute; installer template needs review"
+            }
+        }
+        val product = single(document.documentElement, "Product")
+        expect(product, "Id", "\$(var.JpProductCode)")
+        expect(product, "Name", "\$(var.JpAppName)")
+        expect(product, "Version", "\$(var.JpAppVersion)")
+        expect(product, "Manufacturer", "\$(var.JpAppVendor)")
+        expect(product, "UpgradeCode", "\$(var.JpProductUpgradeCode)")
+        check(document.getElementsByTagNameNS(namespace, "MajorUpgrade").length == 0) {
+            "Unexpected competing WiX major-upgrade policy"
+        }
+        val upgrade = single(product, "Upgrade")
+        expect(upgrade, "Id", "\$(var.JpProductUpgradeCode)")
+        val ranges = (0 until upgrade.childNodes.length)
+            .map { upgrade.childNodes.item(it) }
+            .filterIsInstance<Element>()
+        check(ranges.size == 2 && ranges.all { it.localName == "UpgradeVersion" && it.namespaceURI == namespace }) {
+            "Unexpected WiX upgrade ranges; installer template needs review"
+        }
+        val upgradeRange = ranges.singleOrNull { it.getAttribute("Property") == "JP_UPGRADABLE_FOUND" }
+            ?: error("Missing unique WiX upgrade range")
+        val downgradeRange = ranges.singleOrNull { it.getAttribute("Property") == "JP_DOWNGRADABLE_FOUND" }
+            ?: error("Missing unique WiX downgrade range")
+        expect(upgradeRange, "Maximum", "\$(var.JpAppVersion)")
+        expect(upgradeRange, "Minimum", "")
+        expect(upgradeRange, "OnlyDetect", "\$(var.JpUpgradeVersionOnlyDetectUpgrade)")
+        expect(upgradeRange, "IncludeMaximum", "\$(var.JpUpgradeVersionOnlyDetectUpgrade)")
+        expect(downgradeRange, "Minimum", "\$(var.JpAppVersion)")
+        expect(downgradeRange, "Maximum", "")
+        expect(downgradeRange, "OnlyDetect", "\$(var.JpUpgradeVersionOnlyDetectDowngrade)")
+        expect(downgradeRange, "IncludeMinimum", "\$(var.JpUpgradeVersionOnlyDetectDowngrade)")
+        val removeExisting = single(single(product, "InstallExecuteSequence"), "RemoveExistingProducts")
+        expect(removeExisting, "Before", "CostInitialize")
+        expect(removeExisting, "After", "")
+        check(unifiedVpnBuild.get() > 0L) { "Windows installer requires a positive build number" }
+        product.setAttribute("Id", productCode())
+        upgradeRange.setAttribute("IncludeMaximum", "yes")
+        downgradeRange.setAttribute("IncludeMinimum", "no")
+
+        val output = jpackageResources.get().asFile.resolve("main.wxs")
+        output.parentFile.mkdirs()
+        val transformer = TransformerFactory.newInstance().apply {
+            setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true)
+            setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "")
+            setAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "")
+        }.newTransformer()
+        Files.newOutputStream(output.toPath()).use { stream ->
+            transformer.transform(DOMSource(document), StreamResult(stream))
+        }
+        logger.lifecycle("Prepared Windows installer ${packageVersion.get()} build ${unifiedVpnBuild.get()} ProductCode=${productCode()}")
+    }
+
+    fun verifyInstallerPolicy() {
+        val extension = when (targetFormat) {
+            TargetFormat.Exe -> "exe"
+            TargetFormat.Msi -> "msi"
+            else -> error("Windows installer policy verification requires EXE or MSI")
+        }
+        val installers = destinationDir.get().asFile.listFiles().orEmpty()
+            .filter { it.isFile && it.extension.equals(extension, ignoreCase = true) }
+        check(installers.size == 1) { "Expected exactly one compiled Windows installer" }
+        val powershell = File(
+            requireNotNull(System.getenv("SystemRoot")) { "Windows system directory is unavailable" },
+            "System32/WindowsPowerShell/v1.0/powershell.exe"
+        )
+        val log = temporaryDir.resolve("installer-policy-verification.log")
+        val process = ProcessBuilder(
+            powershell.absolutePath, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", installerVerifier.get().asFile.absolutePath,
+            "-InstallerPath", installers.single().absolutePath,
+            "-ExpectedVersion", requireNotNull(packageVersion.get()),
+            "-ExpectedBuild", unifiedVpnBuild.get().toString(),
+            "-ExpectedName", requireNotNull(packageName.get()),
+            "-ExpectedVendor", requireNotNull(packageVendor.getOrElse("Unknown")),
+            "-ExpectedUpgradeCode", requireNotNull(winUpgradeUuid.get())
+        ).redirectErrorStream(true).redirectOutput(log).start()
+        if (!process.waitFor(120L, TimeUnit.SECONDS)) {
+            process.toHandle().descendants().forEach { it.destroyForcibly() }
+            process.destroyForcibly()
+            error("Windows installer policy verification timed out")
+        }
+        val output = log.readText().trim()
+        check(process.exitValue() == 0) { "Windows installer policy verification failed:\n$output" }
+        logger.lifecycle("Verified compiled Windows installer build identity and same-version upgrade policy")
     }
 }
 
@@ -665,9 +900,18 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
     }
 }
 
-val verifyDesktopNativeResources = tasks.register<VerifyNativeResourcesTask>("verifyDesktopNativeResources") {
+val stagedHostNativeResources = layout.buildDirectory.dir("generated/hostDesktopNativeResources")
+val stageHostDesktopNativeResources = tasks.register<Sync>("stageHostDesktopNativeResources") {
     dependsOn(hostDesktopNativeAssetTasks.toList())
-    resourcesDir.set(generatedNativeResources)
+    from(generatedNativeResources) {
+        include(requiredHostNativeResourcePaths())
+    }
+    into(stagedHostNativeResources)
+}
+
+val verifyDesktopNativeResources = tasks.register<VerifyNativeResourcesTask>("verifyDesktopNativeResources") {
+    dependsOn(stageHostDesktopNativeResources)
+    resourcesDir.set(stagedHostNativeResources)
     requiredPaths.set(requiredHostNativeResourcePaths())
 }
 
@@ -678,7 +922,7 @@ tasks.register("buildDesktopNativeAssets") {
 
 sourceSets {
     main {
-        resources.srcDir(generatedNativeResources)
+        resources.srcDir(stagedHostNativeResources)
         resources.srcDir(layout.projectDirectory.dir("appIcons"))
     }
 }
@@ -725,6 +969,62 @@ if (currentBuildOs.isWindows) {
             freeArgs.add("--verbose")
         }
 
+    afterEvaluate {
+        listOf("Exe" to TargetFormat.Exe, "Msi" to TargetFormat.Msi).forEach { (suffix, format) ->
+            val original = tasks.named<AbstractJPackageTask>("packageRelease$suffix").get()
+            val inheritedDependencies = original.dependsOn.toList()
+            val outputDirectory = original.destinationDir.get()
+            val replacement = tasks.register(
+                "packageBuildAwareRelease$suffix",
+                BuildAwareWindowsInstallerTask::class.java,
+                format
+            )
+            replacement.configure {
+                group = "distribution"
+                description = "Builds a Windows installer that replaces earlier builds of the same version."
+                dependsOn(inheritedDependencies)
+                unifiedVpnBuild.set(desktopBuildNumber.toLong())
+                installerVerifier.set(rootProject.layout.projectDirectory.file("tools/Verify-WindowsInstaller.ps1"))
+                javaHome.set(original.javaHome)
+                files.from(original.files)
+                mangleJarFilesNames.set(original.mangleJarFilesNames)
+                packageFromUberJar.set(original.packageFromUberJar)
+                wixToolsetDir.set(original.wixToolsetDir)
+                installationPath.set(original.installationPath)
+                licenseFile.set(original.licenseFile)
+                iconFile.set(original.iconFile)
+                launcherMainClass.set(original.launcherMainClass)
+                launcherMainJar.set(original.launcherMainJar)
+                launcherArgs.set(original.launcherArgs)
+                launcherJvmArgs.set(original.launcherJvmArgs)
+                packageName.set(original.packageName)
+                packageDescription.set(original.packageDescription)
+                packageCopyright.set(original.packageCopyright)
+                packageVendor.set(original.packageVendor)
+                packageVersion.set(original.packageVersion)
+                packageBuildVersion.set(original.packageBuildVersion)
+                winConsole.set(original.winConsole)
+                winDirChooser.set(original.winDirChooser)
+                winPerUserInstall.set(original.winPerUserInstall)
+                winShortcut.set(original.winShortcut)
+                winMenu.set(original.winMenu)
+                winMenuGroup.set(original.winMenuGroup)
+                winUpgradeUuid.set(original.winUpgradeUuid)
+                runtimeImage.set(original.runtimeImage)
+                appImage.set(desktopAppImageDir)
+                javaRuntimePropertiesFile.set(original.javaRuntimePropertiesFile)
+                appResourcesDir.set(original.appResourcesDir)
+                freeArgs.set(original.freeArgs)
+                // Snapshot the output value, not its producer, to avoid an alias dependency cycle.
+                destinationDir.set(outputDirectory)
+                doLast { verifyInstallerPolicy() }
+            }
+            // Keep Compose's public task names, but never run their output-directory cleanup.
+            original.enabled = false
+            original.dependsOn(replacement)
+        }
+    }
+
     listOf(
         "packageReleaseDistributionForCurrentOS",
         "packageReleaseExe",
@@ -745,7 +1045,7 @@ if (currentBuildOs.isWindows) {
         dependsOn("createReleaseDistributable")
         from(jpackageAppRootDir)
         archiveFileName.set(
-            "$desktopPackageName-$desktopPackageVersion-build.$desktopBuildNumber-windows-amd64-portable.zip"
+            "$desktopPackageName-$desktopPackageVersion-build.$desktopBuildNumber-portable-manual.zip"
         )
         destinationDirectory.set(layout.buildDirectory.dir("compose/binaries/main-release/portable"))
 
@@ -758,23 +1058,43 @@ if (currentBuildOs.isWindows) {
         }
     }
 
+    val windowsUpdateOutputDir = layout.buildDirectory.dir(
+        "compose/binaries/main-release/update"
+    )
+    val windowsUpdateInstallerName =
+        "$desktopPackageName-$desktopPackageVersion-build.$desktopBuildNumber-windows-amd64-installer.exe"
+    val cleanReleaseUpdateBundle = tasks.register<Delete>("cleanReleaseUpdateBundle") {
+        delete(windowsUpdateOutputDir)
+    }
+    tasks.matching { it.name == "packageReleaseExe" }.configureEach {
+        dependsOn(cleanReleaseUpdateBundle)
+    }
+
     tasks.register<Sync>("packageReleaseUpdateBundle") {
         group = "distribution"
-        description = "Collects build-aware Windows update assets for GitHub without publishing them."
-        dependsOn("packageReleaseExe", "packageReleasePortableZip")
+        description = "Collects the installer-only Windows update asset without publishing it."
+        dependsOn("packageReleaseExe")
         inputs.property("unifiedVpnPackageVersion", desktopPackageVersion)
         inputs.property("unifiedVpnBuildNumber", desktopBuildNumber)
 
         from(layout.buildDirectory.dir("compose/binaries/main-release/exe")) {
             include("*.exe")
-            rename {
-                "$desktopPackageName-$desktopPackageVersion-build.$desktopBuildNumber-windows-amd64-installer.exe"
+            rename { windowsUpdateInstallerName }
+        }
+        into(windowsUpdateOutputDir)
+
+        doLast {
+            val files = windowsUpdateOutputDir.get().asFile
+                .listFiles()
+                .orEmpty()
+                .filter { it.isFile }
+            check(files.size == 1 && files.single().name == windowsUpdateInstallerName) {
+                "Windows update bundle must contain exactly $windowsUpdateInstallerName"
+            }
+            check(files.single().length() > 0L) {
+                "Windows update installer is empty"
             }
         }
-        from(layout.buildDirectory.dir("compose/binaries/main-release/portable")) {
-            include("*$desktopPackageVersion-build.$desktopBuildNumber-windows-amd64-portable.zip")
-        }
-        into(layout.buildDirectory.dir("compose/binaries/main-release/update"))
     }
 }
 

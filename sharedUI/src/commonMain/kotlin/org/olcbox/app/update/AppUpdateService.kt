@@ -11,7 +11,6 @@ import kotlinx.serialization.json.Json
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.datasource.createProxyHttpClient
 import org.olcbox.app.data.datasource.withProxyAuthentication
-import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 
 @Serializable
@@ -52,12 +51,12 @@ data class AppUpdateInfo(
     val publishedAt: String?,
     val asset: AppUpdateAsset,
     val isUpdateAvailable: Boolean,
-    val build: Long? = null
+    val build: Long? = null,
+    val windowsInstallerAsset: AppUpdateAsset? = null
 )
 
 class AppUpdateService(
     private val httpClient: HttpClient = createUpdateHttpClient(),
-    private val deviceIdentityProvider: DeviceIdentityProvider,
     private val mirror: ReleaseMirror = ReleaseMirror.GitHub,
     private val currentVersion: String = CurrentAppInfo.value.version,
     private val currentBuild: Long = CurrentAppInfo.value.build,
@@ -79,6 +78,15 @@ class AppUpdateService(
 
         val version = updateVersion(channel, release.tagName, asset)
         val build = assetBuildNumber(asset.name)
+        val windowsInstallerAsset = if (platform.os == "windows") {
+            selectWindowsInstallerAsset(
+                assets = release.assets,
+                platform = platform,
+                requiredBuild = build
+            )
+        } else {
+            null
+        }
         AppUpdateInfo(
             channel = channel,
             version = version,
@@ -92,7 +100,8 @@ class AppUpdateService(
                 releaseBuild = build,
                 currentBuild = currentBuild
             ),
-            build = build
+            build = build,
+            windowsInstallerAsset = windowsInstallerAsset
         )
     }
 
@@ -123,12 +132,10 @@ class AppUpdateService(
             ReleaseChannel.Nightly -> "https://api.github.com/repos/${mirror.ownerRepo}/releases/tags/nightly"
         }
 
-        val hwid = deviceIdentityProvider.hwid()
         val response = client.get(endpoint) {
             headers {
                 append(HttpHeaders.Accept, "application/vnd.github+json")
                 append(HttpHeaders.UserAgent, CurrentAppInfo.userAgent)
-                append("x-hwid", hwid)
             }
         }
 
@@ -146,16 +153,33 @@ class AppUpdateService(
                 else -> selectAssetByTokens(assets, platform.assetToken, platform.preferredExtensions)
             }
 
-            return asset?.let {
-                AppUpdateAsset(
-                    name = it.name,
-                    downloadUrl = it.browserDownloadUrl,
-                    sizeBytes = it.size,
-                    updatedAt = it.updatedAt,
-                    digest = it.digest
-                )
-            }
+            return asset?.toAppUpdateAsset()
         }
+
+        internal fun selectWindowsInstallerAsset(
+            assets: List<GithubReleaseAsset>,
+            platform: UpdatePlatform,
+            requiredBuild: Long?
+        ): AppUpdateAsset? {
+            if (platform.os != "windows") return null
+            val matchingAssets = assets.filter { candidate ->
+                val name = candidate.name.lowercase()
+                platform.assetToken.all { it in name } &&
+                    name.endsWith(".exe") &&
+                    (requiredBuild == null || assetBuildNumber(candidate.name) == requiredBuild)
+            }
+            return matchingAssets
+                .maxByOrNull { assetBuildNumber(it.name) ?: Long.MIN_VALUE }
+                ?.toAppUpdateAsset()
+        }
+
+        private fun GithubReleaseAsset.toAppUpdateAsset(): AppUpdateAsset = AppUpdateAsset(
+            name = name,
+            downloadUrl = browserDownloadUrl,
+            sizeBytes = size,
+            updatedAt = updatedAt,
+            digest = digest
+        )
 
         private fun selectAndroidAsset(
             assets: List<GithubReleaseAsset>,
@@ -192,13 +216,19 @@ class AppUpdateService(
             candidates: List<GithubReleaseAsset>,
             preferredExtensions: List<String>
         ): GithubReleaseAsset? {
+            val newestBuild = candidates.mapNotNull { assetBuildNumber(it.name) }.maxOrNull()
+            val newestCandidates = if (newestBuild == null) {
+                candidates
+            } else {
+                candidates.filter { assetBuildNumber(it.name) == newestBuild }
+            }
             return preferredExtensions
                 .firstNotNullOfOrNull { extension ->
-                    candidates
+                    newestCandidates
                         .filter { it.name.lowercase().endsWith(extension) }
-                        .maxByOrNull { assetBuildNumber(it.name) ?: Long.MIN_VALUE }
+                        .maxByOrNull { it.name }
                 }
-                ?: candidates.maxByOrNull { assetBuildNumber(it.name) ?: Long.MIN_VALUE }
+                ?: newestCandidates.maxByOrNull { it.name }
         }
 
         fun isUpdateAvailable(
@@ -288,7 +318,7 @@ data class UpdatePlatform(
 
     val preferredExtensions: List<String>
         get() = when (os) {
-            "windows" -> listOf(".zip", ".msi", ".exe")
+            "windows" -> listOf(".exe", ".msi", ".zip")
             "linux" -> listOf(".appimage")
             "android" -> listOf(".apk")
             else -> emptyList()

@@ -31,6 +31,7 @@ class DesktopOlcRtcIntegrationTest {
         if (!System.getProperty("os.name").contains("windows", ignoreCase = true)) {
             return@runBlocking
         }
+        requireIsolatedDesktopTestAppData()
 
         val repository = LocationsRepositoryImpl(JvmLocationsDataSourceImpl(dataDir))
         val profileName = System.getenv(TEST_PROFILE_ENV)
@@ -74,6 +75,24 @@ class DesktopOlcRtcIntegrationTest {
             )
         } finally {
             manager.close()
+        }
+    }
+
+    private fun requireIsolatedDesktopTestAppData() {
+        val expectedRoot = System.getenv("UNIFIEDVPN_TEST_APPDATA_ROOT")
+            ?.takeIf(String::isNotBlank)
+            ?.let(Path::of)
+            ?.toAbsolutePath()
+            ?.normalize()
+            ?: error("Desktop integration tests require isolated application data")
+        val appData = System.getenv("APPDATA")
+            ?.takeIf(String::isNotBlank)
+            ?.let(Path::of)
+            ?.toAbsolutePath()
+            ?.normalize()
+            ?: error("APPDATA is unavailable")
+        require(appData.startsWith(expectedRoot)) {
+            "Desktop integration tests refuse to use normal application data"
         }
     }
 
@@ -222,6 +241,9 @@ class DesktopOlcRtcIntegrationTest {
             val tlsSocket = socketFactory.createSocket(socket, host, 443, false) as SSLSocket
             tlsSocket.use { tls ->
                 tls.soTimeout = 20_000
+                tls.sslParameters = tls.sslParameters.apply {
+                    endpointIdentificationAlgorithm = "HTTPS"
+                }
                 tls.startHandshake()
                 val request = buildString {
                     append("GET / HTTP/1.1\r\n")

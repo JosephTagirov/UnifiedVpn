@@ -1,37 +1,37 @@
 package org.olcbox.app.ui.theme
 
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProvideTextStyle
-import androidx.compose.material3.RippleConfiguration
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.mutableStateOf
+import org.olcbox.app.ui.settings.AppLanguagePreference
+import org.olcbox.app.ui.settings.AppThemePreference
 
 internal val LocalThemeIsDark = compositionLocalOf { mutableStateOf(true) }
+internal val LocalAppLanguagePreference = compositionLocalOf { AppLanguagePreference.System }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun AppThemeContent(content: @Composable () -> Unit) {
-    val pressFeedback = RippleConfiguration(
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.58f)
-    )
-    CompositionLocalProvider(LocalRippleConfiguration provides pressFeedback) {
-        ProvideTextStyle(MaterialTheme.typography.bodyMedium, content)
-    }
+    ProvideTextStyle(MaterialTheme.typography.bodyMedium, content)
 }
 
 @Composable
 fun AppTheme(
     content: @Composable () -> Unit
 ) {
-    AppTheme(useDynamicColor = false, content = content)
+    AppTheme(
+        useDynamicColor = false,
+        themeMode = AppThemePreference.System,
+        language = AppLanguagePreference.System,
+        content = content
+    )
 }
 
 @Composable
 expect fun AppTheme(
     useDynamicColor: Boolean,
+    themeMode: AppThemePreference = AppThemePreference.System,
+    language: AppLanguagePreference = AppLanguagePreference.System,
     content: @Composable () -> Unit
 )

@@ -29,12 +29,14 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun RelayStatus(
     isActive: Boolean,
+    isLoading: Boolean = false,
     requiresSetup: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val isReady = isActive && !isLoading
     val containerColor by animateColorAsState(
         targetValue = when {
-            isActive -> MaterialTheme.colorScheme.primaryContainer
+            isReady -> MaterialTheme.colorScheme.primaryContainer
             requiresSetup -> MaterialTheme.colorScheme.surfaceContainerLow
             else -> MaterialTheme.colorScheme.surfaceContainerLow
         },
@@ -42,28 +44,31 @@ fun RelayStatus(
     )
     val iconContainerColor by animateColorAsState(
         targetValue = when {
-            isActive -> MaterialTheme.colorScheme.primary
+            isReady -> MaterialTheme.colorScheme.primary
             requiresSetup -> MaterialTheme.colorScheme.secondaryContainer
             else -> MaterialTheme.colorScheme.secondaryContainer
         },
         label = "relayStatusIconContainer"
     )
     val iconContentColor = when {
-        isActive -> MaterialTheme.colorScheme.onPrimary
+        isReady -> MaterialTheme.colorScheme.onPrimary
         requiresSetup -> MaterialTheme.colorScheme.onSecondaryContainer
         else -> MaterialTheme.colorScheme.onSecondaryContainer
     }
     val textColor = when {
-        isActive -> MaterialTheme.colorScheme.onPrimaryContainer
+        isReady -> MaterialTheme.colorScheme.onPrimaryContainer
         requiresSetup -> MaterialTheme.colorScheme.onSurface
         else -> MaterialTheme.colorScheme.onSurface
     }
     val title = when {
+        isLoading -> "Unified VPN"
         isActive -> "VPN Active"
         requiresSetup -> "VPN Inactive"
         else -> "VPN Inactive"
     }
     val subtitle = when {
+        isLoading && isActive -> "Reconnecting..."
+        isLoading -> "Connecting..."
         isActive -> "Connected"
         requiresSetup -> "No profile selected"
         else -> "Disconnected"
@@ -88,7 +93,7 @@ fun RelayStatus(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isActive) {
+                    if (isReady) {
                         Icon(
                             tint = iconContentColor,
                             imageVector = Icons.Rounded.VerifiedUser,

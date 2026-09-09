@@ -48,8 +48,10 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
+import org.olcbox.app.ui.features.locations.CUSTOM_PROFILE_REORDER_GROUP
 import org.olcbox.app.ui.features.locations.components.LocationRow
 import org.olcbox.app.ui.features.locations.components.RefreshButton
+import org.olcbox.app.ui.features.locations.reorderGroupKey
 
 @Composable
 fun LocationSelectorScreen(
@@ -67,7 +69,7 @@ fun LocationSelectorScreen(
     Column(modifier = modifier.fillMaxWidth()) {
         val subscriptionLocations = locations.filter { !it.subscriptionUrl.isNullOrBlank() }
         val subscriptionGroups = subscriptionLocations
-            .groupBy { it.subscriptionGroupKey() }
+            .groupBy { it.reorderGroupKey() }
             .values
             .toList()
         val customLocations = locations.filter { it.subscriptionUrl.isNullOrBlank() }
@@ -108,7 +110,7 @@ fun LocationSelectorScreen(
 
                     Spacer(modifier = Modifier.height(2.dp))
 
-                    key(group.first().subscriptionGroupKey()) {
+                    key(group.first().reorderGroupKey()) {
                         ReorderableLocationGroup(
                             locations = group,
                             selectedLocationId = selectedLocationId,
@@ -149,7 +151,7 @@ fun LocationSelectorScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    key(CUSTOM_PROFILE_GROUP_KEY) {
+                    key(CUSTOM_PROFILE_REORDER_GROUP) {
                         ReorderableLocationGroup(
                             locations = customLocations,
                             selectedLocationId = selectedLocationId,
@@ -557,13 +559,6 @@ private fun PingsState.isOffline(locationId: String): Boolean {
     }
 }
 
-private fun LocationItem.subscriptionGroupKey(): String {
-    return listOfNotNull(
-        metadata?.subscription?.name?.takeIf { it.isNotBlank() },
-        subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }
-    ).joinToString("|").ifBlank { storageId }
-}
-
 private fun LocationItem.subscriptionTitle(): String {
     val subscription = metadata?.subscription
 
@@ -601,4 +596,3 @@ private const val DAY_MILLIS = 24 * HOUR_MILLIS
 private val PROFILE_ROW_HEIGHT = 76.dp
 private val PROFILE_ROW_SPACING = 12.dp
 private const val EDGE_DRAG_RESISTANCE = 0.2f
-private const val CUSTOM_PROFILE_GROUP_KEY = "custom-profiles"

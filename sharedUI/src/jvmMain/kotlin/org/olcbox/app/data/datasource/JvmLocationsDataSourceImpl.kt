@@ -7,11 +7,9 @@ import org.olcbox.app.data.LEGACY_LOCATIONS_BUNDLE_FILE_NAME
 import org.olcbox.app.data.LOCATIONS_BUNDLE_FILE_NAME
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.desktop.DesktopPaths
-import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.exists
 import kotlin.io.path.readText
-import kotlin.io.path.writeText
 
 class JvmLocationsDataSourceImpl(
     private val appDir: Path = DesktopPaths.appDataDir()
@@ -43,8 +41,8 @@ class JvmLocationsDataSourceImpl(
     }
 
     override suspend fun saveLocationBundle(bundle: LocationBundleV4): Unit = withContext(Dispatchers.IO) {
-        Files.createDirectories(appDir)
-        bundleFile.writeText(
+        DesktopPaths.writePrivateString(
+            bundleFile,
             json.encodeToString(LocationBundleV4.serializer(), bundle.normalized())
         )
     }
@@ -62,7 +60,6 @@ class JvmLocationsDataSourceImpl(
     }
 
     override suspend fun saveDeviceIdentity(value: String): Unit = withContext(Dispatchers.IO) {
-        Files.createDirectories(appDir)
-        deviceIdentityFile.writeText(value.trim())
+        DesktopPaths.writePrivateString(deviceIdentityFile, value.trim())
     }
 }

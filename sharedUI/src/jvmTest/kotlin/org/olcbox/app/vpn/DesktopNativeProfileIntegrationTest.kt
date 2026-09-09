@@ -42,6 +42,7 @@ class DesktopNativeProfileIntegrationTest {
 
     private suspend fun runProfile(rawConfig: String, expectedType: String) {
         if (!System.getProperty("os.name").contains("windows", ignoreCase = true)) return
+        requireIsolatedDesktopTestAppData()
         val dataDir = Files.createTempDirectory("unified-vpn-native-profile-test-")
         val repository = LocationsRepositoryImpl(JvmLocationsDataSourceImpl(dataDir))
         val manager = DesktopVpnManager(repository)
@@ -55,7 +56,8 @@ class DesktopNativeProfileIntegrationTest {
                     port = 11920,
                     username = "integration-user",
                     password = "integration-password",
-                    routingMode = DesktopRoutingMode.LocalSocks
+                    routingMode = DesktopRoutingMode.LocalSocks,
+                    externalRoutingMode = DesktopRoutingMode.LocalSocks
                 )
             )
 
@@ -92,6 +94,24 @@ class DesktopNativeProfileIntegrationTest {
         } finally {
             manager.close()
             deleteRecursively(dataDir)
+        }
+    }
+
+    private fun requireIsolatedDesktopTestAppData() {
+        val expectedRoot = System.getenv("UNIFIEDVPN_TEST_APPDATA_ROOT")
+            ?.takeIf(String::isNotBlank)
+            ?.let(Path::of)
+            ?.toAbsolutePath()
+            ?.normalize()
+            ?: error("Desktop integration tests require isolated application data")
+        val appData = System.getenv("APPDATA")
+            ?.takeIf(String::isNotBlank)
+            ?.let(Path::of)
+            ?.toAbsolutePath()
+            ?.normalize()
+            ?: error("APPDATA is unavailable")
+        require(appData.startsWith(expectedRoot)) {
+            "Desktop integration tests refuse to use normal application data"
         }
     }
 

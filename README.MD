@@ -20,6 +20,10 @@ Linux packages are built as portable AppImage files.
 
 Release history is maintained in [CHANGELOG.md](CHANGELOG.md).
 
+See the [0.0.12 release notes](docs/releases/0.0.12.md) before updating:
+Windows TUN is temporarily unavailable, and Android VLESS showed intermittent
+DNS/TLS failures during startup validation.
+
 ## Legal Notice
 This software is intended for development, testing and research purposes only.
 
@@ -49,7 +53,7 @@ The author does not support or encourage such use.
 - Diagnostics log view with log export.
 - Android TUN/proxy modes, SOCKS5 credentials, separate split tunneling for olcRTC and VLESS/AmneziaWG.
 - Network migration, reconnect handling, and watchdog recovery.
-- Password-protected friend packages for Android and Windows: shared olcRTC profiles, an explicitly selected VLESS link, and one-action creation of a separate AmneziaWG peer.
+- Password-protected friend packages for Android and Windows: shared olcRTC profiles, an explicitly selected VLESS link, and a separate AmneziaWG peer provisioned by the package creator.
 
 ## Updates
 
@@ -62,6 +66,17 @@ update. When semantic versions are equal, an asset is offered only when its
 `build.<number>` is greater than the installed build. Release APK, EXE, and ZIP
 asset names must therefore contain that build token.
 
+The machine-wide Windows installer keeps the `0.0.11` upgrade family and uses
+a different ProductCode for each build. Its compiled MSI policy includes older
+builds with the same semantic version, while preserving the Start-menu path.
+This metadata and the packaged launcher were verified; installation over the
+owner's working Windows copy was not performed by the automated tests.
+
+Android and Windows download updates inside the application, with progress and
+mandatory HTTPS, size and SHA-256 verification, then open the local installer.
+System installation confirmation is still required. This release supplies an
+APK and Windows EXE; the manual portable ZIP is not an auto-update asset.
+
 Checks for updates of the original [olcbox](https://github.com/alananisimov/olcbox)
 and [Amnezia VPN](https://github.com/amnezia-vpn/amnezia-client) are not run by
 the application. They can be monitored separately by the owner's private
@@ -70,28 +85,32 @@ server-side notifier.
 ## Secure Friend Packages
 
 The friend-package creator includes only olcRTC profiles, the VLESS URI entered
-for that friend, and verified SSH provisioning data. Existing VLESS and
-AmneziaWG profiles are deliberately excluded, so an existing AWG private key is
-never reused.
+for that friend, and a ready AmneziaWG client configuration created specifically
+for that friend. Existing VLESS and AmneziaWG profiles are deliberately
+excluded, so an existing AWG private key is never reused.
 
 Packages are encrypted with AES-256-GCM. Send the encrypted package and its
 password through different private channels. Do not publish either item. The
-receiver creates a separate AWG peer and client private key; the SSH password is
-not stored after provisioning.
+creator obtains the complete SSH `SHA256:...` fingerprint independently and
+Unified VPN verifies it before sending any SSH credential. Provisioning then
+runs locally on the creator's device. The resulting package never contains the
+SSH login, password, SSH port, or host key. The receiver only decrypts and
+imports the ready profiles; legacy credential-bearing v1 packages are rejected.
 
 To create one combined link, open `Settings -> Subscriptions & Sharing ->
 Package for a friend`, enter the VLESS URI, SSH server details, and a package
-password. Unified VPN produces one encrypted `unifiedvpn-friend-v1:` string.
+password. Unified VPN first creates a separate AWG peer and then produces one
+encrypted `unifiedvpn-friend-v2:` string.
 The receiver copies that complete string and selects `+ -> Paste link, URI, or
 friend package`, then enters the package password. The app imports olcRTC and
-VLESS, provisions a separate AWG peer, and adds all three profiles.
+VLESS and adds the already provisioned AmneziaWG profile.
 
 ## Platform Matrix
 
 | Platform | Modes | Runtime |
 | --- | --- | --- |
 | Android | TUN, proxy | `VpnService`, `hev-socks5-tunnel`, local `olcrtc`, `sing-box`, and Xray SOCKS5 runtimes |
-| Windows x86-64 | system proxy, local SOCKS, optional TUN | bundled `olcrtc`, `sing-box`, Xray, `tun2socks`, and Wintun runtimes |
+| Windows x86-64 | system proxy, local SOCKS | bundled `olcrtc`, `sing-box`, and Xray runtimes; TUN assets remain packaged for a future isolated helper |
 | Linux x86-64/arm64 | local SOCKS, optional TUN | bundled `olcrtc`, AWG `sing-box`, Xray, and `hev-socks5-tunnel` runtimes |
 
 ## Requirements
@@ -103,7 +122,7 @@ VLESS, provisions a separate AWG peer, and adds all three profiles.
 | Android olcRTC | Go, `gomobile`, and local `olcrtc` fork |
 | Android VLESS | Packaged `sing-box` and Xray executables as `jniLibs/<abi>/libsing-box.so` and `libxray.so` |
 | Windows native assets | Go and local `olcrtc` fork |
-| Windows TUN | UAC elevation when TUN starts and bundled Wintun runtime |
+| Windows TUN | Temporarily unavailable: elevating the complete GUI/native runtime is refused until a narrow privileged helper is implemented |
 | Linux native assets | JDK 17+, Go, C toolchain, `make`, FUSE/AppImage tools, AWG `sing-box`, and Xray |
 
 Default local `olcrtc` path:
@@ -150,8 +169,8 @@ The checkout must be clean and match the full `olcbox.olcrtcSha` pinned in
 | Android signed update APK | `.\gradlew.bat :androidApp:packageReleaseUpdateApk` | `androidApp\build\outputs\update\UnifiedVPN-<version>-build.<build>-android-universal.apk` |
 | Windows EXE | `.\gradlew.bat :desktopApp:packageReleaseExe --no-daemon` | `desktopApp\build\compose\binaries\main-release\exe\UnifiedVPN-<version>.exe` |
 | Windows MSI | `.\gradlew.bat :desktopApp:packageReleaseMsi --no-daemon` | `desktopApp\build\compose\binaries\main-release\msi\UnifiedVPN-<version>.msi` |
-| Windows portable ZIP | `.\gradlew.bat :desktopApp:packageReleasePortableZip` | `desktopApp\build\compose\binaries\main-release\portable\UnifiedVPN-<version>-build.<build>-windows-amd64-portable.zip` |
-| Windows update bundle | `.\gradlew.bat :desktopApp:packageReleaseUpdateBundle` | `desktopApp\build\compose\binaries\main-release\update\UnifiedVPN-<version>-build.<build>-windows-amd64-*` |
+| Windows manual portable ZIP | `.\gradlew.bat :desktopApp:packageReleasePortableZip` | `desktopApp\build\compose\binaries\main-release\portable\UnifiedVPN-<version>-build.<build>-portable-manual.zip` |
+| Windows update bundle | `.\gradlew.bat :desktopApp:packageReleaseUpdateBundle` | `desktopApp\build\compose\binaries\main-release\update\UnifiedVPN-<version>-build.<build>-windows-amd64-installer.exe` |
 | Linux AppImage | `./gradlew :desktopApp:packageReleaseLinuxAppImage --no-daemon` | `desktopApp/build/compose/binaries/main-release/appimage/UnifiedVPN-<version>-build.<build>-linux-<arch>.AppImage` |
 
 ## Native Assets
@@ -173,6 +192,9 @@ The checkout must be clean and match the full `olcbox.olcrtcSha` pinned in
 - Android native ABIs: `armeabi-v7a`, `arm64-v8a`, `x86_64`.
 - Android release builds require `keystore.properties` in the repository root.
 - Windows installers must be built on Windows with `jpackage` and WiX available.
+- Keep the manual portable ZIP out of GitHub release assets while clients older
+  than `0.0.12` remain supported. Released `0.0.11` prefers a matching ZIP and
+  would otherwise bypass the registered installer upgrade path.
 - Linux AppImage must be built and smoke-tested on Linux; cross-packaging from Windows is not supported.
 - `scripts/Build-LinuxRelease.sh` does not install packages, use `sudo`, restart
   services, or publish files. It checks out only the commits pinned in
@@ -211,6 +233,10 @@ VPN-клиент в первую очередь для Android, основанн
 Linux поставляется как переносимый файл AppImage.
 
 История выпусков ведётся в [CHANGELOG.md](CHANGELOG.md).
+
+Перед обновлением прочитайте [описание 0.0.12](docs/releases/0.0.12.md):
+Windows TUN временно недоступен, а при проверке Android VLESS наблюдались
+периодические ошибки DNS/TLS при запуске.
 
 ## Юридическое уведомление
 
@@ -267,6 +293,17 @@ https://github.com/JosephTagirov/UnifiedVpn/releases.
 `build.<number>` больше установленного build. Поэтому имена релизных APK, EXE и
 ZIP обязаны содержать этот build-токен.
 
+Системный Windows-установщик сохраняет семейство обновлений версии `0.0.11` и
+получает отдельный ProductCode для каждого build. Правила скомпилированного MSI
+включают замену прежних сборок с тем же номером версии и сохранением пути ярлыка
+меню «Пуск». Эти метаданные и запуск упакованной JVM проверены; установка поверх
+рабочей Windows-копии владельца автоматическими тестами не выполнялась.
+
+Android и Windows скачивают обновление внутри приложения с прогрессом и
+обязательной проверкой HTTPS, размера и SHA-256, затем открывают локальный
+установщик. Системное подтверждение установки остаётся обязательным. Выпуск
+содержит APK и Windows EXE; ручной portable ZIP не является файлом автообновления.
+
 Само приложение не проверяет обновления оригинальных
 [olcbox](https://github.com/alananisimov/olcbox) и
 [Amnezia VPN](https://github.com/amnezia-vpn/amnezia-client). Владелец может
@@ -275,29 +312,32 @@ ZIP обязаны содержать этот build-токен.
 ## Безопасные пакеты для друзей
 
 Создатель пакета включает только профили olcRTC, введённый специально для друга
-VLESS URI и проверенные данные для настройки по SSH. Существующие профили VLESS
-и AmneziaWG намеренно исключаются, поэтому уже используемый закрытый ключ AWG
-никогда не передаётся повторно.
+VLESS URI и готовую конфигурацию клиента AmneziaWG, созданную отдельно для этого
+друга. Существующие профили VLESS и AmneziaWG намеренно исключаются, поэтому уже
+используемый закрытый ключ AWG никогда не передаётся повторно.
 
 Пакеты шифруются с помощью AES-256-GCM. Передавайте зашифрованный пакет и пароль
-по разным закрытым каналам. Не публикуйте ни один из них. На устройстве
-получателя создаются отдельный AWG peer и закрытый ключ клиента; пароль SSH
-после настройки не хранится.
+по разным закрытым каналам. Не публикуйте ни один из них. Создатель заранее
+получает полный SSH fingerprint `SHA256:...` независимым способом, а Unified VPN
+проверяет его до отправки любых SSH-данных. Настройка сервера выполняется
+локально на устройстве создателя. Итоговый пакет никогда не содержит SSH-логин,
+пароль, SSH-порт или host key. Получатель только расшифровывает и импортирует
+готовые профили; старые пакеты v1 с учётными данными отклоняются.
 
 Чтобы создать одну объединённую ссылку, откройте `Настройки -> Подписки и общий
 доступ -> Пакет для друга`, введите VLESS URI, данные SSH-сервера и пароль
-пакета. Unified VPN создаст одну зашифрованную строку
-`unifiedvpn-friend-v1:`. Получатель копирует строку целиком, выбирает
+пакета. Unified VPN сначала создаст отдельный AWG peer, затем сформирует одну
+зашифрованную строку `unifiedvpn-friend-v2:`. Получатель копирует строку целиком, выбирает
 `+ -> Вставить ссылку, URI или пакет для друга` и вводит пароль пакета.
-Приложение импортирует olcRTC и VLESS, создаёт отдельный AWG peer и добавляет все
-три профиля.
+Приложение импортирует olcRTC и VLESS и добавляет уже подготовленный профиль
+AmneziaWG.
 
 ## Поддерживаемые платформы
 
 | Платформа | Режимы | Среда выполнения |
 | --- | --- | --- |
 | Android | TUN, прокси | `VpnService`, `hev-socks5-tunnel`, локальные среды SOCKS5 `olcrtc`, `sing-box` и Xray |
-| Windows x86-64 | системный прокси, локальный SOCKS, необязательный TUN | встроенные `olcrtc`, `sing-box`, Xray, `tun2socks` и Wintun |
+| Windows x86-64 | системный прокси, локальный SOCKS | встроенные `olcrtc`, `sing-box` и Xray; файлы TUN остаются в пакете для будущего изолированного helper |
 | Linux x86-64/arm64 | локальный SOCKS, необязательный TUN | встроенные `olcrtc`, AWG `sing-box`, Xray и `hev-socks5-tunnel` |
 
 ## Требования
@@ -309,7 +349,7 @@ VLESS URI и проверенные данные для настройки по 
 | olcRTC для Android | Go, `gomobile` и локальная копия olcrtc |
 | VLESS для Android | Встроенные `sing-box` и Xray в `jniLibs/<abi>/libsing-box.so` и `libxray.so` |
 | Нативные файлы Windows | Go и локальная копия olcrtc |
-| TUN для Windows | Запрос UAC при запуске TUN и встроенная среда Wintun |
+| TUN для Windows | Временно недоступен: повышение прав всего GUI/native runtime запрещено до появления узкого привилегированного helper |
 | Нативные файлы Linux | JDK 17+, Go, C toolchain, `make`, FUSE/AppImage tools, AWG `sing-box` и Xray |
 
 Путь к локальному `olcrtc` по умолчанию:
@@ -357,8 +397,8 @@ $env:OLCRTC_REPO="C:\path\to\olcrtc"
 | Подписанный APK обновления Android | `.\gradlew.bat :androidApp:packageReleaseUpdateApk` | `androidApp\build\outputs\update\UnifiedVPN-<version>-build.<build>-android-universal.apk` |
 | Windows EXE | `.\gradlew.bat :desktopApp:packageReleaseExe --no-daemon` | `desktopApp\build\compose\binaries\main-release\exe\UnifiedVPN-<version>.exe` |
 | Windows MSI | `.\gradlew.bat :desktopApp:packageReleaseMsi --no-daemon` | `desktopApp\build\compose\binaries\main-release\msi\UnifiedVPN-<version>.msi` |
-| Portable ZIP Windows | `.\gradlew.bat :desktopApp:packageReleasePortableZip` | `desktopApp\build\compose\binaries\main-release\portable\UnifiedVPN-<version>-build.<build>-windows-amd64-portable.zip` |
-| Набор обновления Windows | `.\gradlew.bat :desktopApp:packageReleaseUpdateBundle` | `desktopApp\build\compose\binaries\main-release\update\UnifiedVPN-<version>-build.<build>-windows-amd64-*` |
+| Ручной portable ZIP Windows | `.\gradlew.bat :desktopApp:packageReleasePortableZip` | `desktopApp\build\compose\binaries\main-release\portable\UnifiedVPN-<version>-build.<build>-portable-manual.zip` |
+| Набор обновления Windows | `.\gradlew.bat :desktopApp:packageReleaseUpdateBundle` | `desktopApp\build\compose\binaries\main-release\update\UnifiedVPN-<version>-build.<build>-windows-amd64-installer.exe` |
 | AppImage Linux | `./gradlew :desktopApp:packageReleaseLinuxAppImage --no-daemon` | `desktopApp/build/compose/binaries/main-release/appimage/UnifiedVPN-<version>-build.<build>-linux-<arch>.AppImage` |
 
 ## Нативные файлы
@@ -382,6 +422,9 @@ $env:OLCRTC_REPO="C:\path\to\olcrtc"
   репозитория.
 - Установщики Windows необходимо собирать в Windows при наличии `jpackage` и
   WiX.
+- Пока поддерживаются клиенты старше `0.0.12`, ручной portable ZIP нельзя
+  добавлять в файлы GitHub-релиза. Выпущенная `0.0.11` предпочитает подходящий
+  ZIP и иначе обойдёт штатное обновление зарегистрированного установщика.
 - AppImage необходимо собирать и проверять в Linux; кросс-упаковка из Windows
   не поддерживается.
 - `scripts/Build-LinuxRelease.sh` не устанавливает пакеты, не использует `sudo`,
