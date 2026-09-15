@@ -1,5 +1,7 @@
 package org.olcbox.app.vpn
 
+import org.olcbox.app.data.model.VpnProfileConfig
+
 data class AndroidSplitTunnelSettings(
     val mode: AndroidSplitTunnelMode = AndroidSplitTunnelMode.AllApps,
     val proxyPackages: Set<String> = emptySet(),
@@ -35,7 +37,10 @@ enum class AndroidSplitTunnelProfile {
     companion object {
         fun fromProfileType(profileType: String?): AndroidSplitTunnelProfile {
             val normalized = profileType?.trim()?.lowercase()
-            return if (normalized.isNullOrBlank() || normalized == "olcrtc") OlcRtc else External
+            return when (normalized) {
+                null, "", VpnProfileConfig.TYPE_OLCRTC, VpnProfileConfig.TYPE_OPENFLUX -> OlcRtc
+                else -> External
+            }
         }
     }
 }

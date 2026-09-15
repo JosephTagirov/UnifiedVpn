@@ -27,6 +27,16 @@ internal interface SocksBackedVpnEngine {
     fun stop()
 }
 
+internal fun existingProfileSocksPort(profile: VpnProfileConfig): Int? =
+    profile.localSocksPort.takeUnless { profile.isOpenFlux() }
+
+internal fun profileRequiresTunSocksBridge(profileType: String): Boolean = when (profileType) {
+    VpnProfileConfig.TYPE_OLCRTC,
+    VpnProfileConfig.TYPE_VLESS,
+    VpnProfileConfig.TYPE_OPENFLUX -> true
+    else -> false
+}
+
 internal fun createSocksBackedVpnEngine(
     context: Context,
     profile: VpnProfileConfig,
@@ -36,7 +46,7 @@ internal fun createSocksBackedVpnEngine(
     log: (String) -> Unit
 ): SocksBackedVpnEngine {
     val normalized = profile.normalized()
-    val localSocksPort = normalized.localSocksPort
+    val localSocksPort = existingProfileSocksPort(normalized)
     if (localSocksPort != null) {
         return ExistingSocksEngine(
             profileType = normalized.normalizedType,
@@ -47,6 +57,15 @@ internal fun createSocksBackedVpnEngine(
     }
 
     return when (normalized.normalizedType) {
+        VpnProfileConfig.TYPE_OPENFLUX -> createOpenFluxVpnEngine(
+            context = context.applicationContext,
+            profile = normalized,
+            socksPort = defaultSocksPort,
+            username = username,
+            password = password,
+            log = log
+        )
+
         VpnProfileConfig.TYPE_VLESS -> SingBoxVlessEngine(
             context = context.applicationContext,
             profile = normalized,
@@ -148,9 +167,9 @@ private class SingBoxTunSocksBridge(
     private var logThread: Thread? = null
 
     override suspend fun start() {
-        require(upstreamSocksPort in 1..65535) { "Invalid olcRTC SOCKS port" }
+        require(upstreamSocksPort in 1..65535) { "Invalid upstream SOCKS port" }
         require(socksPort in 1..65535 && socksPort != upstreamSocksPort) {
-            "Invalid olcRTC bridge SOCKS port"
+            "Invalid bridge SOCKS port"
         }
 
         val executableSource = findEngineExecutable(context, "sing-box")
@@ -1091,7 +1110,7 @@ private fun startEngineLogReader(
     log: (String) -> Unit
 ): Thread = thread(name = threadName, isDaemon = true) {
     try {
-        process.inputStream.bufferedReader().useLines { lines ->
+        ProcessOutputInputStream(process.inputStream).bufferedReader().useLines { lines ->
             lines.forEach { line -> log("$logPrefix: $line") }
         }
     } catch (exception: IOException) {

@@ -1,7 +1,7 @@
 package org.olcbox.app.data.logging
 
 private val connectionUriPattern = Regex(
-    """(?i)\b(vless|vmess|ss|trojan|awg|wireguard|vpn|olcrtc)://[^\s\"'<>]+"""
+    """(?i)\b(vless|vmess|ss|trojan|awg|wireguard|vpn|olcrtc|openflux)://[^\s\"'<>]+"""
 )
 private val bundledConfigPattern = Regex(
     """(?i)\b(unifiedvpn-friend-v\d+|unifiedvpn\+zlib):[^\s\"'<>]+"""
@@ -10,7 +10,7 @@ private val credentialUriPattern = Regex(
     """(?i)\b((?:https?|socks5h?|ssh)://)([^/\s:@]+):([^@\s/]+)@"""
 )
 private const val SECRET_FIELD_NAME_PATTERN =
-    """(?:password|passwd|passphrase|private[_-]?key|preshared[_-]?key|secret|token|uuid|id|identifier|hwid|(?:client|user|device)[_-]?id|api[_-]?key|access[_-]?token|refresh[_-]?token|subscription(?:[_-]?(?:url|uri|link|token|secret))?)"""
+    """(?:password|passwd|passphrase|socks[_-]?password|private[_-]?key|preshared[_-]?key|encryption[_-]?key|document[_-]?(?:url|uri|link)|secret|token|uuid|id|identifier|hwid|(?:client|user|device)[_-]?id|api[_-]?key|access[_-]?token|refresh[_-]?token|subscription(?:[_-]?(?:url|uri|link|token|secret))?)"""
 private val doubleQuotedSecretAssignmentPattern = Regex(
     """(?i)([\"']?\b$SECRET_FIELD_NAME_PATTERN\b[\"']?\s*[:=]\s*)(\"(?:\\[\s\S]|[^\"\\])*\")"""
 )
@@ -28,6 +28,9 @@ private val unterminatedSingleQuotedSecretAssignmentPattern = Regex(
 )
 private val subscriptionLinkPattern = Regex(
     """(?i)(\bsubscription(?:[_ -]?(?:url|uri|link))?\b\s*[:=]?\s*)(https?://[^\s\"'<>]+)"""
+)
+private val openFluxDocumentUrlPattern = Regex(
+    """(?i)\bhttps?://(?:docs|disk)\.yandex\.ru(?::\d+)?/[^\s\"'<>]*"""
 )
 private val olcRtcContextPattern = Regex(
     """(?i)\b(?:olc\s*rtc|jitsi|muc|room)\b"""
@@ -67,6 +70,7 @@ fun sanitizeDiagnosticLogLine(line: String): String {
     sanitized = subscriptionLinkPattern.replace(sanitized) { match ->
         "${match.groupValues[1]}<redacted>"
     }
+    sanitized = openFluxDocumentUrlPattern.replace(sanitized, "<redacted>")
     return redactOlcRtcRoomReferences(sanitized)
 }
 

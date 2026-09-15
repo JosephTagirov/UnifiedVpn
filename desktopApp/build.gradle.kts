@@ -15,6 +15,7 @@ import org.gradle.internal.os.OperatingSystem
 import org.gradle.api.tasks.bundling.Zip
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
+import groovy.json.JsonSlurper
 import java.net.URI
 import java.net.HttpURLConnection
 import java.io.ByteArrayInputStream
@@ -22,6 +23,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import java.util.UUID
 import java.util.zip.ZipFile
@@ -452,6 +454,10 @@ val wintunVersion = "0.14.1"
 val xrayVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("26.3.27").get()
 val expectedAwgCoreCommit = providers.gradleProperty("olcbox.awgCoreSha")
 val expectedXrayCommit = providers.gradleProperty("olcbox.xraySha")
+val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(".downloads/openflux/artifacts")
+val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
+val expectedOpenFluxUpstream = "4f1bdb554c262f3ae9adbfe317a092c6b929ba7d"
+val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
 val singBoxAwgRepoDir = providers.environmentVariable("SING_BOX_AWG_REPO")
     .map { rootProject.file(it) }
     .orElse(rootProject.layout.projectDirectory.dir(".downloads/sing-box-awg/source").asFile)
@@ -473,6 +479,38 @@ fun desktopArchName(arch: String): String = when (arch.lowercase()) {
 fun shellQuote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
 
 val hostDesktopArch = desktopArchName(System.getProperty("os.arch"))
+
+fun verifyOpenFluxWindowsArtifact(binary: File) {
+    check(binary.isFile && binary.length() > 0L && !Files.isSymbolicLink(binary.toPath())) {
+        "OpenFlux Windows artifact is missing or invalid. Run tools/openflux/build.ps1 first."
+    }
+    val manifest = JsonSlurper().parse(openFluxManifest.asFile) as? Map<*, *>
+        ?: error("Invalid OpenFlux artifact manifest")
+    check(
+        manifest["schema"] == 1 &&
+            manifest["upstream"] == expectedOpenFluxUpstream &&
+            manifest["protocol"] == expectedOpenFluxProtocol &&
+            manifest["version_text"] == "unified-openflux 1 upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol"
+    ) { "OpenFlux artifact manifest does not match the pinned encrypted engine" }
+    val expectedSha = ((manifest["files"] as? Map<*, *>)?.get("openflux-windows-amd64.exe") as? String)?.lowercase()
+    check(expectedSha?.matches(Regex("[0-9a-f]{64}")) == true) {
+        "OpenFlux artifact manifest has no Windows SHA-256"
+    }
+    val digest = MessageDigest.getInstance("SHA-256")
+    binary.inputStream().buffered().use { input ->
+        val buffer = ByteArray(8192)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
+    }
+    val actualSha = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    check(actualSha == expectedSha) { "OpenFlux Windows SHA-256 does not match its artifact manifest" }
+    binary.inputStream().use { input ->
+        check(input.read() == 'M'.code && input.read() == 'Z'.code) { "OpenFlux Windows artifact is not a PE executable" }
+    }
+}
 
 fun verifyOlcRtcBinaryVcsMetadata(binary: File) {
     val process = ProcessBuilder("go", "version", "-m", binary.absolutePath)
@@ -815,6 +853,24 @@ if (currentBuildOs.isWindows) {
     val xrayWindowsOutput = generatedNativeResources.map {
         it.file("native/xray-windows-amd64.exe")
     }
+    val openFluxWindowsSource = providers.environmentVariable("OPENFLUX_BINARY")
+        .map { rootProject.file(it) }
+        .orElse(openFluxArtifactDirectory.file("openflux-windows-amd64.exe").asFile)
+    val openFluxWindowsOutput = generatedNativeResources.map {
+        it.file("native/openflux-windows-amd64.exe")
+    }
+
+    val copyOpenFluxWindowsAmd64 = tasks.register<Copy>("copyOpenFluxWindowsAmd64") {
+        from(openFluxWindowsSource)
+        into(openFluxWindowsOutput.map { it.asFile.parentFile })
+        rename { "openflux-windows-amd64.exe" }
+        inputs.file(openFluxWindowsSource)
+        inputs.file(openFluxManifest)
+        inputs.property("openFluxUpstream", expectedOpenFluxUpstream)
+        inputs.property("openFluxProtocol", expectedOpenFluxProtocol)
+        outputs.file(openFluxWindowsOutput)
+        doFirst { verifyOpenFluxWindowsArtifact(openFluxWindowsSource.get()) }
+    }
 
     val copySingBoxAwgWindowsAmd64 = tasks.register<Copy>("copySingBoxAwgWindowsAmd64") {
         from(singBoxAwgWindowsSource)
@@ -872,10 +928,12 @@ if (currentBuildOs.isWindows) {
     desktopNativeAssetTasks.add(extractWintunWindowsAmd64)
     desktopNativeAssetTasks.add(copySingBoxAwgWindowsAmd64)
     desktopNativeAssetTasks.add(copyXrayWindowsAmd64)
+    desktopNativeAssetTasks.add(copyOpenFluxWindowsAmd64)
     hostDesktopNativeAssetTasks.add(extractTun2SocksWindowsAmd64)
     hostDesktopNativeAssetTasks.add(extractWintunWindowsAmd64)
     hostDesktopNativeAssetTasks.add(copySingBoxAwgWindowsAmd64)
     hostDesktopNativeAssetTasks.add(copyXrayWindowsAmd64)
+    hostDesktopNativeAssetTasks.add(copyOpenFluxWindowsAmd64)
 }
 
 fun requiredHostNativeResourcePaths(): List<String> = buildList {
@@ -889,6 +947,7 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/wintun.dll")
             add("native/sing-box-awg-windows-amd64.exe")
             add("native/xray-windows-amd64.exe")
+            add("native/openflux-windows-amd64.exe")
         }
         currentBuildOs.isLinux -> {
             add("native/olcrtc-linux-$hostDesktopArch")

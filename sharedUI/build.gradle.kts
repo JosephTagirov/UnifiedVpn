@@ -52,6 +52,7 @@ val olcboxBuild = providers.gradleProperty("olcbox.build").orElse("1")
 val awgCoreCommitSha = providers.gradleProperty("olcbox.awgCoreSha").orElse("unknown")
 val xrayCoreVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("unknown")
 val xrayCoreCommitSha = providers.gradleProperty("olcbox.xraySha").orElse("unknown")
+val openFluxCoreCommitSha = providers.gradleProperty("olcbox.openFluxSha").orElse("unknown")
 val olcboxVersionValue = olcboxVersion.get()
 val generatedAppInfoDir = layout.buildDirectory.dir("generated/source/olcboxAppInfo/commonMain")
 
@@ -74,6 +75,9 @@ abstract class GenerateAppInfoTask : DefaultTask() {
     @get:Input
     abstract val xraySha: Property<String>
 
+    @get:Input
+    abstract val openFluxSha: Property<String>
+
     @get:OutputDirectory
     abstract val outputDir: DirectoryProperty
 
@@ -86,6 +90,7 @@ abstract class GenerateAppInfoTask : DefaultTask() {
         val escapedAwgCoreSha = awgCoreSha.get().replace("\\", "\\\\").replace("\"", "\\\"")
         val escapedXrayVersion = xrayVersion.get().replace("\\", "\\\\").replace("\"", "\\\"")
         val escapedXraySha = xraySha.get().replace("\\", "\\\\").replace("\"", "\\\"")
+        val escapedOpenFluxSha = openFluxSha.get().replace("\\", "\\\\").replace("\"", "\\\"")
         packageDir.resolve("GeneratedAppInfo.kt").writeText(
             """
             package org.olcbox.app
@@ -99,6 +104,7 @@ abstract class GenerateAppInfoTask : DefaultTask() {
                 const val AWG_CORE_SHA: String = "$escapedAwgCoreSha"
                 const val XRAY_VERSION: String = "$escapedXrayVersion"
                 const val XRAY_SHA: String = "$escapedXraySha"
+                const val OPENFLUX_SHA: String = "$escapedOpenFluxSha"
             }
             """.trimIndent() + "\n"
         )
@@ -191,6 +197,7 @@ val generateAppInfo by tasks.registering(GenerateAppInfoTask::class) {
     awgCoreSha.set(awgCoreCommitSha)
     xrayVersion.set(xrayCoreVersion)
     xraySha.set(xrayCoreCommitSha)
+    openFluxSha.set(openFluxCoreCommitSha)
     outputDir.set(generatedAppInfoDir)
 }
 
@@ -199,6 +206,8 @@ kotlin {
         namespace = "org.olcbox.app.sharedui"
         compileSdk = 37
         minSdk = 23
+
+        withHostTestBuilder {}.configure {}
 
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_17)
@@ -246,6 +255,13 @@ kotlin {
             implementation(libs.compose.ui.test)
             implementation(libs.kotlinx.coroutines.test)
             implementation(libs.ktor.client.mock)
+        }
+
+        val androidHostTest by getting {
+            dependencies {
+                implementation(kotlin("test-junit"))
+                implementation(libs.kotlinx.coroutines.test)
+            }
         }
 
         androidMain {

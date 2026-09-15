@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationMetadata
+import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.LocationsRepository
 
@@ -83,6 +84,8 @@ class LocationViewModel(
     var editingConfig by mutableStateOf(LocationConfig())
     var editingProfile by mutableStateOf(VpnProfileConfig.olcRtc())
         private set
+    var editingOpenFluxConfig by mutableStateOf(OpenFluxProfileConfig())
+        private set
     var editingLocalSocksPort by mutableStateOf("")
         private set
     var editingName by mutableStateOf("")
@@ -108,11 +111,20 @@ class LocationViewModel(
     var profileError by mutableStateOf<String?>(null)
         private set
 
+    var openFluxDocumentUrlError by mutableStateOf<String?>(null)
+        private set
+
+    var openFluxEncryptionKeyError by mutableStateOf<String?>(null)
+        private set
+
     var localSocksPortError by mutableStateOf<String?>(null)
         private set
 
     val isEditingOlcRtc: Boolean
         get() = editingProfile.isOlcRtc()
+
+    val isEditingOpenFlux: Boolean
+        get() = editingProfile.isOpenFlux()
 
     val isFormValid: Boolean
         get() = if (isEditingOlcRtc) {
@@ -126,7 +138,7 @@ class LocationViewModel(
         } else {
             nameError == null &&
                 profileError == null &&
-                localSocksPortError == null &&
+                (isEditingOpenFlux || localSocksPortError == null) &&
                 editingName.isNotBlank() &&
                 editingExternalProfile().isCompleteFor()
         }
@@ -356,12 +368,19 @@ class LocationViewModel(
         }
     }
 
+    fun startCreating(profileType: String) {
+        startEditing(null)
+        editingProfile = VpnProfileConfig(type = VpnProfileConfig.normalizeType(profileType))
+    }
+
     fun startEditing(id: String?) {
         nameError = null
         serverError = null
         keyError = null
         dnsError = null
         profileError = null
+        openFluxDocumentUrlError = null
+        openFluxEncryptionKeyError = null
         localSocksPortError = null
         isSaving = false
         providerDrafts.clear()
@@ -379,6 +398,13 @@ class LocationViewModel(
             editingProfile = location?.profile?.normalized() ?: VpnProfileConfig.olcRtc()
             editingLocalSocksPort = editingProfile.localSocksPort?.toString().orEmpty()
             editingName = location?.fullName ?: editingConfig.displayName()
+        }
+        editingOpenFluxConfig = if (isEditingOpenFlux) {
+            OpenFluxProfileConfig.parse(
+                editingProfile.rawConfig?.takeIf(String::isNotBlank) ?: editingProfile.uri
+            ) ?: OpenFluxProfileConfig()
+        } else {
+            OpenFluxProfileConfig()
         }
         val provider = LocationConfig.normalizeProvider(editingConfig.bypassProvider)
         editingServiceProvider = if (provider == LocationConfig.PROVIDER_JITSI) {
@@ -405,11 +431,27 @@ class LocationViewModel(
 
     fun onProfileUriChanged(value: String) {
         editingProfile = editingProfile.copy(uri = value)
+        if (isEditingOpenFlux) {
+            editingOpenFluxConfig = OpenFluxProfileConfig.parse(value) ?: OpenFluxProfileConfig()
+        }
         validateExternalProfile()
     }
 
     fun onProfileRawConfigChanged(value: String) {
         editingProfile = editingProfile.copy(rawConfig = value)
+        if (isEditingOpenFlux) {
+            editingOpenFluxConfig = OpenFluxProfileConfig.parse(value) ?: OpenFluxProfileConfig()
+        }
+        validateExternalProfile()
+    }
+
+    fun onOpenFluxDocumentUrlChanged(value: String) {
+        editingOpenFluxConfig = editingOpenFluxConfig.copy(documentUrl = value)
+        validateExternalProfile()
+    }
+
+    fun onOpenFluxEncryptionKeyChanged(value: String) {
+        editingOpenFluxConfig = editingOpenFluxConfig.copy(encryptionKey = value)
         validateExternalProfile()
     }
 
@@ -537,6 +579,15 @@ class LocationViewModel(
     }
 
     private fun editingExternalProfile(): VpnProfileConfig {
+        if (isEditingOpenFlux) {
+            return editingProfile.copy(
+                name = editingName,
+                rawConfig = editingOpenFluxConfig.toJson(),
+                uri = null,
+                localSocksHost = null,
+                localSocksPort = null
+            ).normalized()
+        }
         return editingProfile.copy(
             name = editingName,
             localSocksPort = editingLocalSocksPort.toIntOrNull()
@@ -544,6 +595,21 @@ class LocationViewModel(
     }
 
     private fun validateExternalProfile() {
+        if (isEditingOpenFlux) {
+            openFluxEncryptionKeyError = when {
+                editingOpenFluxConfig.encryptionKey.isBlank() -> "Key cannot be empty"
+                !LocationConfig.isValidCryptoKey(editingOpenFluxConfig.encryptionKey) -> "Key must be 64 hex characters"
+                else -> null
+            }
+            openFluxDocumentUrlError = when {
+                editingOpenFluxConfig.documentUrl.isBlank() -> "Document URL cannot be empty"
+                openFluxEncryptionKeyError == null && !editingOpenFluxConfig.isValid() ->
+                    "Use an HTTPS Yandex Docs or Yandex Disk document URL"
+                else -> null
+            }
+            profileError = openFluxDocumentUrlError ?: openFluxEncryptionKeyError
+            return
+        }
         val profile = editingExternalProfile()
         profileError = if (profile.isCompleteFor()) {
             null
@@ -563,6 +629,8 @@ class LocationViewModel(
             validateServer(editingConfig.id)
             validateKey(editingConfig.key)
             validateDnsServer(editingConfig.dnsServer)
+        } else if (isEditingOpenFlux) {
+            validateExternalProfile()
         } else {
             onLocalSocksPortChanged(editingLocalSocksPort)
             validateExternalProfile()

@@ -20,6 +20,35 @@ class AppTextLocalizationTest {
     }
 
     @Test
+    fun openFluxAddActionIsLocalized() {
+        assertEquals("Add OpenFlux", localizeUiText("Add OpenFlux", "en"))
+        assertEquals("Добавить OpenFlux", localizeUiText("Add OpenFlux", "ru"))
+        assertEquals(
+            "Document URL and encryption key",
+            localizeUiText("Document URL and encryption key", "en")
+        )
+        assertEquals(
+            "Ссылка на документ и ключ шифрования",
+            localizeUiText("Document URL and encryption key", "ru")
+        )
+    }
+
+    @Test
+    fun openFluxEditorLabelsAndErrorsAreLocalized() {
+        assertEquals("Yandex document URL", localizeUiText("Yandex document URL", "en"))
+        assertEquals("Ссылка на Яндекс Документ", localizeUiText("Yandex document URL", "ru"))
+        assertEquals(
+            "Ссылка на документ не может быть пустой",
+            localizeUiText("Document URL cannot be empty", "ru")
+        )
+        assertEquals(
+            "Укажите HTTPS-ссылку на документ Яндекс Документов или Яндекс Диска",
+            localizeUiText("Use an HTTPS Yandex Docs or Yandex Disk document URL", "ru")
+        )
+        assertEquals("OpenFlux подключён", localizeUiText("OpenFlux Connected", "ru"))
+    }
+
+    @Test
     fun russianLocaleTranslatesDynamicStatus() {
         assertEquals(
             "Доступно обновление Unified VPN: 0.0.11 build 2026090202",

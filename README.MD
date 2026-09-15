@@ -2,8 +2,8 @@
 
 Android-first VPN client based on the original olcbox application by Alan Anisimov:
 https://github.com/alananisimov/olcbox. It keeps the existing `olcrtc`
-engine and adds a unified profile layer for `olcrtc`, VLESS, and Amnezia
-profiles.
+engine and adds a unified profile layer for `olcrtc`, VLESS, Amnezia,
+and experimental OpenFlux profiles.
 
 <p align="center">
   <img src="docs/screenshots/unified-vpn-home.png" alt="Unified VPN home screen" width="260">
@@ -23,6 +23,11 @@ Release history is maintained in [CHANGELOG.md](CHANGELOG.md).
 See the [0.0.12 release notes](docs/releases/0.0.12.md) before updating:
 Windows TUN is temporarily unavailable, and Android VLESS showed intermittent
 DNS/TLS failures during startup validation.
+
+The [0.0.13 preview](docs/releases/0.0.13.md) adds encrypted OpenFlux through
+Yandex Documents. Windows SOCKS/HTTPS and Android emulator TUN/HTTPS passed
+[connection tests](docs/testing/openflux-2026091401.md). This experimental preview
+is installed manually; existing stable clients stay on 0.0.12.
 
 ## Legal Notice
 This software is intended for development, testing and research purposes only.
@@ -51,7 +56,8 @@ The author does not support or encourage such use.
 - Connectivity checks for individual locations.
 - Config import from clipboard/file and export to clipboard.
 - Diagnostics log view with log export.
-- Android TUN/proxy modes, SOCKS5 credentials, separate split tunneling for olcRTC and VLESS/AmneziaWG.
+- Android TUN/proxy modes and SOCKS5 credentials. One shared per-app split-tunneling group for olcRTC/OpenFlux; a separate group for VLESS/AmneziaWG.
+- Experimental OpenFlux: `+ -> Add OpenFlux` opens document URL and encryption-key fields; URI/JSON import is also available. Requires a compatible server and a legacy-editor Yandex document, with one active client per document. Windows and Android emulator traffic were verified; physical-device/carrier coverage remains limited.
 - Network migration, reconnect handling, and watchdog recovery.
 - Password-protected friend packages for Android and Windows: shared olcRTC profiles, an explicitly selected VLESS link, and a separate AmneziaWG peer provisioned by the package creator.
 
@@ -217,7 +223,7 @@ keyPassword=...
 VPN-клиент в первую очередь для Android, основанный на оригинальном приложении
 [olcbox Алана Анисимова](https://github.com/alananisimov/olcbox). Приложение
 сохраняет существующий движок `olcrtc` и добавляет единый слой профилей для
-`olcrtc`, VLESS и Amnezia.
+`olcrtc`, VLESS, Amnezia и экспериментального OpenFlux.
 
 <p align="center">
   <img src="docs/screenshots/unified-vpn-home.png" alt="Главный экран Unified VPN" width="260">
@@ -237,6 +243,11 @@ Linux поставляется как переносимый файл AppImage.
 Перед обновлением прочитайте [описание 0.0.12](docs/releases/0.0.12.md):
 Windows TUN временно недоступен, а при проверке Android VLESS наблюдались
 периодические ошибки DNS/TLS при запуске.
+
+[Предварительная 0.0.13](docs/releases/0.0.13.md) добавляет зашифрованный
+OpenFlux через Яндекс Документы. Windows SOCKS/HTTPS и Android TUN/HTTPS на
+эмуляторе прошли [проверки соединения](docs/testing/openflux-2026091401.md).
+Экспериментальная версия устанавливается вручную; стабильный канал остаётся на 0.0.12.
 
 ## Юридическое уведомление
 
@@ -275,8 +286,13 @@ Windows TUN временно недоступен, а при проверке An
 - Проверка доступности отдельных профилей.
 - Импорт конфигурации из буфера обмена или файла и экспорт в буфер обмена.
 - Просмотр и экспорт диагностического журнала.
-- Режимы Android TUN/прокси, учётные данные SOCKS5 и раздельные настройки split
-  tunneling для olcRTC и VLESS/AmneziaWG.
+- Режимы Android TUN/прокси и учётные данные SOCKS5. Общая группа раздельного
+  туннелирования приложений для olcRTC/OpenFlux; отдельная для VLESS/AmneziaWG.
+- Экспериментальный OpenFlux: `+ -> Добавить OpenFlux` открывает поля ссылки
+  документа и ключа шифрования; также доступен импорт URI/JSON. Нужны совместимый
+  сервер и документ Яндекса в старом редакторе, один активный клиент на документ.
+  Трафик проверен на Windows и Android-эмуляторе; охват физических устройств
+  и мобильных сетей пока ограничен.
 - Перенос подключения между сетями, переподключение и восстановление watchdog.
 - Защищённые паролем пакеты для друзей на Android и Windows: общие профили
   olcRTC, явно выбранная VLESS-ссылка и создание отдельного peer AmneziaWG

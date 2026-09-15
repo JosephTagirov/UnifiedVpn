@@ -3,15 +3,24 @@ import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import groovy.json.JsonSlurper
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.Properties
 import java.io.File
 import java.io.FileInputStream
 import java.util.zip.ZipFile
+
+abstract class StageOpenFluxAndroidLibrariesTask : Sync() {
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+}
 
 abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
     @get:InputDirectory
@@ -228,6 +237,7 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
             "libhev-socks5-tunnel.so",
             "libimage_processing_util_jni.so",
             "libolcbox_tun2socks.so",
+            "libopenflux.so",
             "libsing-box.so",
             "libsurface_util_jni.so",
             "libxray.so",
@@ -279,6 +289,85 @@ val androidAbiFilters = providers.gradleProperty("olcbox.android.abiFilters")
             .filter { it.isNotEmpty() }
     }
     .getOrElse(defaultAndroidAbiFilters)
+val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(".downloads/openflux/artifacts")
+val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
+val generatedOpenFluxJniLibs = layout.buildDirectory.dir("generated/openfluxJniLibs")
+val expectedOpenFluxUpstream = "4f1bdb554c262f3ae9adbfe317a092c6b929ba7d"
+val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
+
+fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFile: File, abi: String) {
+    check(binary.isFile && binary.length() > 0L && !Files.isSymbolicLink(binary.toPath())) {
+        "OpenFlux Android artifact is missing or invalid: $artifactName. Run tools/openflux/build.ps1 first."
+    }
+    val manifest = JsonSlurper().parse(manifestFile) as? Map<*, *>
+        ?: error("Invalid OpenFlux artifact manifest")
+    check(
+        manifest["schema"] == 1 &&
+            manifest["upstream"] == expectedOpenFluxUpstream &&
+            manifest["protocol"] == expectedOpenFluxProtocol &&
+            manifest["version_text"] == "unified-openflux 1 upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol"
+    ) { "OpenFlux artifact manifest does not match the pinned encrypted engine" }
+    val expectedSha = ((manifest["files"] as? Map<*, *>)?.get(artifactName) as? String)?.lowercase()
+    check(expectedSha?.matches(Regex("[0-9a-f]{64}")) == true) {
+        "OpenFlux artifact manifest has no SHA-256 for $artifactName"
+    }
+    val digest = MessageDigest.getInstance("SHA-256")
+    binary.inputStream().buffered().use { input ->
+        val buffer = ByteArray(8192)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            digest.update(buffer, 0, count)
+        }
+    }
+    val actualSha = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    check(actualSha == expectedSha) { "OpenFlux SHA-256 mismatch for $artifactName" }
+    val header = binary.inputStream().use { it.readNBytes(20) }
+    val expectedMachine = when (abi) {
+        "armeabi-v7a" -> 40
+        "arm64-v8a" -> 183
+        "x86_64" -> 62
+        else -> error("Unsupported OpenFlux Android ABI: $abi")
+    }
+    check(
+        header.size == 20 &&
+            header.take(4) == listOf(0x7f.toByte(), 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()) &&
+            header[4].toInt() == (if (abi == "armeabi-v7a") 1 else 2) &&
+            header[5].toInt() == 1 &&
+            ((header[18].toInt() and 0xff) or ((header[19].toInt() and 0xff) shl 8)) == expectedMachine
+    ) { "OpenFlux ELF architecture does not match $abi" }
+}
+
+val stageOpenFluxAndroidLibraries = tasks.register<StageOpenFluxAndroidLibrariesTask>("stageOpenFluxAndroidLibraries") {
+    group = "build"
+    description = "Stages manifest-verified encrypted OpenFlux executables for Android packaging."
+    inputs.file(openFluxManifest)
+    inputs.property("openFluxUpstream", expectedOpenFluxUpstream)
+    inputs.property("openFluxProtocol", expectedOpenFluxProtocol)
+    inputs.property("openFluxAbis", androidAbiFilters)
+    androidAbiFilters.forEach { abi ->
+        inputs.file(openFluxArtifactDirectory.file("android/$abi/libopenflux.so"))
+    }
+    from(openFluxArtifactDirectory.dir("android")) {
+        include(androidAbiFilters.map { "$it/libopenflux.so" })
+    }
+    outputDirectory.set(generatedOpenFluxJniLibs)
+    into(outputDirectory)
+    doFirst {
+        check(openFluxManifest.asFile.isFile) {
+            "OpenFlux artifact manifest is missing. Run tools/openflux/build.ps1 first."
+        }
+        androidAbiFilters.forEach { abi ->
+            val artifactName = "android/$abi/libopenflux.so"
+            verifyOpenFluxAndroidArtifact(
+                openFluxArtifactDirectory.file(artifactName).asFile,
+                artifactName,
+                openFluxManifest.asFile,
+                abi
+            )
+        }
+    }
+}
 val forbiddenNativeBuildPathPrefixes = providers.provider {
     val projectDirectory = rootProject.layout.projectDirectory.asFile.canonicalFile
     val userHome = File(System.getProperty("user.home")).canonicalFile
@@ -402,6 +491,13 @@ dependencies {
 
 tasks.matching { task -> task.name == "preBuild" }.configureEach {
     dependsOn(":sharedUI:buildOlcrtcAndroidAar")
+}
+
+androidComponents.onVariants { variant ->
+    variant.sources.jniLibs?.addGeneratedSourceDirectory(
+        stageOpenFluxAndroidLibraries,
+        StageOpenFluxAndroidLibrariesTask::outputDirectory
+    )
 }
 
 listOf("debug", "release").forEach { buildType ->

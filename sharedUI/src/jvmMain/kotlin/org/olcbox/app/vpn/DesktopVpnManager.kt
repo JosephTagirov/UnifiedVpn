@@ -28,6 +28,7 @@ import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopDnsResolver
+import org.olcbox.app.vpn.desktop.DesktopOpenFluxConfig
 import org.olcbox.app.vpn.desktop.DesktopProxyController
 import org.olcbox.app.vpn.desktop.DesktopSingBoxConfig
 import org.olcbox.app.vpn.desktop.DesktopXrayConfig
@@ -212,7 +213,7 @@ class DesktopVpnManager private constructor(
         val isVlessXhttpProfile = profile.normalizedType == VpnProfileConfig.TYPE_VLESS &&
             runCatching { DesktopXrayConfig.supports(profile) }.getOrDefault(false)
         val isSupportedWindowsProfile = DesktopPaths.os == DesktopOs.Windows &&
-            (isAmneziaProfile || isVlessXhttpProfile)
+            (isAmneziaProfile || isVlessXhttpProfile || profile.isOpenFlux())
         if (!profile.isOlcRtc() && !isSupportedWindowsProfile) {
             val message = "${profile.typeLabel()} profiles are not supported by the desktop engine"
             setStatus(VpnStatus.Error(message))
@@ -275,6 +276,13 @@ class DesktopVpnManager private constructor(
                     startupFailure = startupFailure,
                     logOutput = true
                 )
+                profile.isOpenFlux() -> startOpenFluxProcess(
+                    profile = profile,
+                    socksSettings = socksSettings,
+                    ready = ready,
+                    startupFailure = startupFailure,
+                    logOutput = true
+                )
                 else -> startSingBoxProcess(
                     profile = profile,
                     socksSettings = socksSettings,
@@ -291,7 +299,8 @@ class DesktopVpnManager private constructor(
                 socksPort = socksSettings.port,
                 requestGeneration = requestGeneration,
                 engineName = engineName,
-                requireReadySignal = profile.isOlcRtc()
+                requireReadySignal = profile.isOlcRtc() || profile.isOpenFlux(),
+                timeoutMs = if (profile.isOpenFlux()) OPENFLUX_READY_TIMEOUT_MS else OLC_READY_TIMEOUT_MS
             )
 
             if (requestGeneration != generation) {
@@ -689,7 +698,8 @@ class DesktopVpnManager private constructor(
         engineName: String,
         configPath: Path,
         startupFailure: CompletableDeferred<String>,
-        logOutput: Boolean
+        logOutput: Boolean,
+        onOutput: (String) -> Unit = {}
     ): Process {
 
         addLog("Starting ${profile.typeLabel()} with $engineName")
@@ -713,6 +723,8 @@ class DesktopVpnManager private constructor(
                     for (line in lines) {
                         if (!isActive) break
 
+                        onOutput(line)
+
                         if (logOutput) {
                             emitSanitizedDesktopProcessOutput(
                                 source = engineName,
@@ -722,12 +734,7 @@ class DesktopVpnManager private constructor(
                             )
                         }
 
-                        if (
-                            line.contains("FATAL", ignoreCase = true) ||
-                            line.contains("failed to start", ignoreCase = true)
-                        ) {
-                            startupFailure.complete(line)
-                        }
+                        desktopNativeStartupFailure(line)?.let(startupFailure::complete)
                     }
                 }
             } catch (_: IOException) {
@@ -741,6 +748,29 @@ class DesktopVpnManager private constructor(
         }
 
         return startedProcess
+    }
+
+    private fun startOpenFluxProcess(
+        profile: VpnProfileConfig,
+        socksSettings: DesktopSocksProxySettings,
+        ready: CompletableDeferred<Unit>,
+        startupFailure: CompletableDeferred<String>,
+        logOutput: Boolean
+    ): Process {
+        val config = DesktopOpenFluxConfig.build(profile, socksSettings)
+        val binary = DesktopNativeAssets.resolveOpenFluxBinary()
+        val configPath = writeEngineClientConfig(prefix = "openflux", config = config)
+        return startNativeProxyProcess(
+            command = DesktopOpenFluxConfig.args(binary, configPath),
+            profile = profile,
+            engineName = "OpenFlux",
+            configPath = configPath,
+            startupFailure = startupFailure,
+            logOutput = logOutput,
+            onOutput = { line ->
+                if (isDesktopOpenFluxReady(line)) ready.complete(Unit)
+            }
+        )
     }
 
     private fun writeOlcRtcClientConfig(command: OlcRtcCommand): Path {
@@ -895,9 +925,10 @@ class DesktopVpnManager private constructor(
         socksPort: Int,
         requestGeneration: Long? = null,
         engineName: String = "olcRTC",
-        requireReadySignal: Boolean = true
+        requireReadySignal: Boolean = true,
+        timeoutMs: Long = OLC_READY_TIMEOUT_MS
     ) {
-        val deadline = System.currentTimeMillis() + OLC_READY_TIMEOUT_MS
+        val deadline = System.currentTimeMillis() + timeoutMs
 
         while (System.currentTimeMillis() < deadline) {
             if (requestGeneration != null && requestGeneration != generation) {
@@ -1004,6 +1035,7 @@ class DesktopVpnManager private constructor(
     private companion object {
         const val MAX_LOG_ENTRIES = 5_000
         const val OLC_READY_TIMEOUT_MS = 25_000L
+        const val OPENFLUX_READY_TIMEOUT_MS = 90_000L
         const val OLC_STARTUP_STABILITY_MS = 1_500L
         const val READY_POLL_INTERVAL_MS = 200L
         const val TCP_CONNECT_TIMEOUT_MS = 250L
@@ -1031,6 +1063,19 @@ internal fun isDesktopEngineReady(
     requireReadinessSignal: Boolean
 ): Boolean {
     return readinessSignalReceived || (!requireReadinessSignal && portAcceptsConnections)
+}
+
+internal fun isDesktopOpenFluxReady(line: String): Boolean = line.trim() == "OPENFLUX_READY"
+
+internal fun desktopNativeStartupFailure(line: String): String? {
+    return if (
+        line.contains("FATAL", ignoreCase = true) ||
+        line.contains("failed to start", ignoreCase = true)
+    ) {
+        sanitizeDiagnosticLogLine(line)
+    } else {
+        null
+    }
 }
 
 internal fun desktopOlcRtcStartupFailure(line: String): String? {

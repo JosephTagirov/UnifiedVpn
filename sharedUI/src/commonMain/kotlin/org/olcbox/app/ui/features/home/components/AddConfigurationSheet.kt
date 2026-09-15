@@ -8,15 +8,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Input
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.FileOpen
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Dns
@@ -50,6 +54,7 @@ fun AddConfigurationSheet(
     onImportFileClick: () -> Unit,
     onUpdateSubscriptionsClick: () -> Unit,
     onSelfHostedClick: (() -> Unit)? = null,
+    onAddOpenFluxClick: () -> Unit,
     onAddCustomLocationClick: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -62,6 +67,7 @@ fun AddConfigurationSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp)
         ) {
@@ -94,6 +100,13 @@ fun AddConfigurationSheet(
                     value = "Friend package, subscription, AWG .conf, or JSON",
                     icon = Icons.Outlined.FileOpen,
                     onClick = onImportFileClick
+                )
+
+                AddSheetAction(
+                    title = "Add OpenFlux",
+                    value = "Document URL and encryption key",
+                    icon = Icons.Outlined.Description,
+                    onClick = onAddOpenFluxClick
                 )
 
                 if (hasSubscriptions) {
@@ -158,7 +171,7 @@ private fun AddSheetAction(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(72.dp)
+            .heightIn(min = 72.dp)
             .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
@@ -166,7 +179,7 @@ private fun AddSheetAction(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
@@ -190,14 +203,14 @@ private fun AddSheetAction(
                     color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = value,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }

@@ -102,6 +102,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -660,7 +661,7 @@ private fun SplitTunnelingSettingsContent(
 
         Spacer(Modifier.height(18.dp))
 
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
             AndroidSplitTunnelProfile.entries.forEachIndexed { index, item ->
                 SegmentedButton(
                     shape = SegmentedButtonDefaults.itemShape(
@@ -673,7 +674,8 @@ private fun SplitTunnelingSettingsContent(
                     label = {
                         Text(
                             text = item.title(),
-                            maxLines = 1,
+                            maxLines = 2,
+                            textAlign = TextAlign.Center,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
@@ -2911,7 +2913,7 @@ private fun AndroidSplitTunnelSettings.settingsSummary(): String {
 
 private fun AndroidSplitTunnelProfile.title(): String {
     return when (this) {
-        AndroidSplitTunnelProfile.OlcRtc -> "olcRTC"
+        AndroidSplitTunnelProfile.OlcRtc -> "olcRTC / OpenFlux"
         AndroidSplitTunnelProfile.External -> "VLESS / AWG"
     }
 }

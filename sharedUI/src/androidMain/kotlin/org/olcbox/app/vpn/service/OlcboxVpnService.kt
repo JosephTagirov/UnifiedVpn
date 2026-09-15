@@ -24,7 +24,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import org.olcbox.app.ui.activities.VpnProfileChooserActivity
 import org.olcbox.app.ui.localization.androidUiText
-import androidx.datastore.preferences.core.Preferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CancellationException
@@ -57,6 +56,7 @@ import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import org.olcbox.app.vpn.AndroidConnectionMode
 import org.olcbox.app.vpn.AndroidSocksProxySettings
 import org.olcbox.app.vpn.AndroidSplitTunnelMode
+import org.olcbox.app.vpn.AndroidSplitTunnelProfile
 import org.olcbox.app.vpn.AndroidSplitTunnelProfiles
 import org.olcbox.app.vpn.AndroidSplitTunnelSettings
 import org.olcbox.app.vpn.UpstreamCandidate
@@ -70,15 +70,6 @@ import org.olcbox.app.vpn.notificationProfileTargetId
 import org.olcbox.app.vpn.notificationSafeProfileName
 import org.olcbox.app.vpn.selectOlcRtcDnsEndpoint
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_EXTERNAL_BYPASS_APPS
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_EXTERNAL_MODE
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_EXTERNAL_PROXY_APPS
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_MODE
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_BYPASS_APPS
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_MODE
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_PROXY_APPS
-import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_PROXY_APPS
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_HOST
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PASSWORD
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PORT
@@ -497,19 +488,6 @@ class OlcboxVpnService : VpnService() {
             preferences?.get(KEY_ANDROID_SOCKS_PORT)
         }
 
-        val legacySplitTunnel = AndroidSplitTunnelSettings(
-            mode = AndroidSplitTunnelMode.fromValue(
-                intent.getStringExtra(OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_MODE)
-                    ?: preferences?.get(KEY_ANDROID_SPLIT_TUNNEL_MODE)
-            ),
-            proxyPackages = intent.stringCollectionExtra(
-                OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_PROXY_APPS
-            ) ?: preferences?.get(KEY_ANDROID_SPLIT_TUNNEL_PROXY_APPS).orEmpty(),
-            bypassPackages = intent.stringCollectionExtra(
-                OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_BYPASS_APPS
-            ) ?: preferences?.get(KEY_ANDROID_SPLIT_TUNNEL_BYPASS_APPS).orEmpty()
-        )
-
         return StartOptions(
             connectionMode = AndroidConnectionMode.fromValue(
                 intent.getStringExtra(OlcboxVpnActions.EXTRA_CONNECTION_MODE)
@@ -528,56 +506,11 @@ class OlcboxVpnService : VpnService() {
                 intent.getStringExtra(OlcboxVpnActions.EXTRA_SOCKS_PASSWORD)
                     ?: preferences?.get(KEY_ANDROID_SOCKS_PASSWORD)
                 ).orEmpty(),
-            splitTunnelProfiles = AndroidSplitTunnelProfiles(
-                olcRtc = loadSplitTunnelSettings(
-                    intent = intent,
-                    preferences = preferences,
-                    modeExtra = OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_OLCRTC_MODE,
-                    proxyAppsExtra = OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_OLCRTC_PROXY_APPS,
-                    bypassAppsExtra = OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_OLCRTC_BYPASS_APPS,
-                    modeKey = KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_MODE,
-                    proxyAppsKey = KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_PROXY_APPS,
-                    bypassAppsKey = KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_BYPASS_APPS,
-                    fallback = legacySplitTunnel
-                ),
-                external = loadSplitTunnelSettings(
-                    intent = intent,
-                    preferences = preferences,
-                    modeExtra = OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_EXTERNAL_MODE,
-                    proxyAppsExtra = OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_EXTERNAL_PROXY_APPS,
-                    bypassAppsExtra = OlcboxVpnActions.EXTRA_SPLIT_TUNNEL_EXTERNAL_BYPASS_APPS,
-                    modeKey = KEY_ANDROID_SPLIT_TUNNEL_EXTERNAL_MODE,
-                    proxyAppsKey = KEY_ANDROID_SPLIT_TUNNEL_EXTERNAL_PROXY_APPS,
-                    bypassAppsKey = KEY_ANDROID_SPLIT_TUNNEL_EXTERNAL_BYPASS_APPS,
-                    fallback = legacySplitTunnel
-                )
+            splitTunnelProfiles = resolveAndroidSplitTunnelProfiles(
+                preferences = preferences,
+                stringExtra = intent::getStringExtra,
+                packagesExtra = { intent.stringCollectionExtra(it) }
             )
-        )
-    }
-
-    private fun loadSplitTunnelSettings(
-        intent: Intent,
-        preferences: Preferences?,
-        modeExtra: String,
-        proxyAppsExtra: String,
-        bypassAppsExtra: String,
-        modeKey: Preferences.Key<String>,
-        proxyAppsKey: Preferences.Key<Set<String>>,
-        bypassAppsKey: Preferences.Key<Set<String>>,
-        fallback: AndroidSplitTunnelSettings
-    ): AndroidSplitTunnelSettings {
-        return AndroidSplitTunnelSettings(
-            mode = AndroidSplitTunnelMode.fromValue(
-                intent.getStringExtra(modeExtra)
-                    ?: preferences?.get(modeKey)
-                    ?: fallback.mode.value
-            ),
-            proxyPackages = intent.stringCollectionExtra(proxyAppsExtra)
-                ?: preferences?.get(proxyAppsKey)
-                ?: fallback.proxyPackages,
-            bypassPackages = intent.stringCollectionExtra(bypassAppsExtra)
-                ?: preferences?.get(bypassAppsKey)
-                ?: fallback.bypassPackages
         )
     }
 
@@ -705,9 +638,26 @@ class OlcboxVpnService : VpnService() {
                         stopTransportProcesses(closeTun = true, waitForSocksPort = false)
                         return@withLock
                     }
-                    applySplitTunnelSettings(
-                        if (profile.isOlcRtc()) splitTunnelProfiles.olcRtc else splitTunnelProfiles.external
-                    )
+                    val refreshedSplitTunnelProfiles = if (expectedNotificationRequestId != null) {
+                        loadAndroidSplitTunnelProfiles(applicationContext.vpnPrefDataStore.data)
+                    } else {
+                        null
+                    }
+                    coroutineContext.ensureActive()
+                    synchronized(lifecycleTransitionLock) {
+                        if (requestedGeneration != generation || lifecycleStopping ||
+                            (expectedNotificationRequestId != null &&
+                                !isCurrentNotificationSwitch(expectedNotificationRequestId))
+                        ) {
+                            return@withLock
+                        }
+                        if (refreshedSplitTunnelProfiles != null) {
+                            splitTunnelProfiles = refreshedSplitTunnelProfiles
+                        }
+                        applySplitTunnelSettings(
+                            splitTunnelProfiles[AndroidSplitTunnelProfile.fromProfileType(profile.normalizedType)]
+                        )
+                    }
                     if (!profile.isOlcRtc()) {
                         startExternalProfile(
                             profile = profile,
@@ -1287,8 +1237,9 @@ class OlcboxVpnService : VpnService() {
         )
         activeProfileType = profile.normalizedType
 
-        val targetSocksPort = profile.localSocksPort ?: allocateLocalSocksPort()
-        if (profile.localSocksPort == null) {
+        val existingSocksPort = existingProfileSocksPort(profile)
+        val targetSocksPort = existingSocksPort ?: allocateLocalSocksPort()
+        if (existingSocksPort == null) {
             socksUsername = socksUsername.ifBlank { INTERNAL_SOCKS_USERNAME }
             socksPassword = socksPassword.ifBlank { INTERNAL_SOCKS_PASSWORD }
         }
@@ -1543,6 +1494,9 @@ class OlcboxVpnService : VpnService() {
 
             currentNetwork?.let { builder.setUnderlyingNetworks(arrayOf(it)) }
             builder.establish()
+                ?: throw IllegalStateException(
+                    "VPN permission is not prepared or was revoked; reconnect from the app"
+                )
         } catch (e: Exception) {
             addLog("VPN establish failed: ${e.message}")
             setStatus(VpnStatus.Error(e.message ?: "VPN establish failed"))
@@ -1829,7 +1783,7 @@ class OlcboxVpnService : VpnService() {
         OlcboxVpnState.clearConnectedProxy()
         val tunThread = tun2socksThread
         stopAuthenticatedSocksProxy()
-        stopExternalEngine()
+        val externalStopped = stopExternalEngine()
         stopTun2socks()
         cleanupVpnInterface()
         tunThread?.interrupt()
@@ -1839,7 +1793,7 @@ class OlcboxVpnService : VpnService() {
         }
         stopTunSocksBridge()
         unbindProcessFromNetwork()
-        return tunStopped
+        return externalStopped && tunStopped
     }
 
     private suspend fun waitForTun2socksStopped(thread: Thread?): Boolean {
@@ -1863,7 +1817,7 @@ class OlcboxVpnService : VpnService() {
         OlcboxVpnState.clearConnectedProxy()
         val tunThread = tun2socksThread
         stopAuthenticatedSocksProxy()
-        stopExternalEngine()
+        val externalStopped = stopExternalEngine()
         stopTun2socks()
         if (closeTun) cleanupVpnInterface()
         tunThread?.interrupt()
@@ -1877,14 +1831,14 @@ class OlcboxVpnService : VpnService() {
             if (closeTun) {
                 unbindProcessFromNetwork()
             }
-            return tunStopped && mobileStopped
+            return externalStopped && tunStopped && mobileStopped
         } else {
             stopMobile()
         }
         if (closeTun) {
             unbindProcessFromNetwork()
         }
-        return tunStopped
+        return externalStopped && tunStopped
     }
 
     private suspend fun stopSupersededTunnelStart() {
@@ -1923,9 +1877,16 @@ class OlcboxVpnService : VpnService() {
         socksProxy = null
     }
 
-    private fun stopExternalEngine() {
-        externalEngine?.stop()
-        externalEngine = null
+    private fun stopExternalEngine(): Boolean {
+        val engine = externalEngine ?: return true
+        return try {
+            engine.stop()
+            if (externalEngine === engine) externalEngine = null
+            true
+        } catch (failure: Exception) {
+            addLog("External VPN core did not stop: ${failure.message}")
+            false
+        }
     }
 
     private fun stopTunSocksBridge() {
@@ -2024,8 +1985,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun requiresTunSocksBridge(): Boolean {
-        return activeProfileType == VpnProfileConfig.TYPE_OLCRTC ||
-            activeProfileType == VpnProfileConfig.TYPE_VLESS
+        return profileRequiresTunSocksBridge(activeProfileType)
     }
 
     private fun handleRtcLine(line: String) {
@@ -2682,6 +2642,7 @@ class OlcboxVpnService : VpnService() {
     private fun activeModeLabel(): String {
         if (activeProfileType != VpnProfileConfig.TYPE_OLCRTC) {
             return when (activeProfileType) {
+                VpnProfileConfig.TYPE_OPENFLUX -> "OpenFlux"
                 VpnProfileConfig.TYPE_VLESS -> "VLESS"
                 VpnProfileConfig.TYPE_AMNEZIA_WG -> "AmneziaWG"
                 VpnProfileConfig.TYPE_AMNEZIA_VPN -> "AmneziaVPN"

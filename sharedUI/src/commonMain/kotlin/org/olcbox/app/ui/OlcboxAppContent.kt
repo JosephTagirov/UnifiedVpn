@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.ui.features.home.HomeScreen
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
 import org.olcbox.app.ui.features.locations.LocationSettingsScreen
@@ -90,6 +91,10 @@ fun OlcboxAppContent(
                     onOpenLocationSettings = { id ->
                         locationViewModel.startEditing(id)
                         onNavigate(AppScreen.LocationSettings(id))
+                    },
+                    onAddOpenFluxLocation = {
+                        locationViewModel.startCreating(VpnProfileConfig.TYPE_OPENFLUX)
+                        onNavigate(AppScreen.LocationSettings(null))
                     },
                     onAddLocation = {
                         locationViewModel.startEditing(null)

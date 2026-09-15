@@ -61,6 +61,7 @@ fun HomeScreen(
     showSplitTunnelingButton: Boolean = false,
     onSplitTunnelingClick: () -> Unit = {},
     onOpenLocationSettings: (String?) -> Unit,
+    onAddOpenFluxLocation: () -> Unit,
     onAddLocation: () -> Unit
 ) {
     var isLogsSheetOpen by remember { mutableStateOf(false) }
@@ -261,6 +262,10 @@ fun HomeScreen(
                         isAddSheetOpen = false
                         request()
                     }
+                },
+                onAddOpenFluxClick = {
+                    isAddSheetOpen = false
+                    onAddOpenFluxLocation()
                 },
                 onAddCustomLocationClick = {
                     isAddSheetOpen = false

@@ -1,9 +1,11 @@
 package org.olcbox.app
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.net.VpnService
 import android.os.Build
 import androidx.core.content.ContextCompat
 import org.olcbox.app.vpn.service.OlcboxVpnActions
@@ -18,6 +20,12 @@ class DebugVpnControlReceiver : BroadcastReceiver() {
             else -> return
         }
 
+        if (serviceAction == OlcboxVpnActions.ACTION_START_VPN && VpnService.prepare(context) != null) {
+            resultCode = Activity.RESULT_CANCELED
+            resultData = "VPN_PERMISSION_REQUIRED"
+            return
+        }
+
         val serviceIntent = Intent().apply {
             setClassName(context.packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
             action = serviceAction
@@ -29,6 +37,11 @@ class DebugVpnControlReceiver : BroadcastReceiver() {
             ContextCompat.startForegroundService(context, serviceIntent)
         } else {
             context.startService(serviceIntent)
+        }
+
+        if (serviceAction == OlcboxVpnActions.ACTION_START_VPN) {
+            resultCode = Activity.RESULT_OK
+            resultData = "VPN_PREPARED"
         }
     }
 

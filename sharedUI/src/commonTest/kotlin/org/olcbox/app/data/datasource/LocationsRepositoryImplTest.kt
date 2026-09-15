@@ -11,16 +11,120 @@ import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
+import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VpnProfileConfig
+import org.olcbox.app.data.model.isTransportSupportedOnCurrentPlatform
 import org.olcbox.app.data.share.ConfigShareService
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LocationsRepositoryImplTest {
+
+    @Test
+    fun importsEncryptedOpenFluxUriWithItsDisplayName() = runTest {
+        val source = FakeLocationsDataSource()
+        val config = openFluxConfig()
+
+        assertTrue(LocationsRepositoryImpl(source).importText(config.toUri() + "#Yandex%20Docs"))
+
+        val entry = assertNotNull(source.stored).locations.single()
+        assertEquals(VpnProfileConfig.TYPE_OPENFLUX, entry.profile.normalizedType)
+        assertEquals("Yandex Docs", entry.displayName())
+        assertEquals(config, OpenFluxProfileConfig.parse(entry.profile.rawConfig))
+        assertEquals(config.toUri(), entry.profile.uri)
+        assertTrue(entry.isComplete())
+    }
+
+    @Test
+    fun importsStandaloneOpenFluxProfileJson() = runTest {
+        val source = FakeLocationsDataSource()
+        val config = openFluxConfig()
+
+        assertTrue(LocationsRepositoryImpl(source).importText(config.toJson()))
+
+        val entry = assertNotNull(source.stored).locations.single()
+        assertTrue(entry.profile.isOpenFlux())
+        assertEquals(config, OpenFluxProfileConfig.parse(entry.profile.rawConfig))
+        assertEquals("OpenFlux", entry.displayName())
+    }
+
+    @Test
+    fun rejectsOpenFluxProfilesWithoutValidEncryptionOrDocumentUrls() = runTest {
+        val invalid = listOf(
+            openFluxConfig().copy(encryptionKey = ""),
+            openFluxConfig().copy(encryptionKey = "a".repeat(63)),
+            openFluxConfig().copy(encryptionKey = "z".repeat(64)),
+            openFluxConfig().copy(documentUrl = "http://docs.yandex.ru/docs/view?url=document"),
+            openFluxConfig().copy(documentUrl = "https://example.invalid/document"),
+            openFluxConfig().copy(transport = "max")
+        )
+        invalid.forEach { config ->
+            val source = FakeLocationsDataSource()
+            assertFalse(LocationsRepositoryImpl(source).importText(config.toJson()))
+            assertTrue(source.stored?.locations.isNullOrEmpty())
+        }
+        assertFalse(LocationsRepositoryImpl(FakeLocationsDataSource()).importText("openflux://not-json"))
+    }
+
+    @Test
+    fun bundleRoundTripPreservesOpenFluxAndOtherExternalProfiles() = runTest {
+        val entries = listOf(
+            LocationEntry.fromProfile(
+                storageId = "openflux-test",
+                profile = VpnProfileConfig(
+                    type = VpnProfileConfig.TYPE_OPENFLUX,
+                    name = "Yandex Docs",
+                    rawConfig = openFluxConfig().toJson()
+                )
+            ),
+            LocationEntry.fromProfile(
+                storageId = "vless-test",
+                profile = VpnProfileConfig(
+                    type = VpnProfileConfig.TYPE_VLESS,
+                    name = "VLESS",
+                    uri = "vless://test@example.invalid:443"
+                )
+            )
+        )
+        val source = FakeLocationsDataSource(
+            stored = LocationBundleV4(activeLocationId = "openflux-test", locations = entries)
+        )
+        val exported = LocationsRepositoryImpl(source).exportBundle()
+        val restored = FakeLocationsDataSource()
+
+        assertTrue(LocationsRepositoryImpl(restored).importText(exported))
+
+        val bundle = assertNotNull(restored.stored)
+        assertEquals("openflux-test", bundle.activeLocationId)
+        assertEquals(entries, bundle.locations)
+    }
+
+    @Test
+    fun importsMultipleOpenFluxLinksWithoutReplacingExistingProfiles() = runTest {
+        val source = FakeLocationsDataSource()
+        val repository = LocationsRepositoryImpl(source)
+        assertTrue(repository.importText("vless://test@example.invalid:443#Existing"))
+        assertTrue(
+            repository.importText(
+                openFluxConfig().toUri() + "#First\n" +
+                    openFluxConfig().copy(encryptionKey = "cd".repeat(32)).toUri() + "#Second"
+            )
+        )
+
+        val profiles = assertNotNull(source.stored).locations.map { it.profile }
+        assertEquals(listOf("Existing", "First", "Second"), profiles.map { it.name })
+        assertEquals(2, profiles.count { it.isOpenFlux() })
+    }
+
+    private fun openFluxConfig() = OpenFluxProfileConfig(
+        documentUrl = "https://docs.yandex.ru/docs/view?url=ya-disk-public%3A%2F%2Ftest-document",
+        encryptionKey = "ab".repeat(32)
+    )
 
     @Test
     fun exportsAndImportsBundleV5WithActiveLocation() = runTest {
@@ -167,7 +271,12 @@ class LocationsRepositoryImplTest {
         val entry = imported.locations.single()
         val location = entry.location
         assertEquals(LocationConfig.PROVIDER_WB_STREAM, location.bypassProvider)
-        assertEquals(LocationConfig.TRANSPORT_SEICHANNEL, location.transport)
+        val expectedTransport = if (isTransportSupportedOnCurrentPlatform(LocationConfig.TRANSPORT_SEICHANNEL)) {
+            LocationConfig.TRANSPORT_SEICHANNEL
+        } else {
+            LocationConfig.TRANSPORT_VP8CHANNEL
+        }
+        assertEquals(expectedTransport, location.transport)
         assertEquals("room-01", location.id)
         assertEquals("RU / olc free sub / IPv6", location.name)
         assertEquals("RU / olc free sub / IPv6", entry.metadata?.mimo)
@@ -411,7 +520,7 @@ class LocationsRepositoryImplTest {
             listOf(
                 LocationConfig.TRANSPORT_VP8CHANNEL,
                 LocationConfig.TRANSPORT_SEICHANNEL
-            ),
+            ).filter(::isTransportSupportedOnCurrentPlatform),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_TELEMOST)
         )
         assertEquals(
@@ -419,7 +528,7 @@ class LocationsRepositoryImplTest {
                 LocationConfig.TRANSPORT_DATACHANNEL,
                 LocationConfig.TRANSPORT_VP8CHANNEL,
                 LocationConfig.TRANSPORT_SEICHANNEL
-            ),
+            ).filter(::isTransportSupportedOnCurrentPlatform),
             LocationConfig.supportedTransportsForProvider(LocationConfig.PROVIDER_JAZZ)
         )
         assertEquals(

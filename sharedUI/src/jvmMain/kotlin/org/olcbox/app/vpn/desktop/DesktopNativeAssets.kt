@@ -21,6 +21,7 @@ internal object DesktopNativeAssets {
                 assets.add(resolveWindowsTun2SocksBinary())
                 assets.add(resolveSingBoxBinary())
                 assets.add(resolveXrayBinary())
+                assets.add(resolveOpenFluxBinary())
             }
             DesktopOs.Linux -> {
                 assets.add(resolveHevSocks5TunnelBinary())
@@ -124,6 +125,21 @@ internal object DesktopNativeAssets {
             DesktopOs.Other -> error("The bundled VLESS Xray engine requires Windows or Linux")
         }
         val explicitBinary = System.getenv("XRAY_BINARY")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { Path(it) }
+        return resolveBinary(
+            fileName = fileName,
+            resourceName = "native/$fileName",
+            candidates = listOfNotNull(explicitBinary) + desktopNativeResourceCandidates(fileName)
+        )
+    }
+
+    fun resolveOpenFluxBinary(): Path {
+        require(DesktopPaths.os == DesktopOs.Windows) {
+            "The bundled OpenFlux desktop engine requires Windows"
+        }
+        val fileName = "openflux-windows-amd64.exe"
+        val explicitBinary = System.getenv("OPENFLUX_BINARY")
             ?.takeIf { it.isNotBlank() }
             ?.let { Path(it) }
         return resolveBinary(

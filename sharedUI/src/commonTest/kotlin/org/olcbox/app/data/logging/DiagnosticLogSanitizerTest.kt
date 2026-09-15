@@ -94,4 +94,39 @@ class DiagnosticLogSanitizerTest {
 
         assertEquals(source, sanitizeDiagnosticLogLine(source))
     }
+
+    @Test
+    fun redactsOpenFluxLinksKeysAndDocumentUrls() {
+        val key = "ab".repeat(32)
+        val source = """
+            OpenFlux openflux://private-profile-payload#private-name
+            {"document_url":"https://docs.yandex.ru/docs/view?url=document-secret","encryption_key":"$key"}
+            encryptionKey = 'key with spaces'
+            documentUrl = https://disk.yandex.ru/i/private-document
+            socks_password = local-proxy-password
+            OpenFlux request failed for https://docs.yandex.ru/docs/view?url=another-document-secret
+        """.trimIndent()
+
+        val sanitized = sanitizeDiagnosticLogLine(source)
+
+        listOf(
+            "private-profile-payload",
+            "private-name",
+            "document-secret",
+            key,
+            "key with spaces",
+            "private-document",
+            "local-proxy-password"
+        ).forEach { secret -> assertFalse(secret in sanitized) }
+        assertContains(sanitized, "openflux://<redacted>")
+        assertContains(sanitized, "OpenFlux request failed")
+        assertEquals(sanitized, sanitizeDiagnosticLogLine(sanitized))
+    }
+
+    @Test
+    fun redactsIncompleteOpenFluxSecretAssignments() {
+        val sanitized = sanitizeDiagnosticLogLine("OPENFLUX_FATAL: encryption_key=\"partial key with spaces")
+
+        assertEquals("OPENFLUX_FATAL: encryption_key=\"<redacted>\"", sanitized)
+    }
 }

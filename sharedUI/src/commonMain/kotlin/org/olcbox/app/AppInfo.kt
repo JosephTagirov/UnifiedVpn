@@ -8,7 +8,8 @@ data class AppInfo(
     val olcrtcSha: String,
     val awgCoreSha: String,
     val xrayVersion: String,
-    val xraySha: String
+    val xraySha: String,
+    val openFluxSha: String
 )
 
 object CurrentAppInfo {
@@ -20,11 +21,13 @@ object CurrentAppInfo {
         olcrtcSha = GeneratedAppInfo.OLCRTC_SHA,
         awgCoreSha = GeneratedAppInfo.AWG_CORE_SHA,
         xrayVersion = GeneratedAppInfo.XRAY_VERSION,
-        xraySha = GeneratedAppInfo.XRAY_SHA
+        xraySha = GeneratedAppInfo.XRAY_SHA,
+        openFluxSha = GeneratedAppInfo.OPENFLUX_SHA
     )
 
     val userAgent: String = "${value.name}/${value.version} build/${value.build}"
     val diagnosticVersion: String =
         "${value.name}/${value.version} build/${value.build} olcrtc/${value.olcrtcSha.take(12)} " +
-            "awg/${value.awgCoreSha.take(12)} xray/${value.xrayVersion}/${value.xraySha.take(12)}"
+            "awg/${value.awgCoreSha.take(12)} xray/${value.xrayVersion}/${value.xraySha.take(12)} " +
+            "openflux/${value.openFluxSha.take(12)}"
 }

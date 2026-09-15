@@ -2,6 +2,38 @@
 
 Все существенные изменения Unified VPN / Olcbox фиксируются в этом файле.
 
+## [0.0.13] - 2026-09-15 (Preview / Предварительная)
+
+Build / Сборка: `2026091401`. Experimental preview; stable updates remain on 0.0.12. Экспериментальная версия; стабильные обновления остаются на 0.0.12.
+
+### English
+
+- Added a visible `Add OpenFlux` action with manual document URL and encryption-key fields. The add sheet scrolls and wraps longer labels. The icon beside `Ping` is now a lightning bolt, with the existing progress indicator preserved.
+- Android OpenFlux shares the existing olcRTC per-app split-tunneling settings. The selector shows `olcRTC / OpenFlux`; existing lists are preserved and VLESS/AWG rules remain separate. This does not combine the native transports or enable simultaneous clients on one OpenFlux document.
+- Android notification profile switching and rollback reload the saved split-tunneling rules instead of reusing stale lists. Canceled or superseded reads cannot publish settings; a read failure is not silently converted to all-app routing.
+- Added an experimental OpenFlux profile with Yandex Documents transport, a separate document/key editor, and URI/JSON import. OpenFlux is pinned to `4f1bdb554c262f3ae9adbfe317a092c6b929ba7d`; original olcbox and other bundled engines remain unchanged.
+- The dedicated OpenFlux wrapper requires upstream AES-256-GCM encryption and a fresh authenticated server response before reporting readiness. Plaintext fallback is disabled. Destination DNS uses encrypted tunnel TCP; general UDP and IPv6 are not supported by this first transport integration.
+- Added Windows/Android engine lifecycle tests, native handshake tests, and hash-checked native packaging. Fixed late readiness after cancellation and retention of an Android child process that did not stop.
+- Fixed combined-profile restore dropping valid non-olcRTC profiles; OpenFlux document URLs and encryption keys are redacted from diagnostic logs.
+- Added isolated, opt-in Docker/SSH deployment with host-key pinning, protected configuration transfer, immutable image inputs, and ownership-checked stop. Windows passed authenticated OpenFlux SOCKS/HTTPS and Android 35 emulator passed authenticated TUN/HTTPS, with stable processes and clean shutdown. APK signature/native contents and Windows JVM/installer metadata were verified. See the [current validation report](docs/testing/openflux-2026091401.md).
+- Fixed silent Android TUN creation refusal: missing/revoked VPN preparation now reports an error. The debug test receiver calls `VpnService.prepare()` and refuses missing consent; AppOps authorization alone is no longer treated as a prepared connection. Process log readers retry only bounded, typed, no-byte interrupted reads, not closed streams or other failures.
+- Passed 234 offline JVM tests, 164 Android host tests, 111 synthetic Android-harness checks, and 17 stdin/checksum tests. Shared transport tests now respect the existing Android restriction on SEI; the restriction itself is unchanged.
+- Added an opt-in, bounded Windows download benchmark with authenticated local SOCKS, TLS verification, payload/time caps, no direct fallback, connection monitoring, and verified stop between engines. The first real olcRTC/AWG/VLESS/OpenFlux measurements are recorded in the validation report; they are samples, not guaranteed rates.
+
+### Русский
+
+- Добавлено отдельное действие `Добавить OpenFlux` с ручным вводом ссылки документа и ключа шифрования. Список добавления прокручивается, длинные подписи переносятся. Рядом с `Пинг` теперь молния; индикатор проверки сохранён.
+- Android OpenFlux использует общие с olcRTC правила раздельного туннелирования приложений. Вкладка называется `olcRTC / OpenFlux`; существующие списки сохранены, правила VLESS/AWG остаются отдельными. Это не объединяет движки и не добавляет одновременных клиентов на одном документе OpenFlux.
+- Переключение профилей и возврат к предыдущему через Android-уведомление перечитывают сохранённые правила раздельного туннелирования, а не используют устаревшие списки. Отменённый или заменённый запрос не применяет настройки; ошибка чтения не включает туннель для всех приложений молча.
+- Добавлен экспериментальный профиль OpenFlux через Яндекс Документы: отдельные поля документа и ключа, импорт URI/JSON. Используется закреплённый commit `4f1bdb554c262f3ae9adbfe317a092c6b929ba7d`; исходный olcbox и остальные встроенные движки не обновлялись.
+- Обёртка OpenFlux требует встроенное AES-256-GCM-шифрование и свежий аутентифицированный ответ сервера до сообщения о готовности. Передачи без шифрования нет. DNS назначения идёт по TCP внутри зашифрованного туннеля; обычный UDP и IPv6 на первом этапе не поддерживаются.
+- Добавлены тесты жизненного цикла Windows/Android, нативного подтверждения соединения и упаковка с проверкой хешей. Исправлены поздняя готовность после отмены и потеря контроля над Android-процессом, который не удалось остановить.
+- Исправлено восстановление объединённых пакетов, отбрасывавшее корректные не-olcRTC профили; ссылки на документы и ключи OpenFlux скрываются в диагностике.
+- Добавлено изолированное Docker/SSH-развёртывание с проверкой отпечатка, защищённой передачей конфига, закреплёнными образами и остановкой только собственных ресурсов. Windows прошёл аутентифицированный OpenFlux SOCKS/HTTPS, Android 35 на эмуляторе прошёл TUN/HTTPS с контролем процессов и остановкой. Подпись и native-состав APK, JVM и метаданные Windows-установщика проверены. См. [текущий отчёт](docs/testing/openflux-2026091401.md).
+- Исправлен молчаливый отказ создания Android TUN: отсутствие или отзыв подготовки VPN теперь приводит к понятной ошибке. Тестовый receiver вызывает `VpnService.prepare()` и отказывает без согласия; одного AppOps больше недостаточно. Чтение логов повторяется только при типизированном прерывании без переданных байтов, с ограничением попыток, но не при закрытом потоке или другой ошибке.
+- Прошли 234 офлайн JVM-теста, 164 Android host-теста, 111 синтетических проверок Android-сценария и 17 тестов stdin/контрольных сумм. Общие тесты транспортов теперь учитывают прежнее ограничение Android для SEI; само ограничение не менялось.
+- Добавлен отдельный ограниченный замер загрузки Windows: авторизованный локальный SOCKS, проверка TLS, лимиты объёма/времени, отсутствие прямого обхода, контроль соединения и остановка между протоколами. Первые реальные результаты olcRTC/AWG/VLESS/OpenFlux сохранены в отчёте, без обещания постоянной скорости.
+
 ## [0.0.12] - 2026-09-09
 
 Сборка: `2026090802`. Публикация разрешена владельцем. Проверки и известные ограничения описаны в [release notes](docs/releases/0.0.12.md).

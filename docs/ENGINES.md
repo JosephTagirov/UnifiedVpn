@@ -8,6 +8,57 @@ This project uses one Android `VpnService` and switches the active transport by 
 - `vless://` profiles are imported and use `sing-box` for its supported transports or Xray for XHTTP/SplitHTTP.
 - Amnezia WireGuard-style profiles are imported and can be started through the same `sing-box` + `tun2socks` path.
 
+## Experimental OpenFlux
+
+The 0.0.13 preview integrates [OpenFlux](https://github.com/p1neappleXpress/OpenFlux)
+at `4f1bdb554c262f3ae9adbfe317a092c6b929ba7d` through Yandex Documents.
+Use `+ -> Add OpenFlux` for manual document URL/key entry, or import URI/JSON.
+The legacy editor and a matching `unified-openflux-aesgcm-v1` server are required.
+Only one active client per document/key/server instance is supported.
+
+AES-256-GCM is mandatory, and readiness requires a fresh authenticated server
+response. There is no plaintext fallback. This is not a security-audit or forward
+secrecy claim. The transport carries TCP/IPv4, not general UDP or IPv6; destination
+DNS uses encrypted TCP, while the Yandex transport needs the underlying network.
+
+Android routes OpenFlux through its existing VPN bridge and **shares the olcRTC
+per-app split-tunneling rules**. The original lists are preserved; VLESS/AWG rules
+remain separate. These per-app rules apply in Android VPN mode, not proxy mode.
+Windows provides Local SOCKS and System proxy; Windows TUN remains unavailable.
+Linux OpenFlux output is a server binary, not a tested desktop client integration.
+
+Windows encrypted SOCKS/HTTPS and Android 35 emulator TUN/HTTPS passed on
+2026-09-15, including process-liveness and shutdown checks. Earlier Android
+failures were traced to missing VPN preparation in the debug test entry point.
+See the [current test report](testing/openflux-2026091401.md), including limits.
+Native Ready or compilation alone is not proof that traffic works.
+[Build instructions, corresponding source, and limits](../tools/openflux/README.md).
+
+### OpenFlux На Русском
+
+Предварительная 0.0.13 включает OpenFlux указанного выше коммита через Яндекс
+Документы. `+ -> Добавить OpenFlux` открывает ручной ввод ссылки и ключа; есть
+импорт URI/JSON. Нужны старый редактор и сервер с нашей обёрткой
+`unified-openflux-aesgcm-v1`. На документ/ключ/экземпляр разрешён один активный клиент.
+
+AES-256-GCM обязателен, готовность требует свежего аутентифицированного ответа
+сервера; передачи без шифрования нет. Это не подтверждение аудита безопасности
+или прямой секретности. Поддерживается TCP/IPv4, но не произвольный UDP и IPv6.
+DNS назначения идёт внутри зашифрованного TCP-туннеля, самому Яндексу нужна
+исходная сеть.
+
+На Android OpenFlux использует существующий VPN-мост и **общие с olcRTC правила
+раздельного туннелирования приложений**. Прежние списки сохраняются, VLESS/AWG
+остаются отдельной группой. Эти правила действуют в VPN-режиме, не в прокси.
+Windows поддерживает Local SOCKS и системный прокси; TUN остаётся недоступным.
+Linux-бинарник OpenFlux предназначен для сервера, не подтверждает desktop-интеграцию.
+
+2026-09-15 Windows прошёл зашифрованный SOCKS/HTTPS, а Android 35 на эмуляторе
+прошёл TUN/HTTPS, включая контроль процессов и остановку. Прежние ошибки Android
+были связаны с пропущенной подготовкой VPN в тестовом входе. См.
+[текущий отчёт](testing/openflux-2026091401.md) и его ограничения.
+Одних Native Ready и компиляции недостаточно для подтверждения трафика.
+
 ## VLESS core packaging
 
 Preferred Android packaging:

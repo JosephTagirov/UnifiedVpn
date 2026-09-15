@@ -178,6 +178,14 @@ fun LocationSettingsScreen(
                 )
             }
 
+            item {
+                ProfileTypePicker(
+                    selectedType = viewModel.editingProfile.normalizedType,
+                    enabled = !isSaving,
+                    onTypeSelected = viewModel::onProfileTypeChanged
+                )
+            }
+
             if (viewModel.isEditingOlcRtc) {
                 item {
                     ConnectionTypePicker(
@@ -282,14 +290,44 @@ fun LocationSettingsScreen(
                         configGetter = { viewModel.editingConfig }
                     )
                 }
-            } else {
+            } else if (viewModel.isEditingOpenFlux) {
                 item {
-                    ProfileTypePicker(
-                        selectedType = viewModel.editingProfile.normalizedType,
+                    SettingsTextField(
+                        value = viewModel.editingOpenFluxConfig.documentUrl,
+                        onValueChange = viewModel::onOpenFluxDocumentUrlChanged,
+                        label = "Yandex document URL",
+                        placeholder = "https://docs.yandex.ru/...",
                         enabled = !isSaving,
-                        onTypeSelected = viewModel::onProfileTypeChanged
+                        isError = viewModel.openFluxDocumentUrlError != null,
+                        supportingText = viewModel.openFluxDocumentUrlError,
+                        leadingIcon = Icons.Rounded.Link,
+                        onClear = { viewModel.onOpenFluxDocumentUrlChanged("") },
+                        sensitive = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Next
+                        )
                     )
                 }
+                item {
+                    SettingsTextField(
+                        value = viewModel.editingOpenFluxConfig.encryptionKey,
+                        onValueChange = viewModel::onOpenFluxEncryptionKeyChanged,
+                        label = "Encryption key",
+                        placeholder = "64 hex characters",
+                        enabled = !isSaving,
+                        isError = viewModel.openFluxEncryptionKeyError != null,
+                        supportingText = viewModel.openFluxEncryptionKeyError,
+                        leadingIcon = Icons.Rounded.Key,
+                        onClear = { viewModel.onOpenFluxEncryptionKeyChanged("") },
+                        sensitive = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        )
+                    )
+                }
+            } else {
                 item {
                     SettingsTextField(
                         value = viewModel.editingProfile.uri.orEmpty(),
@@ -471,6 +509,8 @@ private fun ProfileTypePicker(
     onTypeSelected: (String) -> Unit
 ) {
     val options = listOf(
+        VpnProfileConfig.TYPE_OLCRTC,
+        VpnProfileConfig.TYPE_OPENFLUX,
         VpnProfileConfig.TYPE_VLESS,
         VpnProfileConfig.TYPE_AMNEZIA_WG,
         VpnProfileConfig.TYPE_AMNEZIA_VPN

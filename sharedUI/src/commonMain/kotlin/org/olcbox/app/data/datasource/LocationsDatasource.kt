@@ -33,6 +33,7 @@ import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VpnProfileConfig
+import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.data.repository.LocationImportFailureKind
 import org.olcbox.app.data.repository.LocationImportResult
@@ -892,6 +893,7 @@ class LocationsRepositoryImpl(
                 !value.startsWith(OLCRTC_URI_PREFIX, ignoreCase = true) &&
                 !value.startsWith("vless://", ignoreCase = true) &&
                 !value.startsWith("awg://", ignoreCase = true) &&
+                !value.startsWith("openflux://", ignoreCase = true) &&
                 !value.startsWith("vpn://", ignoreCase = true)
     }
 
@@ -995,12 +997,62 @@ class LocationsRepositoryImpl(
         }
 
         candidates.forEach { candidate ->
+            parseOpenFluxProfiles(candidate, subscriptionUrl, updateIntervalMs)?.let {
+                return it
+            }
             parseVlessProfiles(candidate, subscriptionUrl, updateIntervalMs)?.let {
                 return it
             }
         }
 
         return parseAmneziaProfile(text, subscriptionUrl, updateIntervalMs)
+    }
+
+    private fun parseOpenFluxProfiles(
+        text: String,
+        subscriptionUrl: String? = null,
+        updateIntervalMs: Long? = null
+    ): LocationBundleV4? {
+        val sources = if (text.trim().startsWith('{')) {
+            listOf(text)
+        } else {
+            text.lineSequence().map(String::trim)
+                .filter { it.startsWith("openflux://", ignoreCase = true) }
+                .distinct()
+                .toList()
+        }
+        val profiles = sources.mapNotNull { source ->
+            OpenFluxProfileConfig.parse(source)?.takeIf { it.isValid() }?.let { config ->
+                val name = if (source.startsWith("openflux://", ignoreCase = true)) {
+                    parseUriFragment(source).ifBlank { "OpenFlux" }
+                } else {
+                    "OpenFlux"
+                }
+                VpnProfileConfig(
+                    type = VpnProfileConfig.TYPE_OPENFLUX,
+                    name = name,
+                    uri = config.toUri(),
+                    rawConfig = config.toJson()
+                )
+            }
+        }
+        if (profiles.isEmpty()) return null
+
+        val metadata = LocationMetadata(
+            subscription = SubscriptionMetadata(
+                name = subscriptionUrl?.let { "OpenFlux subscription" }
+            ).withSubscriptionInterval(updateIntervalMs)
+        ).normalized().takeUnless { it.isEmpty() }
+        val usedStorageIds = mutableSetOf<String>()
+        val entries = profiles.map { profile ->
+            LocationEntry.fromProfile(
+                storageId = uniqueStorageId("openflux_${profile.displayName().storageSlug()}", usedStorageIds),
+                profile = profile,
+                subscriptionUrl = subscriptionUrl,
+                metadata = metadata
+            )
+        }
+        return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
     }
 
     private fun parseVlessProfiles(
@@ -1604,7 +1656,7 @@ class LocationsRepositoryImpl(
                     }
                 }
                 .normalized()
-                .takeIf { it.location.isComplete() }
+                .takeIf { it.isComplete() }
         }.getOrNull()
     }
 

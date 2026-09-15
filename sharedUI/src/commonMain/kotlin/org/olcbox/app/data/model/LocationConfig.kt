@@ -562,11 +562,14 @@ data class VpnProfileConfig(
             TYPE_VLESS -> "VLESS"
             TYPE_AMNEZIA_WG -> "AmneziaWG"
             TYPE_AMNEZIA_VPN -> "AmneziaVPN"
+            TYPE_OPENFLUX -> "OpenFlux"
             else -> "VPN"
         }
     }
 
     fun isOlcRtc(): Boolean = normalizedType == TYPE_OLCRTC
+
+    fun isOpenFlux(): Boolean = normalizedType == TYPE_OPENFLUX
 
     fun isCompleteFor(location: LocationConfig? = null): Boolean {
         val normalized = normalized()
@@ -579,6 +582,9 @@ data class VpnProfileConfig(
                 normalized.uri?.startsWith("awg://", ignoreCase = true) == true
             TYPE_AMNEZIA_VPN -> !normalized.rawConfig.isNullOrBlank() ||
                 normalized.uri?.startsWith("vpn://", ignoreCase = true) == true
+            TYPE_OPENFLUX -> OpenFluxProfileConfig.parse(
+                normalized.rawConfig?.takeIf { it.isNotBlank() } ?: normalized.uri
+            )?.isValid() == true
             else -> !normalized.rawConfig.isNullOrBlank() || !normalized.uri.isNullOrBlank()
         }
     }
@@ -592,6 +598,7 @@ data class VpnProfileConfig(
         const val TYPE_VLESS = "vless"
         const val TYPE_AMNEZIA_WG = "amnezia_wg"
         const val TYPE_AMNEZIA_VPN = "amnezia_vpn"
+        const val TYPE_OPENFLUX = "openflux"
         private const val MIN_PORT = 1
         private const val MAX_PORT = 65535
 
@@ -601,6 +608,7 @@ data class VpnProfileConfig(
                 TYPE_VLESS, "happ", "happ_plus", "happ+" -> TYPE_VLESS
                 TYPE_AMNEZIA_WG, "amneziawg", "amnezia-wg", "awg", "wireguard" -> TYPE_AMNEZIA_WG
                 TYPE_AMNEZIA_VPN, "amnezia", "amneziavpn", "amnezia-vpn" -> TYPE_AMNEZIA_VPN
+                TYPE_OPENFLUX -> TYPE_OPENFLUX
                 else -> value.trim().lowercase().ifBlank { TYPE_OLCRTC }
             }
         }
