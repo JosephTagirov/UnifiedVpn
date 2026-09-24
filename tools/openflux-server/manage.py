@@ -20,9 +20,10 @@ import warnings
 from urllib.parse import urlsplit
 
 
-UPSTREAM = "4f1bdb554c262f3ae9adbfe317a092c6b929ba7d"
+UPSTREAM = "d34dc8caa70ca059cd80d8f5753499361052dabc"
 PROTOCOL = "unified-openflux-aesgcm-v1"
-VERSION = f"unified-openflux 1 upstream={UPSTREAM} protocol={PROTOCOL}"
+VERSION = f"unified-openflux 5 upstream={UPSTREAM} protocol={PROTOCOL}"
+TRANSPORTS = ("yandex", "vyandex")
 INSTALL_DIR = Path("/opt/unifiedvpn-openflux")
 NAME = "unifiedvpn-openflux"
 NETWORK = NAME + "-net"
@@ -44,6 +45,12 @@ class DeploymentError(Exception):
 
 def fail(message):
     raise DeploymentError(message)
+
+
+def instance_name(instance):
+    if not isinstance(instance, str) or not re.fullmatch(r"[a-z][a-z0-9]{0,15}", instance):
+        fail("Instance must contain 1 through 16 lowercase ASCII letters or digits, starting with a letter.")
+    return NAME if instance == "default" else NAME + "-" + instance
 
 
 def decode_json(value):
@@ -103,14 +110,21 @@ def validate_document_url(value):
         fail("Use an HTTPS docs.yandex.ru or disk.yandex.ru link without userinfo or fragment.")
 
 
+def validate_transport(value):
+    if not isinstance(value, str) or value not in TRANSPORTS:
+        fail("Select yandex or vyandex; no automatic transport fallback is supported.")
+    return value
+
+
 def validate_config(config):
     fields = {"version", "mode", "transport", "document_url", "encryption_key", "handshake_timeout_seconds"}
     if not isinstance(config, dict) or set(config) != fields:
         fail("Server JSON must contain exactly the documented server fields.")
     if type(config["version"]) is not int or config["version"] != 1:
         fail("Only server configuration version 1 is supported.")
-    if config["mode"] != "server" or config["transport"] != "yandex":
+    if config["mode"] != "server":
         fail("This deployment supports only encrypted Yandex server mode.")
+    validate_transport(config["transport"])
     validate_document_url(config["document_url"])
     key = config["encryption_key"]
     if not isinstance(key, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", key):
@@ -178,22 +192,29 @@ def run_command(argv, timeout=30, allow_failure=False):
 
 
 class Manager:
-    def __init__(self, root=INSTALL_DIR, command=run_command):
-        self.root = Path(root)
+    def __init__(self, root=None, command=run_command, instance="default"):
+        self.instance = instance
+        self.name = instance_name(instance)
+        self.network = self.name + "-net"
+        self.root = Path(root) if root is not None else INSTALL_DIR.with_name(self.name)
         self.command = command
 
     def docker(self, *args, timeout=30, allow_failure=False):
         return self.command(["docker", "--host", f"unix://{DOCKER_SOCKET.as_posix()}", *args],
                             timeout=timeout, allow_failure=allow_failure)
 
-    def preflight(self):
+    def preflight(self, *, network_namespace=None):
         if platform.system() != "Linux" or platform.machine() not in ("x86_64", "amd64"):
             fail("Deployment commands require a Linux amd64 host; unit tests are platform-independent.")
         if os.geteuid() != 0:
             fail("Run deployment commands as root on the intended host.")
         if Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
             fail("Run the manager on the host, not inside a container.")
-        if os.readlink("/proc/self/ns/net") != os.readlink("/proc/1/ns/net"):
+        if network_namespace is None:
+            network_namespace = os.readlink("/proc/1/ns/net")
+        if not isinstance(network_namespace, str) or re.fullmatch(r"net:\[[0-9]+\]", network_namespace) is None:
+            fail("The expected host network namespace is invalid.")
+        if os.readlink("/proc/self/ns/net") != network_namespace:
             fail("Run the manager in the host's initial network namespace.")
         for utility in ("docker", "ip"):
             if shutil.which(utility) is None:
@@ -218,6 +239,8 @@ class Manager:
         state = decode_json(path.read_bytes())
         if not isinstance(state, dict) or type(state.get("format")) is not int or state.get("format") != 1 or state.get("upstream") != UPSTREAM:
             fail("Installation state does not belong to this deployment version.")
+        if state.get("instance", "default") != self.instance:
+            fail("Installation belongs to a different instance; nothing was changed.")
         if not isinstance(state.get("owner"), str) or not HASH_RE.fullmatch(state["owner"]):
             fail("Installation ownership record is invalid.")
         for field in ("image_id", "runtime_id"):
@@ -287,7 +310,7 @@ class Manager:
                         if existing.version == 4 and subnet.overlaps(existing):
                             fail("The requested bridge subnet overlaps an existing Docker network.")
 
-    def validate_inputs(self, args):
+    def validate_inputs(self, args, *, stage_only=False):
         for field in ("binary", "binary_sha256", "source_archive", "source_sha256", "licenses_dir", "runtime_image", "config", "subnet"):
             if not getattr(args, field, None):
                 fail("Check/install requires binary, source, licenses, runtime image, config, subnet and expected SHA256 values.")
@@ -318,14 +341,15 @@ class Manager:
         if config.get("OnBuild") or config.get("Volumes"):
             fail("The runtime image must not contain ONBUILD triggers or declared volumes.")
         subnet = validate_subnet(args.subnet)
-        self.ensure_subnet_free(subnet)
-        for kind, name in (("container", NAME), ("network", NETWORK)):
+        if not stage_only:
+            self.ensure_subnet_free(subnet)
+        for kind, name in (("container", self.name), ("network", self.network)):
             if self.inspect(kind, name) is not None:
                 fail("The deployment's fixed container or network name is already in use.")
         return image["Id"]
 
     def remove_runtime_alias(self, state):
-        alias = NAME + "-runtime:" + state["owner"]
+        alias = self.name + "-runtime:" + state["owner"]
         image = self.inspect("image", alias)
         if image is not None:
             if image.get("Id") != state["runtime_id"] or len(image.get("RepoTags") or []) < 2:
@@ -351,11 +375,11 @@ class Manager:
         if self.root.exists() or self.root.is_symlink():
             state = self.load_state()
             read_config(self.root / "server.json")
-            image = self.owned("image", state.get("image_id") or NAME + ":" + state["owner"], state)
+            image = self.owned("image", state.get("image_id") or self.name + ":" + state["owner"], state)
             if image is None:
                 fail("Installation is incomplete: its image is missing. Remove it before reinstalling.")
-            self.owned("network", NETWORK, state)
-            container = self.owned("container", NAME, state)
+            self.owned("network", self.network, state)
+            container = self.owned("container", self.name, state)
             status = "not running" if container is None else container.get("State", {}).get("Status", "unknown")
             print("Owned installation verified. Container state: " + status + ".")
             print("This checks local configuration/ownership only, not transport connectivity.")
@@ -365,15 +389,21 @@ class Manager:
             print("Preflight passed. No files, images, containers, networks, routes or rules were created.")
             print("The wrapper version and runtime utilities will be checked during the opt-in image build.")
 
-    def install(self, args):
+    def install(self, args, owner=None, *, stage_only=False):
+        if type(stage_only) is not bool:
+            fail("Staged-image selection must be explicit.")
+        if owner is not None and (not isinstance(owner, str) or not HASH_RE.fullmatch(owner)):
+            fail("Installation ownership must be a random 32-byte hexadecimal identifier.")
         self.preflight()
         if self.root.exists() or self.root.is_symlink():
             fail("An installation path already exists; refusing to overwrite it.")
         self.secure_directory(self.root.parent)
-        runtime_id = self.validate_inputs(args)
-        owner = secrets.token_hex(32)
-        state = {"format": 1, "owner": owner, "upstream": UPSTREAM, "subnet": args.subnet,
+        runtime_id = self.validate_inputs(args, stage_only=stage_only)
+        owner = owner if owner is not None else secrets.token_hex(32)
+        state = {"format": 1, "owner": owner, "upstream": UPSTREAM, "subnet": args.subnet, "instance": self.instance,
                  "runtime_id": runtime_id, "image_id": None, "container_id": None, "network_id": None}
+        if stage_only:
+            state["upgrade_staged"] = True
         self.root.mkdir(mode=0o700)
         self.write_state(state)
         sources = {"openflux": args.binary, "source.tar.gz": args.source_archive, "server.json": args.config}
@@ -397,17 +427,17 @@ class Manager:
                     shutil.copyfile(self.root / name, context / name)
                 # BuildKit cannot reliably resolve raw image IDs in FROM. A unique
                 # local alias is tied to the inspected ID, then removed after build.
-                runtime_alias = NAME + "-runtime:" + owner
+                runtime_alias = self.name + "-runtime:" + owner
                 if self.inspect("image", runtime_alias) is not None:
                     fail("The temporary runtime-image alias is already in use.")
                 self.docker("image", "tag", runtime_id, runtime_alias)
                 self.docker("build", "--builder", "default", "--pull=false", "--network=none", "--build-arg", "RUNTIME_IMAGE=" + runtime_alias,
                             "--build-arg", "EXPECTED_VERSION=" + VERSION,
                             "--label", LABEL + ".owner=" + owner, "--label", LABEL + ".managed=1",
-                            "--label", LABEL + ".upstream=" + UPSTREAM, "--tag", NAME + ":" + owner, str(context), timeout=600)
+                            "--label", LABEL + ".upstream=" + UPSTREAM, "--tag", self.name + ":" + owner, str(context), timeout=600)
             finally:
                 self.clean_context()
-            image = self.owned("image", NAME + ":" + owner, state)
+            image = self.owned("image", self.name + ":" + owner, state)
             if image is None:
                 fail("The expected image was not produced.")
             state["image_id"] = image["Id"]
@@ -417,49 +447,69 @@ class Manager:
             fail("Installation did not finish. No exit node was started. Use remove --apply to clean up owned files/image.")
         print("Installed the verified encrypted wrapper. No container or network was started.")
 
-    def run(self):
+    def container_arguments(self, state, *, network_id=None, bootstrap_stdio=False):
+        if type(bootstrap_stdio) is not bool or network_id is not None and not HASH_RE.fullmatch(str(network_id)):
+            fail("Invalid isolated container options.")
+        namespace = os.readlink("/proc/self/ns/net")
+        if not re.fullmatch(r"net:\[[0-9]+\]", namespace):
+            fail("The host network namespace could not be identified.")
+        bootstrap_args = ("--interactive", "--env", "OPENFLUX_BROWSER_BOOTSTRAP=stdio") if bootstrap_stdio else ()
+        return ["container", "create", "--pull=never", *bootstrap_args, "--name", self.name,
+                "--network", network_id or self.network,
+                "--label", LABEL + ".owner=" + state["owner"], "--label", LABEL + ".managed=1",
+                "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+                "--user", "0:0", "--restart", "no", "--pids-limit", "128", "--memory", "512m",
+                "--memory-swap", "512m", "--cpus", "1.0", "--ulimit", "nofile=8192:8192",
+                "--stop-timeout", "15", "--log-driver", "none", "--env", "GOMEMLIMIT=256MiB",
+                "--env", "OPENFLUX_HOST_NETNS=" + namespace,
+                "--tmpfs", "/run:rw,noexec,nosuid,size=1048576,mode=0755",
+                "--mount", f"type=bind,src={self.root / 'server.json'},dst=/run/secrets/server.json,readonly,bind-propagation=rprivate",
+                state["image_id"]]
+
+    def run(self, *, bootstrap_stdio=False, start=True):
+        if type(bootstrap_stdio) is not bool or type(start) is not bool or not start and not bootstrap_stdio:
+            fail("Deferred startup is supported only by the explicit browser supervisor.")
         self.preflight()
         state = self.load_state()
+        if state.get("upgrade_staged"):
+            fail("This image is staged for a bound upgrade; ordinary run cannot start it.")
         read_config(self.root / "server.json")
         if not state.get("image_id") or self.owned("image", state["image_id"], state) is None:
             fail("A complete verified image is required.")
-        if self.owned("container", NAME, state) is not None or self.owned("network", NETWORK, state) is not None:
+        if self.owned("container", self.name, state) is not None or self.owned("network", self.network, state) is not None:
             fail("Owned runtime resources already exist. Use stop --apply before running again.")
         self.ensure_subnet_free(validate_subnet(state["subnet"]))
         try:
             result = self.docker("network", "create", "--driver", "bridge", "--subnet", state["subnet"],
                                  "--opt", "com.docker.network.bridge.enable_icc=false", "--label", LABEL + ".owner=" + state["owner"],
-                                 "--label", LABEL + ".managed=1", NETWORK)
+                                 "--label", LABEL + ".managed=1", self.network)
             state["network_id"] = result.stdout.strip()
             if not HASH_RE.fullmatch(state["network_id"]):
                 fail("Docker did not return the expected network identity.")
             self.write_state(state)
-            namespace = os.readlink("/proc/self/ns/net")
-            if not re.fullmatch(r"net:\[[0-9]+\]", namespace):
-                fail("The host network namespace could not be identified.")
-            result = self.docker("container", "create", "--pull=never", "--name", NAME, "--network", NETWORK,
-                                 "--label", LABEL + ".owner=" + state["owner"], "--label", LABEL + ".managed=1",
-                                 "--read-only", "--cap-drop", "ALL", "--cap-add", "NET_RAW", "--cap-add", "NET_ADMIN",
-                                 "--security-opt", "no-new-privileges:true", "--user", "0:0", "--restart", "no",
-                                 "--pids-limit", "128", "--memory", "512m", "--memory-swap", "512m", "--cpus", "1.0",
-                                 "--ulimit", "nofile=8192:8192", "--stop-timeout", "15", "--log-driver", "none",
-                                 "--env", "GOMEMLIMIT=256MiB", "--env", "OPENFLUX_HOST_NETNS=" + namespace,
-                                 "--tmpfs", "/run:rw,noexec,nosuid,size=1048576,mode=0755",
-                                 "--mount", f"type=bind,src={self.root / 'server.json'},dst=/run/secrets/server.json,readonly,bind-propagation=rprivate",
-                                 state["image_id"])
+            result = self.docker(*self.container_arguments(state, bootstrap_stdio=bootstrap_stdio))
             state["container_id"] = result.stdout.strip()
             if not HASH_RE.fullmatch(state["container_id"]):
                 fail("Docker did not return the expected container identity.")
+            if bootstrap_stdio:
+                state["browser_bootstrap_stdio"] = True
+            else:
+                state.pop("browser_bootstrap_stdio", None)
             self.write_state(state)
-            self.docker("container", "start", state["container_id"])
+            if start:
+                self.docker("container", "start", state["container_id"])
         except (OSError, DeploymentError):
             fail("Start did not finish. Use stop --apply to remove only owned partial runtime resources.")
-        print("Start requested. Verify the client authenticated handshake and existing VPNs before relying on this exit node.")
+        if start:
+            print("Start requested. Verify the client authenticated handshake and existing VPNs before relying on this exit node.")
+        else:
+            print("Owned browser-bootstrap container prepared, not started.")
+        return state
 
     def stop_owned(self, state):
         # Verify both identities before stopping anything. Never remove by a bare name.
-        container = self.owned("container", NAME, state)
-        network = self.owned("network", NETWORK, state)
+        container = self.owned("container", self.name, state)
+        network = self.owned("network", self.network, state)
         if container is not None:
             if container.get("State", {}).get("Running"):
                 self.docker("container", "stop", "--time", "15", container["Id"], timeout=30)
@@ -467,7 +517,7 @@ class Manager:
         state["container_id"] = None
         self.write_state(state)
         if network is not None:
-            remaining = self.owned("network", NETWORK, state)
+            remaining = self.owned("network", self.network, state)
             if remaining and remaining.get("Containers"):
                 fail("Another endpoint is attached to the owned network. It was not disconnected or removed.")
             if remaining:
@@ -485,7 +535,7 @@ class Manager:
         self.preflight()
         state = self.load_state()
         self.stop_owned(state)
-        image = self.owned("image", state.get("image_id") or NAME + ":" + state["owner"], state)
+        image = self.owned("image", state.get("image_id") or self.name + ":" + state["owner"], state)
         if image is not None:
             self.docker("image", "rm", image["Id"])
         self.remove_runtime_alias(state)
@@ -503,7 +553,8 @@ class Manager:
         print("Owned installation and its private config copy removed. Original input files and runtime image retained.")
 
 
-def configure(path):
+def configure(path, transport="yandex"):
+    validate_transport(transport)
     if platform.system() != "Linux" or os.geteuid() != 0:
         fail("Create the server secret file as root on Linux.")
     path = Path(path)
@@ -517,7 +568,7 @@ def configure(path):
         except getpass.GetPassWarning:
             fail("Hidden terminal input is unavailable; no secret was requested in echo mode.")
     validate_document_url(document_url)
-    config = {"version": 1, "mode": "server", "transport": "yandex", "document_url": document_url,
+    config = {"version": 1, "mode": "server", "transport": transport, "document_url": document_url,
               "encryption_key": secrets.token_hex(32), "handshake_timeout_seconds": 60}
     with path.open("x", encoding="utf-8") as stream:
         os.chmod(path, 0o600)
@@ -530,6 +581,7 @@ def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("command", nargs="?", default="check", choices=("check", "configure", "install", "run", "stop", "remove"))
     result.add_argument("--apply", action="store_true", help="Explicitly allow changes for the selected command")
+    result.add_argument("--instance", default="default", help="Isolated instance name; omit for the original installation")
     result.add_argument("--binary", type=Path)
     result.add_argument("--binary-sha256")
     result.add_argument("--source-archive", type=Path)
@@ -539,6 +591,8 @@ def parser():
     result.add_argument("--config", type=Path)
     result.add_argument("--subnet")
     result.add_argument("--output", type=Path, help="New private file for configure; existing files are never overwritten")
+    result.add_argument("--transport", choices=TRANSPORTS,
+                        help="configure only: yandex legacy editor (default) or vyandex new Volga editor; no fallback")
     return result
 
 
@@ -546,16 +600,21 @@ def main(argv=None):
     args = parser().parse_args(argv)
     os.umask(0o077)
     try:
+        if args.transport is not None and args.command != "configure":
+            fail("--transport is only for configure; existing commands use the transport in the private config.")
+        if SCRIPT_DIR.parent == INSTALL_DIR.parent and SCRIPT_DIR.name.startswith(NAME + "-"):
+            if instance_name(args.instance) != SCRIPT_DIR.name:
+                fail("This installed manager requires its matching --instance; nothing was changed.")
         if args.command != "check" and not args.apply:
             fail("No changes made. Add --apply only after reviewing the deployment README.")
         if args.command == "configure":
             if args.output is None:
                 fail("configure requires --output with a path in a root-owned directory.")
-            configure(args.output)
+            configure(args.output, args.transport or "yandex")
         elif args.command in ("check", "install"):
-            getattr(Manager(), args.command)(args)
+            getattr(Manager(instance=args.instance), args.command)(args)
         else:
-            getattr(Manager(), args.command)()
+            getattr(Manager(instance=args.instance), args.command)()
     except (DeploymentError, OSError, KeyboardInterrupt, EOFError):
         error = sys.exc_info()[1]
         message = str(error) if isinstance(error, DeploymentError) else "Operation interrupted or filesystem access failed; private contents were not printed."

@@ -17,9 +17,9 @@ import sys
 
 
 SCHEMA = "unifiedvpn-openflux-deploy-v1"
-UPSTREAM = "4f1bdb554c262f3ae9adbfe317a092c6b929ba7d"
+UPSTREAM = "d34dc8caa70ca059cd80d8f5753499361052dabc"
 PROTOCOL = "unified-openflux-aesgcm-v1"
-VERSION = f"unified-openflux 1 upstream={UPSTREAM} protocol={PROTOCOL}"
+VERSION = f"unified-openflux 5 upstream={UPSTREAM} protocol={PROTOCOL}"
 STAGING_ROOT = Path("/root")
 INSTALL_ROOT = Path("/opt/unifiedvpn-openflux")
 MAX_METADATA = 65536
@@ -35,6 +35,10 @@ FILES = {
     "bundle/licenses/NOTICE": 1024 * 1024,
     "bundle/licenses/COPYRIGHT": 1024 * 1024,
     "private/server.json": 16384,
+}
+REUSABLE_ARTIFACTS = {
+    "bundle/openflux-linux-amd64": "openflux",
+    "bundle/openflux-source.tar.gz": "source.tar.gz",
 }
 PHASES = ("upload", "preflight", "runtime-pull", "runtime-build", "install", "run", "check", "stop")
 MUTATING = {"upload", "runtime-pull", "runtime-build", "install", "run", "stop"}
@@ -78,6 +82,12 @@ def hash_bytes(data):
 
 def valid_hash(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def validate_instance(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9]{0,15}", value):
+        fail("invalid_request")
+    return value
 
 
 def stage_path(stage_id):
@@ -130,8 +140,10 @@ def require_host():
 
 
 def validate_manifest(manifest):
-    if not isinstance(manifest, dict) or set(manifest) != {"schema", "upstream", "files"}:
+    fields = {"schema", "upstream", "files"}
+    if not isinstance(manifest, dict) or set(manifest) not in (fields, fields | {"instance"}):
         fail("invalid_request")
+    validate_instance(manifest.get("instance", "default"))
     if manifest["schema"] != SCHEMA or manifest["upstream"] != UPSTREAM:
         fail("provenance_mismatch")
     entries = manifest["files"]
@@ -176,18 +188,27 @@ def validate_request(request):
         fail("invalid_request")
     phase = request.get("phase")
     base = {"schema", "phase", "stage", "manifest_sha256", "apply"}
+    if "instance" in request:
+        base.add("instance")
     extra = {"upload": {"manifest"}, "preflight": {"runtime_image", "subnet"},
              "install": {"runtime_image", "subnet"}, "runtime-build": {"alpine_image", "allow_build_network"},
              "runtime-pull": {"alpine_image", "allow_network"}}
+    if phase == "upload" and "reuse_installed_artifacts" in request:
+        extra["upload"].add("reuse_installed_artifacts")
     if phase not in PHASES or set(request) != base | extra.get(phase, set()) or request["schema"] != SCHEMA:
         fail("invalid_request")
     stage_path(request["stage"])
+    instance = validate_instance(request.get("instance", "default"))
+    if "reuse_installed_artifacts" in request and (request["reuse_installed_artifacts"] is not True or instance == "default"):
+        fail("invalid_request")
     if not valid_hash(request["manifest_sha256"]) or type(request["apply"]) is not bool:
         fail("invalid_request")
     if phase in MUTATING and not request["apply"]:
         fail("apply_required")
     if phase == "upload":
         validate_manifest(request["manifest"])
+        if request["manifest"].get("instance", "default") != instance:
+            fail("installation_mismatch")
         if hash_bytes(json_bytes(request["manifest"])) != request["manifest_sha256"]:
             fail("hash_mismatch")
     if phase in ("preflight", "install"):
@@ -214,7 +235,43 @@ def read_request(stream):
     return validate_request(decode_json(data))
 
 
+def copy_payload_file(source, destination, entry, require_eof=False):
+    remaining, digest = entry["size"], hashlib.sha256()
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        while remaining:
+            block = source.read(min(remaining, 1024 * 1024))
+            if not block:
+                fail("stage_incomplete")
+            handle.write(block)
+            digest.update(block)
+            remaining -= len(block)
+    if require_eof and source.read(1):
+        fail("hash_mismatch")
+    if digest.hexdigest() != entry["sha256"]:
+        fail("hash_mismatch")
+
+
+def copy_installed_artifact(name, destination, entry):
+    # Only these public artifacts may be reused; never read the original config or state.
+    if name not in REUSABLE_ARTIFACTS:
+        fail("invalid_request")
+    source = INSTALL_ROOT / REUSABLE_ARTIFACTS[name]
+    checked = secure_file(source, FILES[name])
+    if checked.st_size != entry["size"]:
+        fail("hash_mismatch")
+    descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "rb") as incoming:
+        opened = os.fstat(incoming.fileno())
+        for attribute in ("st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_size"):
+            if getattr(opened, attribute) != getattr(checked, attribute):
+                fail("unsafe_path")
+        copy_payload_file(incoming, destination, entry, require_eof=True)
+
+
 def upload(request, stream):
+    validate_request(request)
     stage = stage_path(request["stage"])
     if stage.exists() or stage.is_symlink():
         fail("stage_exists")
@@ -223,19 +280,10 @@ def upload(request, stream):
         (stage / relative).mkdir(mode=0o700)
     for name in FILES:
         entry = request["manifest"]["files"][name]
-        remaining, digest = entry["size"], hashlib.sha256()
-        descriptor = os.open(stage / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as handle:
-            os.fchmod(handle.fileno(), 0o600)
-            while remaining:
-                block = stream.read(min(remaining, 1024 * 1024))
-                if not block:
-                    fail("stage_incomplete")
-                handle.write(block)
-                digest.update(block)
-                remaining -= len(block)
-        if digest.hexdigest() != entry["sha256"]:
-            fail("hash_mismatch")
+        if request.get("reuse_installed_artifacts") is True and name in REUSABLE_ARTIFACTS:
+            copy_installed_artifact(name, stage / name, entry)
+        else:
+            copy_payload_file(stream, stage / name, entry)
     if stream.read(1):
         fail("invalid_request")
     write_exclusive(stage / "upload-manifest.json", json_bytes(request["manifest"]))
@@ -249,6 +297,9 @@ def verify_stage(request):
     if hash_bytes(raw) != request["manifest_sha256"]:
         fail("hash_mismatch")
     manifest = validate_manifest(decode_json(raw))
+    # The manifest hash binds the instance before any staged code is executed.
+    if manifest.get("instance", "default") != request.get("instance", "default"):
+        fail("installation_mismatch")
     for name, limit in FILES.items():
         path = stage / name
         info = secure_file(path, limit, private=name.startswith("private/"))
@@ -320,6 +371,9 @@ def command(arguments, timeout):
 
 def manager_arguments(phase, stage, manifest, request):
     arguments = [sys.executable, str(stage / "bundle/manage.py"), "check" if phase == "preflight" else phase]
+    instance = validate_instance(request.get("instance", "default"))
+    if instance != "default":
+        arguments.extend(("--instance", instance))
     if phase in ("install", "run", "stop"):
         arguments.append("--apply")
     if phase in ("preflight", "install"):
@@ -335,7 +389,7 @@ def manager_arguments(phase, stage, manifest, request):
 
 
 def bind_installation(stage, manifest, manager):
-    if not INSTALL_ROOT.exists():
+    if not manager.root.exists():
         return
     state = manager.load_state()
     record = {"schema": SCHEMA, "owner": state["owner"], "manifest_sha256": hash_bytes(json_bytes(manifest))}
@@ -413,7 +467,8 @@ def perform(request, stream):
     stage, manifest = verify_stage(request)
     module = load_manager(stage)
     validate_artifacts(stage, manifest, module)
-    manager = module.Manager()
+    instance = request.get("instance", "default")
+    manager = module.Manager() if instance == "default" else module.Manager(instance=instance)
     try:
         manager.preflight()
         if phase == "runtime-pull":
@@ -421,7 +476,7 @@ def perform(request, stream):
         if phase == "runtime-build":
             return runtime_build(request, stage, module, manager)
         if phase in ("preflight", "install"):
-            if INSTALL_ROOT.exists() or INSTALL_ROOT.is_symlink():
+            if manager.root.exists() or manager.root.is_symlink():
                 fail("installation_exists")
         else:
             require_installation(stage, manifest, manager)

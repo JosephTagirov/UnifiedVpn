@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"universal-bypass-tool/transport"
+	"openflux/transport"
 )
 
 type memoryTransport struct {
@@ -23,6 +23,41 @@ type memoryTransport struct {
 	sent      [][]byte
 	notice    chan struct{}
 	onSend    func([]byte) bool
+}
+
+type blockingStartTransport struct {
+	memoryTransport
+	entered chan struct{}
+	cancel  chan struct{}
+	once    sync.Once
+}
+
+func (t *blockingStartTransport) Start() error {
+	close(t.entered)
+	<-t.cancel
+	return context.Canceled
+}
+
+func (t *blockingStartTransport) Stop() error {
+	t.once.Do(func() { close(t.cancel) })
+	return nil
+}
+
+func TestPeerStopCancelsBlockingTransportStart(t *testing.T) {
+	inner := &blockingStartTransport{entered: make(chan struct{}), cancel: make(chan struct{})}
+	session := newPeerSession(inner, false)
+	started, stopped := make(chan error, 1), make(chan error, 1)
+	go func() { started <- session.Start() }()
+	<-inner.entered
+	go func() { stopped <- session.Stop() }()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop is blocked by transport startup")
+	}
+	if <-started == nil {
+		t.Fatal("cancelled startup succeeded")
+	}
 }
 
 func (m *memoryTransport) Start() error {

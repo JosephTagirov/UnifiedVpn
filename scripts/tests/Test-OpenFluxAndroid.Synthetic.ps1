@@ -801,6 +801,51 @@ Invoke-SyntheticCase 'exact reader warning does not allow a lost TUN' {
     Assert-True ($null -ne $result.Failure -and -not $result.Output.Contains('ANDROID_APP_VPN_HTTPS_AND_STOP_PASSED=true')) 'Reader warning hid TUN loss'
 }
 
+foreach ($browserFailure in @{
+    'BROWSER_PROVIDER_FAILED' = 'Yandex browser verification did not complete (stage=provider)'
+    'BROWSER_COOKIES_REJECTED' = 'Yandex browser verification did not complete (stage=cookies)'
+    'BROWSER_HTTPS_RETRY_FAILED' = 'Yandex browser verification did not complete (stage=retry_https)'
+    'BROWSER_CHALLENGE_REPEATED' = 'Yandex browser verification did not complete (stage=verification_repeated)'
+    'BROWSER_VERIFICATION_TIMEOUT' = 'Browser verification timed out'
+}.GetEnumerator()) {
+    Invoke-SyntheticCase 'browser bootstrap diagnostics expose only fixed categories' {
+        $secret = 'private-document-sentinel-and-cookie-value'
+        $summary = New-AndroidPublicFailureSummary -Stage 'vpn_start' -Flags (New-AndroidStageFlags) `
+            -Logs ("OpenFlux: OPENFLUX_FATAL: " + $browserFailure.Value + ' ' + $secret) -FailureMessage ''
+        Assert-True ($summary.error_codes -contains $browserFailure.Key) 'Expected browser failure category is missing'
+        Assert-True (-not ($summary | ConvertTo-Json -Depth 6 -Compress).Contains($secret)) 'Browser diagnostics exposed private content'
+    }
+}
+
+foreach ($contextFailure in @{
+    'NATIVE_CONTEXT_DEADLINE' = 'context deadline exceeded'
+    'NATIVE_CONTEXT_CANCELED' = 'context canceled'
+}.GetEnumerator()) {
+    Invoke-SyntheticCase 'native context diagnostics do not leak their suffix' {
+        $summary = New-AndroidPublicFailureSummary -Stage 'vpn_start' -Flags (New-AndroidStageFlags) `
+            -Logs ('OpenFlux: OPENFLUX_FATAL: ' + $contextFailure.Value + ' PRIVATE_SENTINEL')
+        Assert-True ($summary.error_codes -contains $contextFailure.Key) 'Native context category missing'
+        Assert-True (-not ($summary | ConvertTo-Json -Depth 6).Contains('PRIVATE_SENTINEL')) 'Native suffix leaked'
+    }
+}
+Invoke-SyntheticCase 'browser checkpoint accepts logcat tag padding but no untrusted content' {
+    $checkpoint = 'OPENFLUX_BROWSER_CHECKPOINT view=true page=true polls=72 state=Verification blocked=0'
+    foreach ($prefix in @('I/OpenFluxBrowser( 123): ', 'I/OpenFluxBrowser  (123): ')) {
+        Assert-True ((Get-AndroidBrowserCheckpoint -Line ($prefix + $checkpoint)) -ceq $checkpoint) 'Checkpoint lost'
+    }
+    foreach ($line in @('D/OtherTag(123): ' + $checkpoint, 'I/OpenFluxBrowser(123): ' + $checkpoint + ' PRIVATE_SENTINEL',
+        'I/OpenFluxBrowser(123): ' + $checkpoint.Replace('Verification', 'PRIVATE_SENTINEL'))) {
+        Assert-True ($null -eq (Get-AndroidBrowserCheckpoint -Line $line)) 'Untrusted checkpoint accepted'
+    }
+}
+
+Invoke-SyntheticCase 'browser lifecycle stages reject arbitrary text' {
+    $line = 'I/OpenFluxBrowser(123): OPENFLUX_BROWSER_STAGE request_received'
+    Assert-True ((Get-AndroidBrowserCheckpoint -Line $line) -ceq 'OPENFLUX_BROWSER_STAGE request_received') 'Known stage missing'
+    Assert-True ($null -eq (Get-AndroidBrowserCheckpoint -Line ($line + ' PRIVATE_SENTINEL'))) 'Stage suffix leaked'
+    Assert-True ($null -eq (Get-AndroidBrowserCheckpoint -Line $line.Replace('request_received','PRIVATE_SENTINEL'))) 'Unknown stage leaked'
+}
+
 if ($failures.Count -gt 0) {
     $failures | Write-Output
     throw "$($failures.Count) of $testCount synthetic Android harness tests failed"

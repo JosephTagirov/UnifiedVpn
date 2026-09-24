@@ -28,6 +28,7 @@ internal object VpnProfileReachability {
 
     suspend fun ping(profile: VpnProfileConfig): Long? = withContext(Dispatchers.IO) {
         val normalized = profile.normalized()
+        if (normalized.isOpenFlux()) return@withContext null
         val endpoint = endpoint(normalized) ?: return@withContext null
 
         when (normalized.normalizedType) {
@@ -46,6 +47,7 @@ internal object VpnProfileReachability {
 
     fun endpoint(profile: VpnProfileConfig): VpnProfileEndpoint? {
         val normalized = profile.normalized()
+        if (normalized.isOpenFlux()) return null
         if (normalized.normalizedType == VpnProfileConfig.TYPE_VLESS) {
             listOfNotNull(normalized.rawConfig, normalized.uri)
                 .firstNotNullOfOrNull(::parseVlessEndpoint)

@@ -77,6 +77,11 @@
         </provider>
 
         <service
+            android:name="org.olcbox.app.vpn.service.OpenFluxBrowserVerificationService"
+            android:exported="false"
+            android:process=":openflux_verification" />
+
+        <service
             android:name="org.olcbox.app.vpn.service.OlcboxVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"

@@ -98,6 +98,44 @@ class ProfileTests(unittest.TestCase):
         random_key.assert_not_called()
         self.assertEqual(existing.read_text(), "DO_NOT_CHANGE_EXISTING_KEY")
 
+    def test_volga_generation_preserves_explicit_transport_in_all_outputs(self):
+        destination = self.directory / "volga-profile"
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = prepare.main(["generate", "--document-file", str(self.document_file),
+                                 "--directory", str(destination), "--socks-port", "19181", "--transport", "vyandex"])
+        self.assertEqual(code, 0)
+        profile = json.loads((destination / "profile.json").read_text())
+        for name in ("server.json", "client.json", "profile.json"):
+            config = json.loads((destination / name).read_text())
+            self.assertEqual(config["transport"], "vyandex")
+            self.assertEqual(config["encryption_key"], profile["encryption_key"])
+            self.assertEqual(config["document_url"], DOCUMENT)
+        self.assertRegex(profile["encryption_key"], r"^[0-9a-f]{64}$")
+        encoded = (destination / "profile.uri").read_text().strip().removeprefix("openflux://")
+        self.assertEqual(json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))), profile)
+        self.assertNotIn(profile["encryption_key"], output.getvalue())
+        self.assertNotIn(DOCUMENT, output.getvalue())
+
+    def test_unsupported_transport_refused_before_key_or_files(self):
+        destination = self.directory / "rejected-profile"
+        for value in (None, "", "auto", "volga", "Yandex", "oneme", [], {}, True):
+            with self.subTest(value=value), patch.object(prepare.secrets, "token_hex") as key:
+                with self.assertRaises(prepare.PreparationError):
+                    prepare.generate(self.document_file, destination, 19181, value)
+                key.assert_not_called()
+                self.assertFalse(destination.exists())
+
+    def test_invalid_transport_argument_does_not_echo_or_generate(self):
+        destination = self.directory / "rejected-cli-profile"
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch.object(prepare, "generate") as generate:
+            self.assertEqual(prepare.main(["generate", "--document-file", str(self.document_file),
+                                          "--directory", str(destination), "--socks-port", "19181",
+                                          "--transport", "DO_NOT_PRINT"]), 1)
+            generate.assert_not_called()
+        self.assertNotIn("DO_NOT_PRINT", output.getvalue())
+
     def test_reserved_or_invalid_socks_port_is_rejected_before_files(self):
         for port in (10808, 0, -1, 65536, True):
             destination = self.directory / ("port-" + str(port))

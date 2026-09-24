@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 import urllib.error
@@ -19,16 +21,49 @@ PROJECTS = (
         "id": "olcbox",
         "name": "Original olcbox",
         "repository": "alananisimov/olcbox",
+        "tracking": "release",
     },
     {
         "id": "amnezia",
         "name": "Amnezia VPN",
         "repository": "amnezia-vpn/amnezia-client",
+        "tracking": "release",
+    },
+    {
+        "id": "olcrtc",
+        "name": "olcRTC core",
+        "repository": "openlibrecommunity/olcrtc",
+        "tracking": "commit",
+    },
+    {
+        "id": "awg",
+        "name": "AmneziaWG core (Throne sing-box)",
+        "repository": "Throneproj/sing-box",
+        "tracking": "commit",
+        "ref": "wip/1.14.0",
+    },
+    {
+        "id": "openflux",
+        "name": "OpenFlux",
+        "repository": "p1neappleXpress/OpenFlux",
+        "tracking": "commit",
+    },
+    {
+        "id": "unifiedvpn",
+        "name": "Unified VPN",
+        "repository": "JosephTagirov/UnifiedVpn",
+        "tracking": "release-build",
     },
 )
 DEFAULT_STATE_FILE = "/var/lib/unifiedvpn-upstream-notifier/state.json"
 USER_AGENT = "UnifiedVPN-private-upstream-notifier/1"
 REQUEST_TIMEOUT_SECONDS = 20
+BUILD_NUMBER_PATTERN = re.compile(r"(?:^|[-_.])build[-_.]?(\d{1,18})(?=[-_.]|$)", re.IGNORECASE)
+APPLICATION_ASSETS = {
+    "android": ("Android", (".apk",)),
+    "windows": ("Windows", (".exe", ".msi", ".zip")),
+    "linux": ("Linux", (".appimage", ".deb", ".rpm", ".tar.gz")),
+}
 
 
 def request_json(url: str) -> tuple[int, dict[str, Any]]:
@@ -51,25 +86,72 @@ def request_json(url: str) -> tuple[int, dict[str, Any]]:
         raise RuntimeError(f"GitHub API connection failed: {error.reason}") from None
 
 
+def application_release_builds(release: dict[str, Any]) -> tuple[str, str]:
+    if release.get("draft") or release.get("prerelease"):
+        raise RuntimeError("Unified VPN update is not a published stable release")
+    assets = []
+    builds: dict[str, int] = {}
+    for asset in release.get("assets") or []:
+        name = str(asset.get("name") or "")
+        lower_name = name.lower()
+        if not lower_name.startswith("unifiedvpn-") or asset.get("state", "uploaded") != "uploaded":
+            continue
+        size = asset.get("size")
+        if not isinstance(size, int) or size <= 0:
+            continue
+        for platform, (label, extensions) in APPLICATION_ASSETS.items():
+            if f"-{platform}" not in lower_name or not lower_name.endswith(extensions):
+                continue
+            # Only application payload changes matter, not download counts or release prose.
+            assets.append({key: asset.get(key) for key in ("id", "name", "size", "digest")})
+            match = BUILD_NUMBER_PATTERN.search(name)
+            if match:
+                builds[label] = max(builds.get(label, 0), int(match.group(1)))
+            break
+    if not assets:
+        raise RuntimeError("GitHub release has no uploaded Unified VPN application assets")
+    assets.sort(key=lambda asset: (str(asset["name"]), str(asset["id"])))
+    fingerprint = hashlib.sha256(
+        json.dumps(assets, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    summary = ", ".join(f"{label}: {build}" for label, build in sorted(builds.items()))
+    return fingerprint, summary
+
+
 def latest_project_version(project: dict[str, str]) -> dict[str, str]:
     repository = project["repository"]
-    status, release = request_json(
-        f"https://api.github.com/repos/{repository}/releases/latest"
-    )
-    if status == 200:
-        tag = str(release.get("tag_name") or "unknown")
-        url = str(release.get("html_url") or f"https://github.com/{repository}/releases")
-        published = str(release.get("published_at") or "")
-        release_id = str(release.get("id") or f"{tag}|{published}|{url}")
-        return {
-            "identity": f"release:{release_id}",
-            "version": tag,
-            "url": url,
-            "published_at": published,
-            "source": "release",
-        }
+    tracking = project.get("tracking", "release")
+    if tracking not in ("release", "release-build", "commit"):
+        raise RuntimeError(f"Unknown update tracking mode for {repository}")
+    if tracking in ("release", "release-build"):
+        status, release = request_json(
+            f"https://api.github.com/repos/{repository}/releases/latest"
+        )
+        if status == 200:
+            tag = str(release.get("tag_name") or "unknown")
+            url = str(release.get("html_url") or f"https://github.com/{repository}/releases")
+            published = str(release.get("published_at") or "")
+            release_id = str(release.get("id") or f"{tag}|{published}|{url}")
+            latest = {
+                "identity": f"release:{release_id}",
+                "version": tag,
+                "url": url,
+                "published_at": published,
+                "source": "release",
+            }
+            if tracking == "release-build":
+                fingerprint, builds = application_release_builds(release)
+                latest["identity"] = f"release:{release_id}:{tag}:{fingerprint}"
+                latest["builds"] = builds
+            return latest
+        if tracking == "release-build":
+            raise RuntimeError(f"GitHub API did not return a stable release for {repository}")
 
-    _, commit = request_json(f"https://api.github.com/repos/{repository}/commits/HEAD")
+    ref = project.get("ref", "HEAD")
+    if not isinstance(ref, str) or not ref.strip() or ref != ref.strip():
+        raise RuntimeError(f"Invalid commit ref for {repository}")
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    _, commit = request_json(f"https://api.github.com/repos/{repository}/commits/{encoded_ref}")
     sha = str(commit.get("sha") or "")
     if not sha:
         raise RuntimeError(f"GitHub API did not return a commit for {repository}")
@@ -151,12 +233,14 @@ def notification_text(project: dict[str, str], latest: dict[str, str], first_run
         f"Проект: {project['name']}",
         f"Версия ({source}): {latest['version']}",
     ]
+    if latest.get("builds"):
+        lines.append(f"Сборки: {latest['builds']}")
     if latest["published_at"]:
         lines.append(f"Дата: {latest['published_at']}")
     lines.extend(
         [
             latest["url"],
-            "Unified VPN будет обновлён отдельно после проверки клиента.",
+            "Unified VPN и серверные компоненты обновляются отдельно, вручную и после проверки совместимости.",
         ]
     )
     return "\n".join(lines)

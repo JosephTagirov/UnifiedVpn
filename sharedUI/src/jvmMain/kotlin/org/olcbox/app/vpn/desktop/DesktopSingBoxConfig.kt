@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.vpn.DesktopSocksProxySettings
+import org.olcbox.app.vpn.WireGuardConfigValues
 import java.io.ByteArrayOutputStream
 import java.util.Base64
 import java.util.zip.Inflater
@@ -19,7 +20,7 @@ import java.util.zip.Inflater
 internal object DesktopSingBoxConfig {
     private val json = Json { prettyPrint = true }
 
-    fun build(profile: VpnProfileConfig, socks: DesktopSocksProxySettings): String {
+    fun build(profile: VpnProfileConfig, socks: DesktopSocksProxySettings, endpointAddress: String? = null): String {
         val normalizedProfile = profile.normalized()
         require(
             normalizedProfile.normalizedType == VpnProfileConfig.TYPE_AMNEZIA_WG ||
@@ -48,12 +49,14 @@ internal object DesktopSingBoxConfig {
             }
         }
         val peer = buildJsonObject {
-            put("address", outbound.peerHost)
+            put("address", endpointAddress ?: outbound.peerHost)
             put("port", outbound.peerPort)
             put("public_key", outbound.peerPublicKey)
             put("allowed_ips", JsonArray(outbound.allowedIps.map(::JsonPrimitive)))
             outbound.preSharedKey?.let { put("pre_shared_key", it) }
-            outbound.persistentKeepalive?.let { put("persistent_keepalive_interval", it) }
+            outbound.persistentKeepalive?.let {
+                put("persistent_keepalive_interval", it.toLongOrNull()?.let(::JsonPrimitive) ?: JsonPrimitive(it))
+            }
         }
         val endpoint = buildJsonObject {
             put("type", "wireguard")
@@ -84,6 +87,17 @@ internal object DesktopSingBoxConfig {
                     put(
                         "rules",
                         buildJsonArray {
+                            if (endpointAddress != null) {
+                                // TUN DNS packets must use the profile's tunnel resolvers,
+                                // including private servers and non-default DNS ports.
+                                add(
+                                    buildJsonObject {
+                                        put("inbound", LOCAL_SOCKS_TAG)
+                                        put("port", 53)
+                                        put("action", "hijack-dns")
+                                    }
+                                )
+                            }
                             add(
                                 buildJsonObject {
                                     put("inbound", LOCAL_SOCKS_TAG)
@@ -239,13 +253,13 @@ internal object DesktopSingBoxConfig {
         )
         val awgFields = AMNEZIA_WG_FIELDS.mapNotNull { (configKey, singBoxKey) ->
             parsed.allValues[configKey]
-                ?.takeIf { it.isAwgParameterEnabled() }
+                ?.takeIf { singBoxKey in AMNEZIA_WG_BOOLEAN_FIELDS || it.isAwgParameterEnabled() }
                 ?.let {
                     val normalized = it.trim().trim('"', '\'')
-                    val value = if (singBoxKey in AMNEZIA_WG_INTEGER_FIELDS) {
-                        normalized.toLongOrNull()?.let(::JsonPrimitive) ?: JsonPrimitive(normalized)
-                    } else {
-                        JsonPrimitive(normalized)
+                    val value = when (singBoxKey) {
+                        in AMNEZIA_WG_BOOLEAN_FIELDS -> JsonPrimitive(WireGuardConfigValues.boolean(it, configKey))
+                        in AMNEZIA_WG_INTEGER_FIELDS -> normalized.toLongOrNull()?.let(::JsonPrimitive) ?: JsonPrimitive(normalized)
+                        else -> JsonPrimitive(normalized)
                     }
                     singBoxKey to value
                 }
@@ -263,7 +277,7 @@ internal object DesktopSingBoxConfig {
             peerHost = endpoint.host,
             peerPort = endpoint.port,
             allowedIps = peer["allowedips"].orEmpty().splitCsv().ifEmpty { listOf("0.0.0.0/0") },
-            persistentKeepalive = peer["persistentkeepalive"]?.toIntOrNull(),
+            persistentKeepalive = peer["persistentkeepalive"]?.let(WireGuardConfigValues::keepalive),
             amneziaWireGuardFields = awgFields
         ).also {
             require(it.addresses.isNotEmpty()) { "WireGuard interface address is missing" }
@@ -390,7 +404,7 @@ internal object DesktopSingBoxConfig {
         val peerHost: String,
         val peerPort: Int,
         val allowedIps: List<String>,
-        val persistentKeepalive: Int?,
+        val persistentKeepalive: String?,
         val amneziaWireGuardFields: Map<String, JsonPrimitive>
     )
 
@@ -419,6 +433,7 @@ internal object DesktopSingBoxConfig {
         """^\s*publickey\s*=""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
     )
+    private val AMNEZIA_WG_BOOLEAN_FIELDS = setOf("random_trailers", "disable_cookies")
     private val AMNEZIA_WG_INTEGER_FIELDS = setOf(
         "jc", "jmin", "jmax", "s1", "s2", "s3", "s4"
     )
@@ -445,6 +460,8 @@ internal object DesktopSingBoxConfig {
         "rekeytimeout" to "rekey_timeout",
         "rejectaftertime" to "reject_after_time",
         "keepalivetimeout" to "keepalive_timeout",
-        "maxhandshakeattempts" to "max_handshake_attempts"
+        "maxhandshakeattempts" to "max_handshake_attempts",
+        "randomtrailers" to "random_trailers",
+        "disablecookies" to "disable_cookies"
     )
 }

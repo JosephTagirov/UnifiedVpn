@@ -5,6 +5,8 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
 import io.ktor.http.headersOf
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.identity.DeviceIdentityProvider
@@ -24,6 +26,93 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class LocationsRepositoryImplTest {
+
+    @Test
+    fun activeSelectionCompareAndSetReturnsRevisionForSafeRollback() = runTest {
+        val repository = selectionRepository()
+        val initialRevision = repository.changes.value
+        val selectedRevision = assertNotNull(repository.compareAndSetActiveLocationId(initialRevision, "b"))
+        assertEquals(initialRevision + 1, selectedRevision)
+        assertEquals("b", repository.getActiveLocationId())
+
+        val restoredRevision = assertNotNull(repository.compareAndSetActiveLocationId(selectedRevision, "a"))
+        assertEquals(selectedRevision + 1, restoredRevision)
+        assertEquals("a", repository.getActiveLocationId())
+    }
+
+    @Test
+    fun activeSelectionCompareAndSetRejectsStaleRevision() = runTest {
+        val repository = selectionRepository()
+        val observedRevision = repository.changes.value
+        repository.setActiveLocationId("c")
+
+        assertNull(repository.compareAndSetActiveLocationId(observedRevision, "b"))
+        assertEquals("c", repository.getActiveLocationId())
+    }
+
+    @Test
+    fun activeSelectionRollbackDoesNotOverwriteNewUserSelection() = runTest {
+        val repository = selectionRepository()
+        val selectedRevision = assertNotNull(repository.compareAndSetActiveLocationId(repository.changes.value, "b"))
+        repository.setActiveLocationId("c")
+
+        assertNull(repository.compareAndSetActiveLocationId(selectedRevision, "a"))
+        assertEquals("c", repository.getActiveLocationId())
+    }
+
+    @Test
+    fun activeSelectionRollbackRejectsAbaAndRepeatedSelection() = runTest {
+        val repository = selectionRepository()
+        val selectedRevision = assertNotNull(repository.compareAndSetActiveLocationId(repository.changes.value, "b"))
+        repository.setActiveLocationId("c")
+        repository.setActiveLocationId("b")
+        assertNull(repository.compareAndSetActiveLocationId(selectedRevision, "a"))
+
+        val repeatedRevision = repository.changes.value
+        repository.setActiveLocationId("b")
+        assertNull(repository.compareAndSetActiveLocationId(repeatedRevision, "a"))
+        assertEquals("b", repository.getActiveLocationId())
+    }
+
+    @Test
+    fun activeSelectionCompareAndSetRejectsDeletedFallbackWithoutMutation() = runTest {
+        val repository = selectionRepository()
+        val selectedRevision = assertNotNull(repository.compareAndSetActiveLocationId(repository.changes.value, "b"))
+        repository.deleteLocation("a")
+        val currentRevision = repository.changes.value
+
+        assertNull(repository.compareAndSetActiveLocationId(selectedRevision, "a"))
+        assertNull(repository.compareAndSetActiveLocationId(currentRevision, "a"))
+        assertEquals(currentRevision, repository.changes.value)
+        assertEquals("b", repository.getActiveLocationId())
+    }
+
+    @Test
+    fun competingSelectionsWithOneRevisionHaveOnlyOneWinner() = runTest {
+        val repository = selectionRepository()
+        val revision = repository.changes.value
+        val attempts = listOf("b", "c").map { target ->
+            async { repository.compareAndSetActiveLocationId(revision, target) }
+        }.awaitAll()
+
+        assertEquals(1, attempts.count { it != null })
+        assertEquals(revision + 1, repository.changes.value)
+        assertTrue(repository.getActiveLocationId() in listOf("b", "c"))
+    }
+
+    private fun selectionRepository() = LocationsRepositoryImpl(
+        FakeLocationsDataSource(
+            stored = LocationBundleV4(
+                activeLocationId = "a",
+                locations = listOf("a", "b", "c").map { id ->
+                    LocationEntry.fromProfile(
+                        id,
+                        VpnProfileConfig(type = VpnProfileConfig.TYPE_VLESS, name = id, uri = "vless://test@example.invalid:443")
+                    )
+                }
+            )
+        )
+    )
 
     @Test
     fun importsEncryptedOpenFluxUriWithItsDisplayName() = runTest {
@@ -75,6 +164,14 @@ class LocationsRepositoryImplTest {
     fun bundleRoundTripPreservesOpenFluxAndOtherExternalProfiles() = runTest {
         val entries = listOf(
             LocationEntry.fromProfile(
+                storageId = "openflux-volga-test",
+                profile = VpnProfileConfig(
+                    type = VpnProfileConfig.TYPE_OPENFLUX,
+                    name = "Yandex Volga",
+                    rawConfig = openFluxConfig().copy(transport = "vyandex").toJson()
+                )
+            ),
+            LocationEntry.fromProfile(
                 storageId = "openflux-test",
                 profile = VpnProfileConfig(
                     type = VpnProfileConfig.TYPE_OPENFLUX,
@@ -102,6 +199,18 @@ class LocationsRepositoryImplTest {
         val bundle = assertNotNull(restored.stored)
         assertEquals("openflux-test", bundle.activeLocationId)
         assertEquals(entries, bundle.locations)
+    }
+
+    @Test
+    fun importsStandaloneVolgaProfileJsonWithoutSelectingAnotherTransport() = runTest {
+        val source = FakeLocationsDataSource()
+        val config = openFluxConfig().copy(transport = "vyandex")
+
+        assertTrue(LocationsRepositoryImpl(source).importText(config.toJson()))
+
+        val entry = assertNotNull(source.stored).locations.single()
+        assertTrue(entry.isComplete())
+        assertEquals(config, OpenFluxProfileConfig.parse(entry.profile.rawConfig))
     }
 
     @Test

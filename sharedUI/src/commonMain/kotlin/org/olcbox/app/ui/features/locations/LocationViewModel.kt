@@ -10,7 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -20,6 +20,7 @@ import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.LocationsRepository
+import org.olcbox.app.vpn.VpnPingUnavailableException
 
 data class LocationItem(
     val storageId: String,
@@ -39,7 +40,26 @@ internal fun LocationItem.reorderGroupKey(): String {
 
 internal const val CUSTOM_PROFILE_REORDER_GROUP = "custom-profiles"
 
+private fun LocationItem.hasSamePingTarget(other: LocationItem): Boolean {
+    val currentProfile = profile.normalized().copy(name = null)
+    val otherProfile = other.profile.normalized().copy(name = null)
+    if (currentProfile.normalizedType != otherProfile.normalizedType) return false
+    return when {
+        currentProfile.isOlcRtc() ->
+            (config ?: LocationConfig()).normalized().copy(name = "") ==
+                (other.config ?: LocationConfig()).normalized().copy(name = "")
+        currentProfile.isOpenFlux() -> {
+            val currentConfig = OpenFluxProfileConfig.parse(currentProfile.rawConfig ?: currentProfile.uri)
+                ?: return false
+            currentConfig == OpenFluxProfileConfig.parse(otherProfile.rawConfig ?: otherProfile.uri)
+        }
+        else -> currentProfile == otherProfile
+    }
+}
+
 sealed class PingsState {
+    open val unavailable: Map<String, String> = emptyMap()
+
     object Idle : PingsState()
 
     data class Loading(
@@ -47,11 +67,13 @@ sealed class PingsState {
         val currentPings: Map<String, Int?> = emptyMap(),
         val pendingLocationIds: Set<String> = emptySet(),
         val completed: Int = 0,
-        val total: Int = 0
+        val total: Int = 0,
+        override val unavailable: Map<String, String> = emptyMap()
     ) : PingsState()
 
     data class Success(
-        val pings: Map<String, Int?>
+        val pings: Map<String, Int?>,
+        override val unavailable: Map<String, String> = emptyMap()
     ) : PingsState()
 
     data class Error(
@@ -74,6 +96,7 @@ class LocationViewModel(
         private set
 
     private val activePingJobs = mutableMapOf<String, Job>()
+    private val unavailablePings = mutableMapOf<String, String>()
     private val pingSemaphore = Semaphore(LOCATION_PING_PARALLELISM)
     private var loadLocationsJob: Job? = null
     private var loadLocationsRequest = 0
@@ -117,6 +140,13 @@ class LocationViewModel(
     var openFluxEncryptionKeyError by mutableStateOf<String?>(null)
         private set
 
+    val openFluxTransportError: String?
+        get() = if (editingOpenFluxConfig.normalized().transport in OpenFluxProfileConfig.supportedTransports) {
+            null
+        } else {
+            "Unsupported OpenFlux transport"
+        }
+
     var localSocksPortError by mutableStateOf<String?>(null)
         private set
 
@@ -144,10 +174,8 @@ class LocationViewModel(
         }
 
     init {
-        loadLocations()
         viewModelScope.launch {
             locationsRepository.changes
-                .drop(1)
                 .collect {
                     loadLocations()
                 }
@@ -176,6 +204,7 @@ class LocationViewModel(
 
             if (requestId != loadLocationsRequest) return@launch
 
+            invalidateChangedPings(nextLocations)
             locations.clear()
             locations.addAll(nextLocations)
 
@@ -246,24 +275,42 @@ class LocationViewModel(
 
         var completedForThisRequest = 0
         var onlineForThisRequest = 0
+        var unavailableForThisRequest = 0
         val totalForThisRequest = pingableLocations.size
         val jobsToStart = mutableListOf<Job>()
 
         pingableLocations.forEach { location ->
             val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+                val pingJob = coroutineContext[Job]
                 try {
+                    unavailablePings.remove(location.storageId)
+                    var unavailableReason: String? = null
                     val ping = try {
                         pingSemaphore.withPermit {
                             checkLocationPing(location, performPing)?.toInt()
                         }
                     } catch (e: CancellationException) {
                         throw e
+                    } catch (e: VpnPingUnavailableException) {
+                        unavailableReason = e.message.orEmpty()
+                        null
                     } catch (_: Exception) {
                         null
                     }
 
+                    coroutineContext.ensureActive()
+                    if (activePingJobs[location.storageId] !== pingJob ||
+                        locations.none { it.storageId == location.storageId && it.hasSamePingTarget(location) }
+                    ) return@launch
+
                     val updatedPings = currentPingsSnapshot().toMutableMap()
-                    updatedPings[location.storageId] = ping
+                    if (unavailableReason != null) {
+                        unavailablePings[location.storageId] = unavailableReason
+                        unavailableForThisRequest++
+                        updatedPings.remove(location.storageId)
+                    } else {
+                        updatedPings[location.storageId] = ping
+                    }
 
                     activePingJobs.remove(location.storageId)
 
@@ -276,19 +323,21 @@ class LocationViewModel(
                     emitPingState(updatedPings.toMap())
 
                     if (completedForThisRequest == totalForThisRequest) {
-                        onComplete(onlineForThisRequest, totalForThisRequest)
+                        onComplete(onlineForThisRequest, totalForThisRequest - unavailableForThisRequest)
                     }
                 } catch (e: CancellationException) {
-                    activePingJobs.remove(location.storageId)
-                    emitPingState()
                     throw e
                 } catch (e: Exception) {
-                    activePingJobs.remove(location.storageId)
-
-                    val message = e.message ?: "HTTP ping failed"
-                    onError(message)
-
-                    emitPingState()
+                    if (activePingJobs[location.storageId] === pingJob) {
+                        val message = e.message ?: "HTTP ping failed"
+                        onError(message)
+                    }
+                } finally {
+                    // A cancelled old request must not remove a replacement for the same row.
+                    if (activePingJobs[location.storageId] === pingJob) {
+                        activePingJobs.remove(location.storageId)
+                        emitPingState()
+                    }
                 }
             }
 
@@ -298,6 +347,22 @@ class LocationViewModel(
 
         emitPingState(previousPings)
         jobsToStart.forEach { it.start() }
+    }
+
+    private fun invalidateChangedPings(nextLocations: List<LocationItem>) {
+        val nextById = nextLocations.associateBy { it.storageId }
+        val changedIds = locations.filter { current ->
+            val next = nextById[current.storageId]
+            next == null || !current.hasSamePingTarget(next)
+        }.mapTo(mutableSetOf()) { it.storageId }
+        if (changedIds.isEmpty()) return
+
+        val remainingPings = currentPingsSnapshot().filterKeys { it !in changedIds }
+        changedIds.forEach { id ->
+            activePingJobs.remove(id)?.cancel()
+            unavailablePings.remove(id)
+        }
+        emitPingState(remainingPings)
     }
 
     private fun currentPingsSnapshot(): Map<String, Int?> {
@@ -326,14 +391,15 @@ class LocationViewModel(
         val pendingIds = activePingJobs.keys.toSet()
 
         pingsState = if (pendingIds.isEmpty()) {
-            PingsState.Success(pings)
+            PingsState.Success(pings, unavailable = unavailablePings.toMap())
         } else {
             PingsState.Loading(
                 lastPings = pings,
                 currentPings = pings,
                 pendingLocationIds = pendingIds,
                 completed = 0,
-                total = pendingIds.size
+                total = pendingIds.size,
+                unavailable = unavailablePings.toMap()
             )
         }
     }
@@ -350,6 +416,8 @@ class LocationViewModel(
                 val result = try {
                     performPing(config, location.profile)
                 } catch (e: CancellationException) {
+                    throw e
+                } catch (e: VpnPingUnavailableException) {
                     throw e
                 } catch (_: Exception) {
                     null
@@ -442,6 +510,11 @@ class LocationViewModel(
         if (isEditingOpenFlux) {
             editingOpenFluxConfig = OpenFluxProfileConfig.parse(value) ?: OpenFluxProfileConfig()
         }
+        validateExternalProfile()
+    }
+
+    fun onOpenFluxTransportChanged(value: String) {
+        editingOpenFluxConfig = editingOpenFluxConfig.copy(transport = value.trim().lowercase())
         validateExternalProfile()
     }
 
@@ -603,11 +676,11 @@ class LocationViewModel(
             }
             openFluxDocumentUrlError = when {
                 editingOpenFluxConfig.documentUrl.isBlank() -> "Document URL cannot be empty"
-                openFluxEncryptionKeyError == null && !editingOpenFluxConfig.isValid() ->
+                openFluxTransportError == null && openFluxEncryptionKeyError == null && !editingOpenFluxConfig.isValid() ->
                     "Use an HTTPS Yandex Docs or Yandex Disk document URL"
                 else -> null
             }
-            profileError = openFluxDocumentUrlError ?: openFluxEncryptionKeyError
+            profileError = openFluxTransportError ?: openFluxDocumentUrlError ?: openFluxEncryptionKeyError
             return
         }
         val profile = editingExternalProfile()

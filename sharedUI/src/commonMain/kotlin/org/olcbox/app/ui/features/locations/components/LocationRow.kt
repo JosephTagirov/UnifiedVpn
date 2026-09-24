@@ -66,6 +66,7 @@ fun LocationRow(
     isSelected: Boolean,
     isLoading: Boolean,
     pingMs: Int?,
+    pingUnavailableMessage: String? = null,
     isError: Boolean = false,
     isDragging: Boolean = false,
     dragOffsetY: Float = 0f,
@@ -157,7 +158,9 @@ fun LocationRow(
             )
 
             Text(
-                text = locationSubtitle(location),
+                text = if (!isLoading && pingUnavailableMessage != null) {
+                    "Connect to check latency"
+                } else locationSubtitle(location),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
                 maxLines = 1,

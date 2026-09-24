@@ -21,6 +21,7 @@ import org.olcbox.app.data.logging.diagnosticOlcRtcRoomReference
 import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.logging.sanitizeOlcRtcDiagnosticOutput
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
@@ -29,6 +30,9 @@ import org.olcbox.app.desktop.DesktopPaths
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopDnsResolver
 import org.olcbox.app.vpn.desktop.DesktopOpenFluxConfig
+import org.olcbox.app.vpn.desktop.DesktopOpenFluxBrowserBootstrap
+import org.olcbox.app.vpn.desktop.OpenFluxBrowserProtocol
+import org.olcbox.app.vpn.desktop.OpenFluxBrowserRequestGate
 import org.olcbox.app.vpn.desktop.DesktopProxyController
 import org.olcbox.app.vpn.desktop.DesktopSingBoxConfig
 import org.olcbox.app.vpn.desktop.DesktopXrayConfig
@@ -39,6 +43,8 @@ import org.olcbox.app.vpn.desktop.OlcRtcCommand
 import org.olcbox.app.vpn.desktop.PacServer
 import org.olcbox.app.vpn.desktop.WindowsTunController
 import java.io.IOException
+import java.net.InetAddress
+import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.file.Files
@@ -82,6 +88,8 @@ class DesktopVpnManager private constructor(
     private var olcRtcConfigPath: Path? = null
     private var activeDesktopMode: DesktopMode? = null
     private var activeSocksProxySettings: DesktopSocksProxySettings? = null
+    @Volatile
+    private var openFluxPingTunnel: OpenFluxConnectedTunnel? = null
     private var generation = 0L
     private val linuxTunController = LinuxTunController(::addLog)
     private val windowsTunController = WindowsTunController(::addLog)
@@ -126,7 +134,11 @@ class DesktopVpnManager private constructor(
         locationConfig: LocationConfig,
         profile: VpnProfileConfig
     ): Long? {
-        return if (profile.isOlcRtc()) {
+        return if (profile.isOpenFlux()) {
+            OpenFluxTunnelPing.ping(profile, connectedTunnel = {
+                openFluxPingTunnel.takeIf { _status.value is VpnStatus.Connected }
+            })
+        } else if (profile.isOlcRtc()) {
             OlcRtcConnectionChecker.ping(
                 locationConfig = locationConfig,
                 deviceId = locationsRepository.getDeviceIdentity()
@@ -199,6 +211,7 @@ class DesktopVpnManager private constructor(
     }
 
     private suspend fun startDesktopMode(requestGeneration: Long, isRestart: Boolean) {
+        openFluxPingTunnel = null
         setStatus(if (isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
 
         val active = locationsRepository.getActiveLocation()?.normalized()
@@ -210,10 +223,10 @@ class DesktopVpnManager private constructor(
         val profile = active.profile.normalized()
         val isAmneziaProfile = profile.normalizedType == VpnProfileConfig.TYPE_AMNEZIA_WG ||
             profile.normalizedType == VpnProfileConfig.TYPE_AMNEZIA_VPN
-        val isVlessXhttpProfile = profile.normalizedType == VpnProfileConfig.TYPE_VLESS &&
+        val isVlessProfile = profile.normalizedType == VpnProfileConfig.TYPE_VLESS &&
             runCatching { DesktopXrayConfig.supports(profile) }.getOrDefault(false)
         val isSupportedWindowsProfile = DesktopPaths.os == DesktopOs.Windows &&
-            (isAmneziaProfile || isVlessXhttpProfile || profile.isOpenFlux())
+            (isAmneziaProfile || isVlessProfile || profile.isOpenFlux())
         if (!profile.isOlcRtc() && !isSupportedWindowsProfile) {
             val message = "${profile.typeLabel()} profiles are not supported by the desktop engine"
             setStatus(VpnStatus.Error(message))
@@ -232,7 +245,7 @@ class DesktopVpnManager private constructor(
         try {
             val bypassHosts = when {
                 isAmneziaProfile -> listOf(DesktopSingBoxConfig.endpointHost(profile))
-                isVlessXhttpProfile -> listOf(DesktopXrayConfig.endpointHost(profile))
+                isVlessProfile -> listOf(DesktopXrayConfig.endpointHost(profile))
                 else -> emptyList()
             }
             val ready = CompletableDeferred<Unit>()
@@ -252,14 +265,21 @@ class DesktopVpnManager private constructor(
                 )
             }
             val desktopMode = DesktopMode.from(
-                mode = socksSettings.routingModeFor(profile.isOlcRtc()),
-                isOlcRtcProfile = profile.isOlcRtc()
+                mode = socksSettings.routingModeFor(profile.usesProxyRoutingSettings()),
+                usesProxySettings = profile.usesProxyRoutingSettings()
             )
             activeDesktopMode = desktopMode
 
-            if (desktopMode == DesktopMode.WindowsTun) {
-                windowsTunController.ensureAdministratorOrRequestRestart()
-            }
+            // Pin the exact endpoint before adding capture routes. Resolving it
+            // again inside the engine could select another address and loop.
+            val pinnedEndpoint = if (desktopMode == DesktopMode.WindowsTun) {
+                require(isAmneziaProfile || isVlessProfile) { "This profile only supports proxy modes on Windows" }
+                require(socksSettings.host == PacServer.LOCAL_SOCKS_HOST) { "Windows TUN requires SOCKS on 127.0.0.1" }
+                InetAddress.getAllByName(bypassHosts.single())
+                    .sortedBy { if (it is Inet4Address) 0 else 1 }
+                    .firstOrNull { !it.isAnyLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isMulticastAddress }
+                    ?.hostAddress ?: error("Could not resolve the VPN server for TUN")
+            } else null
 
             process = when {
                 profile.isOlcRtc() -> startOlcRtcProcessWithFallback(
@@ -270,11 +290,12 @@ class DesktopVpnManager private constructor(
                     logOutput = true,
                     privileged = desktopMode == DesktopMode.LinuxTun
                 )
-                isVlessXhttpProfile -> startXrayProcess(
+                isVlessProfile -> startXrayProcess(
                     profile = profile,
                     socksSettings = socksSettings,
                     startupFailure = startupFailure,
-                    logOutput = true
+                    logOutput = true,
+                    endpointAddress = pinnedEndpoint
                 )
                 profile.isOpenFlux() -> startOpenFluxProcess(
                     profile = profile,
@@ -287,7 +308,8 @@ class DesktopVpnManager private constructor(
                     profile = profile,
                     socksSettings = socksSettings,
                     startupFailure = startupFailure,
-                    logOutput = true
+                    logOutput = true,
+                    endpointAddress = pinnedEndpoint
                 )
             }
 
@@ -312,7 +334,7 @@ class DesktopVpnManager private constructor(
                 DesktopMode.WindowsTun -> startWindowsTun(
                     socksSettings,
                     requestGeneration,
-                    bypassHosts
+                    listOfNotNull(pinnedEndpoint)
                 )
                 DesktopMode.SystemProxy -> startSystemProxy(socksSettings, requestGeneration)
                 DesktopMode.LocalSocks -> Unit
@@ -330,6 +352,15 @@ class DesktopVpnManager private constructor(
                 requestGeneration = requestGeneration
             )
 
+            openFluxPingTunnel = OpenFluxConnectedTunnel.from(
+                profile,
+                SubscriptionFetchProxy(
+                    host = socksSettings.host,
+                    port = socksSettings.port,
+                    username = socksSettings.username,
+                    password = socksSettings.password
+                )
+            )
             setStatus(VpnStatus.Connected)
             addLog(
                 when (desktopMode) {
@@ -378,13 +409,14 @@ class DesktopVpnManager private constructor(
         requestGeneration: Long,
         bypassHosts: List<String>
     ) {
-        val tun2SocksBinary = DesktopNativeAssets.resolveWindowsTun2SocksBinary()
+        val helperBinary = DesktopNativeAssets.resolveWindowsTunHelper()
         tunProcess = windowsTunController.start(
-            tun2SocksBinary = tun2SocksBinary,
+            helperBinary = helperBinary,
             socksPort = socksSettings.port,
             socksUsername = socksSettings.username,
             socksPassword = socksSettings.password,
-            bypassHosts = bypassHosts
+            bypassHosts = bypassHosts,
+            shouldContinue = { requestGeneration == generation }
         )
 
         if (requestGeneration != generation) {
@@ -421,8 +453,8 @@ class DesktopVpnManager private constructor(
         LocalSocks;
 
         companion object {
-            fun from(mode: DesktopRoutingMode, isOlcRtcProfile: Boolean): DesktopMode {
-                return when (mode.resolveForCurrentPlatform(isOlcRtcProfile)) {
+            fun from(mode: DesktopRoutingMode, usesProxySettings: Boolean): DesktopMode {
+                return when (mode.resolveForCurrentPlatform(usesProxySettings)) {
                     DesktopRoutingMode.Tun -> when (DesktopPaths.os) {
                         DesktopOs.Linux -> LinuxTun
                         DesktopOs.Windows -> WindowsTun
@@ -477,6 +509,7 @@ class DesktopVpnManager private constructor(
     }
 
     private suspend fun stopDesktopMode(finalStatus: Boolean) {
+        openFluxPingTunnel = null
         if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null) {
             cancelProcessJobs()
             activeSocksProxySettings = null
@@ -640,12 +673,13 @@ class DesktopVpnManager private constructor(
         profile: VpnProfileConfig,
         socksSettings: DesktopSocksProxySettings,
         startupFailure: CompletableDeferred<String>,
-        logOutput: Boolean
+        logOutput: Boolean,
+        endpointAddress: String? = null
     ): Process {
         val binary = DesktopNativeAssets.resolveSingBoxBinary()
         val configPath = writeEngineClientConfig(
             prefix = "sing-box",
-            config = DesktopSingBoxConfig.build(profile, socksSettings)
+            config = DesktopSingBoxConfig.build(profile, socksSettings, endpointAddress)
         )
         val command = listOf(
             binary.toAbsolutePath().toString(),
@@ -668,12 +702,13 @@ class DesktopVpnManager private constructor(
         profile: VpnProfileConfig,
         socksSettings: DesktopSocksProxySettings,
         startupFailure: CompletableDeferred<String>,
-        logOutput: Boolean
+        logOutput: Boolean,
+        endpointAddress: String? = null
     ): Process {
         val binary = DesktopNativeAssets.resolveXrayBinary()
         val configPath = writeEngineClientConfig(
             prefix = "xray",
-            config = DesktopXrayConfig.build(profile, socksSettings)
+            config = DesktopXrayConfig.build(profile, socksSettings, endpointAddress)
         )
         val command = listOf(
             binary.toAbsolutePath().toString(),
@@ -699,7 +734,7 @@ class DesktopVpnManager private constructor(
         configPath: Path,
         startupFailure: CompletableDeferred<String>,
         logOutput: Boolean,
-        onOutput: (String) -> Unit = {}
+        onOutput: suspend (String, Process) -> Boolean = { _, _ -> false }
     ): Process {
 
         addLog("Starting ${profile.typeLabel()} with $engineName")
@@ -723,7 +758,7 @@ class DesktopVpnManager private constructor(
                     for (line in lines) {
                         if (!isActive) break
 
-                        onOutput(line)
+                        if (onOutput(line, startedProcess)) continue
 
                         if (logOutput) {
                             emitSanitizedDesktopProcessOutput(
@@ -758,6 +793,11 @@ class DesktopVpnManager private constructor(
         logOutput: Boolean
     ): Process {
         val config = DesktopOpenFluxConfig.build(profile, socksSettings)
+        val openFlux = checkNotNull(OpenFluxProfileConfig.parse(
+            profile.normalized().rawConfig?.takeIf(String::isNotBlank) ?: profile.normalized().uri.orEmpty()
+        ))
+        val browser = DesktopOpenFluxBrowserBootstrap(::addLog)
+        val browserRequests = OpenFluxBrowserRequestGate()
         val binary = DesktopNativeAssets.resolveOpenFluxBinary()
         val configPath = writeEngineClientConfig(prefix = "openflux", config = config)
         return startNativeProxyProcess(
@@ -767,8 +807,23 @@ class DesktopVpnManager private constructor(
             configPath = configPath,
             startupFailure = startupFailure,
             logOutput = logOutput,
-            onOutput = { line ->
+            onOutput = { line, nativeProcess ->
+                val requestId = OpenFluxBrowserProtocol.requestId(line)
+                if (requestId != null) {
+                    val reply = if (browserRequests.allow(requestId)) {
+                        addLog("OpenFlux is verifying anonymous browser access")
+                        browser.verify(requestId, openFlux.documentUrl, nativeProcess::isAlive)
+                    } else {
+                        addLog("OpenFlux browser verification rate limit reached")
+                        OpenFluxBrowserProtocol.failure(requestId)
+                    }
+                    if (nativeProcess.isAlive) {
+                        nativeProcess.outputStream.write((reply + "\n").toByteArray(Charsets.UTF_8))
+                        nativeProcess.outputStream.flush()
+                    }
+                }
                 if (isDesktopOpenFluxReady(line)) ready.complete(Unit)
+                line.startsWith("OPENFLUX_BROWSER_VERIFY")
             }
         )
     }
@@ -1035,7 +1090,7 @@ class DesktopVpnManager private constructor(
     private companion object {
         const val MAX_LOG_ENTRIES = 5_000
         const val OLC_READY_TIMEOUT_MS = 25_000L
-        const val OPENFLUX_READY_TIMEOUT_MS = 90_000L
+        const val OPENFLUX_READY_TIMEOUT_MS = 120_000L
         const val OLC_STARTUP_STABILITY_MS = 1_500L
         const val READY_POLL_INTERVAL_MS = 200L
         const val TCP_CONNECT_TIMEOUT_MS = 250L

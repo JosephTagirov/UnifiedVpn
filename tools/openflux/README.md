@@ -4,9 +4,22 @@ Experimental integration for Unified VPN. Windows SOCKS/HTTPS and Android emulat
 TUN/HTTPS passed [connection tests](../../docs/testing/openflux-2026091401.md);
 this is not a production reliability or carrier-availability guarantee.
 The upstream is [OpenFlux](https://github.com/p1neappleXpress/OpenFlux), pinned to
-`4f1bdb554c262f3ae9adbfe317a092c6b929ba7d`. The wrapper protocol is
+`d34dc8caa70ca059cd80d8f5753499361052dabc`. The wrapper protocol is
 `unified-openflux-aesgcm-v1`; both endpoints must use this wrapper, not an
 unmodified upstream executable.
+
+The local wrapper-5 candidate adds an explicit `vyandex` (Volga/new editor)
+transport alongside the unchanged default `yandex` (legacy editor). Both peers
+must select the same transport; there is no editor detection or fallback.
+Existing installed wrapper-4 binaries are not changed by these source changes.
+The wrapper uses the updated upstream base and an explicit
+L4 server backend without raw sockets. Existing profiles retain legacy LZ4 and
+the encrypted wire format; upstream batch/zstd is deliberately not enabled.
+The adapter retains the previous per-stack TCP memory limits, preserves response
+delivery after request EOF, and cancels server sockets on shutdown. Real-document
+and device tests are separate gates; earlier release tests do not validate this
+candidate. See the [upgrade validation](../../docs/testing/openflux-upstream-2026092401.md)
+and [experimental browser bootstrap](../../docs/testing/openflux-browser-bootstrap-2026092301.md).
 
 ## Build on Windows
 
@@ -19,7 +32,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/openflux/build.ps1
 
 The script checks the upstream commit without resetting an existing checkout,
 copies `overlay`, pins `go-socks5` to `v0.1.3`, and runs the transport, Yandex,
-configuration, and authenticated-session tests. It builds Windows/Linux amd64
+configuration, authenticated-session, and local encrypted TCP tests. It builds Windows/Linux amd64
 and Android arm64-v8a, armeabi-v7a, and x86_64 binaries. Android PIE executables
 use 16 KiB ELF alignment and `-checklinkname=0`, required by the pinned `anet`
 dependency. `-AndroidNdk PATH` overrides NDK discovery. `-PrepareOnly` prepares
@@ -40,14 +53,22 @@ does not publish releases or install anything on a server.
 
 ## Private Profiles and Link Check
 
-Use a separate, empty Yandex document in the **legacy editor**. The pinned
-upstream does not support the new editor. Its document request is unauthenticated:
-access must work through the supplied link without browser cookies. A successful
-HTTP response alone is not evidence that the transport is compatible.
+Use a separate, empty Yandex document in the editor matching the selected
+transport: **legacy editor** for `yandex` (the default), or **new Volga editor**
+for explicit `--transport vyandex`. Do not convert an active document in place.
+Volga requires matching wrapper-5 client/server binaries and its own separate
+connection tests; profile generation alone does not establish compatibility.
+The document request is unauthenticated:
+access must not require a signed-in account. The experimental bootstrap can
+obtain temporary anonymous verification cookies in a separate browser; it never
+imports a personal browser session. The command below remains a plain HTTPS
+probe and does not run browser verification. A successful HTTP response alone
+is not evidence that the transport is compatible.
 
 ```powershell
 python tools/openflux/prepare_profile.py probe --document-file .downloads/private-test-profiles/yadocs_link.txt
 python tools/openflux/prepare_profile.py generate --document-file .downloads/private-test-profiles/yadocs_link.txt --directory .downloads/private-test-profiles/openflux-test --socks-port 19181
+python tools/openflux/prepare_profile.py generate --transport vyandex --document-file .downloads/private-test-profiles/yadocs_volga_link.txt --directory .downloads/private-test-profiles/openflux-volga-test --socks-port 19183
 python -m unittest discover -s tools/openflux/tests -p test_prepare_profile.py -v
 ```
 
@@ -56,10 +77,11 @@ directory, a random key, matching client/server configurations, and an importabl
 profile/URI. It refuses to overwrite an existing directory. Keep all four files
 private; the URI contains credentials. Do not paste them into logs or issues.
 
-The probe performs a bounded HTTPS read and reports only fixed schema diagnostics,
+The probe performs a bounded HTTPS read and reports only fixed legacy-editor schema diagnostics,
 not the URL, document contents, title, or tokens. It does not join the document or
 verify an encrypted peer. A compatible structure is necessary but not sufficient
-for a working connection. Never change a working olcRTC room for this test.
+for a working legacy-editor connection; the probe does not validate Volga.
+Never change a working olcRTC room for this test.
 
 ## Runtime Contract and Limits
 
@@ -96,6 +118,20 @@ for a working connection. Never change a working olcRTC room for this test.
 OpenFlux с указанным выше закреплённым коммитом. Клиенту и серверу нужна одна версия
 нашей обёртки; обычный upstream-бинарник с ней несовместим.
 
+Локальный кандидат wrapper 5 добавляет явный транспорт `vyandex` для нового
+редактора Volga. Прежний `yandex` остаётся вариантом по умолчанию. Клиент и сервер
+должны использовать один транспорт; автоматического выбора редактора или подмены
+транспорта нет. Изменение исходников не обновляет установленные бинарники wrapper 4.
+Используется обновлённая база upstream и серверный
+режим L4 без raw-сокетов. Существующие профили сохраняют LZ4 и прежний
+зашифрованный формат; новый batch/zstd намеренно не включён. Адаптер сохраняет
+прежние лимиты TCP-буферов, позволяет получить ответ после завершения отправки
+запроса и отменяет серверные сокеты при остановке. Реальные документы и устройства
+проверяются отдельно: результаты прежних выпусков не подтверждают этот кандидат.
+Результаты и ограничения приведены в двух отчётах выше. Временная анонимная проверка браузером
+экспериментальная; личный браузер и cookies аккаунта не используются. Команда
+`probe` сама браузерную проверку не запускает.
+
 Команда сборки выше создаёт локальные Windows/Linux-бинарники, три Android ABI,
 архив изменённых исходников с зависимостями, лицензии и манифест SHA-256. Сборка
 требует Go 1.26.4 и Android NDK 28.2.13676358. Ничего не публикуется и на сервере
@@ -103,9 +139,13 @@ OpenFlux с указанным выше закреплённым коммито�
 сначала должна успешно завершиться вся сборка. Вместе с бинарниками необходимо
 распространять соответствующие исходники и лицензии.
 
-Для теста нужен отдельный пустой документ Яндекса в **старом редакторе**, доступный
-по ссылке без авторизации в браузере. Новый редактор upstream пока не поддерживает.
-Команда `probe` проверяет только структуру ответа и не выводит содержимое документа,
+Для теста нужен отдельный пустой документ Яндекса, доступный для редактирования
+по ссылке без авторизации: **старый редактор** для `yandex` по умолчанию или
+**новый редактор Volga** при явном `--transport vyandex`. Не переводите рабочий
+документ в другой редактор. Для Volga нужны соответствующие клиент и сервер
+wrapper 5; реальные подключения проверяются отдельно от генерации профиля.
+Команда `probe` проверяет только структуру старого редактора, не подтверждает
+совместимость Volga и не выводит содержимое документа,
 ссылку или токены. HTTP 200 и наличие нужных полей ещё не подтверждают VPN-соединение.
 
 Команду `generate` следует запускать от пользователя, который будет использовать

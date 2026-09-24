@@ -15,7 +15,7 @@ data class OpenFluxProfileConfig(
     @SerialName("document_url") val documentUrl: String = "",
     @SerialName("encryption_key") val encryptionKey: String = "",
     val version: Int = 1,
-    val transport: String = "yandex"
+    val transport: String = TRANSPORT_YANDEX
 ) {
     fun normalized(): OpenFluxProfileConfig = copy(
         documentUrl = documentUrl.trim(),
@@ -25,7 +25,7 @@ data class OpenFluxProfileConfig(
 
     fun isValid(): Boolean {
         val config = normalized()
-        if (config.version != 1 || config.transport != "yandex") return false
+        if (config.version != 1 || config.transport !in supportedTransports) return false
         if (!KEY_PATTERN.matches(config.encryptionKey)) return false
         if (config.documentUrl.length !in 1..8192 || config.documentUrl.any { it.isWhitespace() }) return false
         val url = runCatching { Url(config.documentUrl) }.getOrNull() ?: return false
@@ -62,7 +62,7 @@ data class OpenFluxProfileConfig(
         return buildJsonObject {
             put("version", 1)
             put("mode", mode)
-            put("transport", "yandex")
+            put("transport", config.transport)
             put("document_url", config.documentUrl)
             put("encryption_key", config.encryptionKey)
             put("handshake_timeout_seconds", 60)
@@ -78,6 +78,9 @@ data class OpenFluxProfileConfig(
     override fun toString(): String = "OpenFluxProfileConfig(transport=$transport, secrets=[redacted])"
 
     companion object {
+        const val TRANSPORT_YANDEX = "yandex"
+        const val TRANSPORT_VYANDEX = "vyandex"
+        val supportedTransports: List<String> = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX)
         private val KEY_PATTERN = Regex("[0-9a-f]{64}")
         private val json = Json { encodeDefaults = true }
 

@@ -55,6 +55,8 @@ fun HomeScreen(
     onCopyConfigRequested: () -> Unit = { viewModel.onCopyFullConfigClicked() },
     onSaveLogsRequested: (onSaved: (String) -> Unit, onError: (String) -> Unit) -> Unit = { _, _ -> },
     showAppSettingsButton: Boolean = false,
+    showAddOlcRtcButton: Boolean = true,
+    protocolSummary: String = "olcRTC, VLESS, Amnezia",
     canScanQr: Boolean = false,
     onSelfHostedRequested: (() -> Unit)? = null,
     onAppSettingsClick: () -> Unit = {},
@@ -123,6 +125,7 @@ fun HomeScreen(
         },
         topBar = {
             HomeScreenAppBar(
+                protocolSummary = protocolSummary,
                 onHistoryClick = { isLogsSheetOpen = true },
                 showAppSettingsButton = showAppSettingsButton,
                 onAppSettingsClick = onAppSettingsClick,
@@ -166,6 +169,7 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             LocationSelectorScreen(
+                showAddOlcRtcButton = showAddOlcRtcButton,
                 onRefreshClick = { targetIds ->
                     refreshHttpPings(targetIds)
                 },

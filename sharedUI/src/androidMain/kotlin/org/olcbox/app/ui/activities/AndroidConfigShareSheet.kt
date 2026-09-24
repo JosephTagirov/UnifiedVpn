@@ -1,11 +1,8 @@
 package org.olcbox.app.ui.activities
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,7 +25,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import org.olcbox.app.ui.localization.AppText as Text
-import org.olcbox.app.ui.localization.androidUiText
+import org.olcbox.app.data.importer.AndroidConfigImporter
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -51,6 +48,7 @@ internal fun AndroidConfigShareSheet(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val configImporter = remember(context) { AndroidConfigImporter(context) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val qrBitmap = remember(payload) { runCatching { createQrBitmap(payload) }.getOrNull() }
 
@@ -91,7 +89,7 @@ internal fun AndroidConfigShareSheet(
                 }
             } else {
                 Text(
-                    text = "This encrypted package is too large for a QR code. Use Share or Copy.",
+                    text = "This content is too large for a QR code. Use Share or Copy.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center
@@ -117,12 +115,7 @@ internal fun AndroidConfigShareSheet(
             ) {
                 OutlinedButton(
                     onClick = {
-                        context.copySharePayload(payload)
-                        Toast.makeText(
-                            context,
-                            context.androidUiText("Copied"),
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        configImporter.copyToClipboard(payload)
                     },
                     modifier = Modifier.weight(1f)
                 ) {
@@ -142,11 +135,6 @@ internal fun AndroidConfigShareSheet(
             }
         }
     }
-}
-
-private fun Context.copySharePayload(payload: String) {
-    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    clipboard.setPrimaryClip(ClipData.newPlainText("Unified VPN config", payload))
 }
 
 private fun Context.sharePayload(payload: String, title: String) {

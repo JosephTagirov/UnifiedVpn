@@ -6,8 +6,37 @@ import kotlin.test.assertEquals
 
 class AppTextLocalizationTest {
     @Test
+    fun openFluxTransportChoicesAndUnsupportedTransportAreLocalized() {
+        assertEquals("Yandex Docs (classic)", localizeUiText("Yandex Docs (classic)", "en"))
+        assertEquals("Yandex Docs (Volga)", localizeUiText("Yandex Docs (Volga)", "en"))
+        assertEquals("Яндекс Документы (классические)", localizeUiText("Yandex Docs (classic)", "ru"))
+        assertEquals("Яндекс Документы (Volga)", localizeUiText("Yandex Docs (Volga)", "ru"))
+        assertEquals("Неподдерживаемый транспорт OpenFlux", localizeUiText("Unsupported OpenFlux transport", "ru"))
+    }
+
+    @Test
     fun englishTextIsNotChanged() {
         assertEquals("Connection Settings", localizeUiText("Connection Settings", "en"))
+    }
+
+    @Test
+    fun notificationReconnectIsLocalized() {
+        assertEquals("Reconnect", localizeUiText("Reconnect", "en"))
+        assertEquals("Переподключить", localizeUiText("Reconnect", "ru"))
+    }
+
+    @Test
+    fun openFluxShareWarningsAreLocalized() {
+        assertEquals("Поделиться профилем OpenFlux", localizeUiText("Share OpenFlux profile", "ru"))
+        assertEquals("Профиль OpenFlux", localizeUiText("OpenFlux profile", "ru"))
+        assertEquals(
+            "Ссылка содержит ключ шифрования. Передавайте её только тем, кому доверяете.",
+            localizeUiText("This link contains the encryption key. Share it only with trusted people.", "ru")
+        )
+        assertEquals(
+            "Этот документ OpenFlux поддерживает только одно активное устройство. Второе подключение может отключить первое.",
+            localizeUiText("Only one device can use this OpenFlux document at a time. A second connection may disconnect the first.", "ru")
+        )
     }
 
     @Test

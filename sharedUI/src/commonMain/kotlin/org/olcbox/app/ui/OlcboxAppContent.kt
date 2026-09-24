@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.ui.features.home.HomeScreen
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
@@ -30,8 +31,11 @@ fun OlcboxAppContent(
     onScanQrRequested: () -> Unit = {},
     onCopyConfigRequested: () -> Unit,
     onShareLocationRequested: (LocationConfig) -> Unit = {},
+    onShareOpenFluxRequested: (OpenFluxProfileConfig, String) -> Unit = { _, _ -> },
     onSaveLogsRequested: (onSaved: (String) -> Unit, onError: (String) -> Unit) -> Unit,
     showAppSettingsButton: Boolean,
+    showAddOlcRtcButton: Boolean = true,
+    protocolSummary: String = "olcRTC, VLESS, Amnezia",
     showSplitTunnelingButton: Boolean = false,
     canScanQr: Boolean = false,
     onSelfHostedRequested: (() -> Unit)? = null,
@@ -83,6 +87,8 @@ fun OlcboxAppContent(
                     onCopyConfigRequested = onCopyConfigRequested,
                     onSaveLogsRequested = onSaveLogsRequested,
                     showAppSettingsButton = showAppSettingsButton,
+                    showAddOlcRtcButton = showAddOlcRtcButton,
+                    protocolSummary = protocolSummary,
                     showSplitTunnelingButton = showSplitTunnelingButton,
                     canScanQr = canScanQr,
                     onSelfHostedRequested = onSelfHostedRequested,
@@ -108,6 +114,7 @@ fun OlcboxAppContent(
                     viewModel = locationViewModel,
                     homeViewModel = homeViewModel,
                     onShareLocationRequested = onShareLocationRequested,
+                    onShareOpenFluxRequested = onShareOpenFluxRequested,
                     onBack = {
                         homeViewModel.loadCurrentConfig()
                         onNavigate(AppScreen.Home)

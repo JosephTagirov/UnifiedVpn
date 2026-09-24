@@ -29,6 +29,19 @@ Yandex Documents. Windows SOCKS/HTTPS and Android emulator TUN/HTTPS passed
 [connection tests](docs/testing/openflux-2026091401.md). This experimental preview
 is installed manually; existing stable clients stay on 0.0.12.
 
+The [0.0.14 preview](docs/releases/0.0.14-build.2026092406.md), build `2026092406`, fixes Android
+notification profile synchronization, adds connected-tunnel OpenFlux latency
+checks, and includes the [Windows routing changes](docs/testing/windows-tun-2026092102.md).
+OpenFlux/olcRTC share proxy settings; VLESS/AWG have separate settings and an
+experimental UAC TUN helper. Real Windows TUN traffic and recovery remain
+unverified. [Download the preview](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.0.14)
+manually; stable updates remain on 0.0.12. This preview provides Android and
+Windows files, not a newly validated Linux package.
+
+This `0.0.14 / 2026092406` preview adds explicit OpenFlux
+`vyandex` support for the new Volga text editor, alongside classic `yandex`.
+Existing profiles stay unchanged. See the [exact build and real-traffic checks](docs/testing/openflux-volga-2026092406.md).
+
 ## Legal Notice
 This software is intended for development, testing and research purposes only.
 
@@ -57,7 +70,8 @@ The author does not support or encourage such use.
 - Config import from clipboard/file and export to clipboard.
 - Diagnostics log view with log export.
 - Android TUN/proxy modes and SOCKS5 credentials. One shared per-app split-tunneling group for olcRTC/OpenFlux; a separate group for VLESS/AmneziaWG.
-- Experimental OpenFlux: `+ -> Add OpenFlux` opens document URL and encryption-key fields; URI/JSON import is also available. Requires a compatible server and a legacy-editor Yandex document, with one active client per document. Windows and Android emulator traffic were verified; physical-device/carrier coverage remains limited.
+- Experimental OpenFlux: `+ -> Add OpenFlux` opens document URL, transport and encryption-key fields; URI/JSON import is also available. Requires a compatible encrypted server and a Yandex document with matching classic `yandex` or Volga `vyandex` transport, with one active client per document. Windows and Android emulator traffic were verified; physical-device/carrier coverage remains limited.
+- OpenFlux QR/link sharing is available from the profile editor after a secret-key warning. For a second simultaneous device, create a separate document and use the optional [server profile helper](tools/openflux-server/CREATE_PROFILE.md); default preparation is offline and does not change running services.
 - Network migration, reconnect handling, and watchdog recovery.
 - Password-protected friend packages for Android and Windows: shared olcRTC profiles, an explicitly selected VLESS link, and a separate AmneziaWG peer provisioned by the package creator.
 
@@ -116,7 +130,7 @@ VLESS and adds the already provisioned AmneziaWG profile.
 | Platform | Modes | Runtime |
 | --- | --- | --- |
 | Android | TUN, proxy | `VpnService`, `hev-socks5-tunnel`, local `olcrtc`, `sing-box`, and Xray SOCKS5 runtimes |
-| Windows x86-64 | system proxy, local SOCKS | bundled `olcrtc`, `sing-box`, and Xray runtimes; TUN assets remain packaged for a future isolated helper |
+| Windows x86-64 | system proxy, local SOCKS; experimental VLESS/AWG TUN | bundled engines and separate UAC helper; live TUN validation pending |
 | Linux x86-64/arm64 | local SOCKS, optional TUN | bundled `olcrtc`, AWG `sing-box`, Xray, and `hev-socks5-tunnel` runtimes |
 
 ## Requirements
@@ -128,7 +142,7 @@ VLESS and adds the already provisioned AmneziaWG profile.
 | Android olcRTC | Go, `gomobile`, and local `olcrtc` fork |
 | Android VLESS | Packaged `sing-box` and Xray executables as `jniLibs/<abi>/libsing-box.so` and `libxray.so` |
 | Windows native assets | Go and local `olcrtc` fork |
-| Windows TUN | Temporarily unavailable: elevating the complete GUI/native runtime is refused until a narrow privileged helper is implemented |
+| Windows TUN | Experimental separate UAC helper for VLESS/AWG only; live traffic/recovery validation pending; GUI elevation remains refused |
 | Linux native assets | JDK 17+, Go, C toolchain, `make`, FUSE/AppImage tools, AWG `sing-box`, and Xray |
 
 Default local `olcrtc` path:
@@ -249,6 +263,24 @@ OpenFlux через Яндекс Документы. Windows SOCKS/HTTPS и Andr
 эмуляторе прошли [проверки соединения](docs/testing/openflux-2026091401.md).
 Экспериментальная версия устанавливается вручную; стабильный канал остаётся на 0.0.12.
 
+[Предварительная 0.0.14](docs/releases/0.0.14-build.2026092406.md), сборка `2026092406`, исправляет
+синхронизацию профилей Android из шторки, добавляет пинг OpenFlux через активный
+туннель и включает [доработки Windows](docs/testing/windows-tun-2026092102.md).
+В редакторе OpenFlux доступна отправка QR/ссылки с предупреждением о секретном
+ключе. Для второго одновременного устройства нужен отдельный документ;
+[серверный помощник](tools/openflux-server/CREATE_PROFILE.md) упрощает создание
+нового профиля, по умолчанию только подготавливая файлы без изменения служб.
+OpenFlux/olcRTC используют общие настройки прокси; VLESS/AWG имеют отдельные
+настройки и экспериментальный компонент TUN с UAC. Реальный Windows TUN-трафик
+и восстановление ещё не проверены.
+[Скачать предварительную версию](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.0.14)
+можно вручную; стабильный канал остаётся на 0.0.12. В этом выпуске есть файлы
+Android и Windows, но нет заново проверенного Linux-пакета.
+
+Этот предварительный выпуск `0.0.14 / 2026092406` добавляет OpenFlux
+`vyandex` для нового текстового редактора Volga наряду с прежним `yandex`.
+Старые профили не меняются. См. [точные сборки и проверки трафика](docs/testing/openflux-volga-2026092406.md).
+
 ## Юридическое уведомление
 
 Это программное обеспечение предназначено только для разработки, тестирования
@@ -289,8 +321,9 @@ OpenFlux через Яндекс Документы. Windows SOCKS/HTTPS и Andr
 - Режимы Android TUN/прокси и учётные данные SOCKS5. Общая группа раздельного
   туннелирования приложений для olcRTC/OpenFlux; отдельная для VLESS/AmneziaWG.
 - Экспериментальный OpenFlux: `+ -> Добавить OpenFlux` открывает поля ссылки
-  документа и ключа шифрования; также доступен импорт URI/JSON. Нужны совместимый
-  сервер и документ Яндекса в старом редакторе, один активный клиент на документ.
+  документа, транспорта и ключа шифрования; также доступен импорт URI/JSON. Нужны
+  совместимый зашифрованный сервер и документ Яндекса с одинаковым транспортом
+  старого редактора `yandex` или Volga `vyandex`, один активный клиент на документ.
   Трафик проверен на Windows и Android-эмуляторе; охват физических устройств
   и мобильных сетей пока ограничен.
 - Перенос подключения между сетями, переподключение и восстановление watchdog.
@@ -353,7 +386,7 @@ AmneziaWG.
 | Платформа | Режимы | Среда выполнения |
 | --- | --- | --- |
 | Android | TUN, прокси | `VpnService`, `hev-socks5-tunnel`, локальные среды SOCKS5 `olcrtc`, `sing-box` и Xray |
-| Windows x86-64 | системный прокси, локальный SOCKS | встроенные `olcrtc`, `sing-box` и Xray; файлы TUN остаются в пакете для будущего изолированного helper |
+| Windows x86-64 | системный прокси, локальный SOCKS; экспериментальный TUN для VLESS/AWG | встроенные движки и отдельный компонент с UAC; реальное подключение TUN ещё не проверено |
 | Linux x86-64/arm64 | локальный SOCKS, необязательный TUN | встроенные `olcrtc`, AWG `sing-box`, Xray и `hev-socks5-tunnel` |
 
 ## Требования
@@ -365,7 +398,7 @@ AmneziaWG.
 | olcRTC для Android | Go, `gomobile` и локальная копия olcrtc |
 | VLESS для Android | Встроенные `sing-box` и Xray в `jniLibs/<abi>/libsing-box.so` и `libxray.so` |
 | Нативные файлы Windows | Go и локальная копия olcrtc |
-| TUN для Windows | Временно недоступен: повышение прав всего GUI/native runtime запрещено до появления узкого привилегированного helper |
+| TUN для Windows | Экспериментальный отдельный компонент с UAC для VLESS/AWG; передача трафика/восстановление ещё не проверены; GUI не повышает права |
 | Нативные файлы Linux | JDK 17+, Go, C toolchain, `make`, FUSE/AppImage tools, AWG `sing-box` и Xray |
 
 Путь к локальному `olcrtc` по умолчанию:

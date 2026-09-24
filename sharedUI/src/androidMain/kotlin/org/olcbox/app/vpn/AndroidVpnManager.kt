@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +71,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     val splitTunnelSettings: StateFlow<AndroidSplitTunnelSettings> = _splitTunnelSettings.asStateFlow()
     val dynamicThemeEnabled: StateFlow<Boolean> = _dynamicThemeEnabled.asStateFlow()
     val installedApps: StateFlow<List<AndroidInstalledApp>> = _installedApps.asStateFlow()
+
+    fun closeUi() {
+        // Releasing UI observers must not stop the independently running VPN service.
+        scope.cancel()
+    }
 
     init {
         scope.launch {
@@ -307,7 +313,9 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         locationConfig: LocationConfig,
         profile: VpnProfileConfig
     ): Long? {
-        return if (profile.isOlcRtc()) {
+        return if (profile.isOpenFlux()) {
+            OpenFluxTunnelPing.ping(profile, OlcboxVpnState::connectedOpenFluxTunnel)
+        } else if (profile.isOlcRtc()) {
             OlcRtcConnectionChecker.ping(
                 locationConfig = locationConfig,
                 deviceId = deviceIdentityProvider.hwid()

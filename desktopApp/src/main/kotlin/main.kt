@@ -114,6 +114,7 @@ import org.olcbox.app.update.shouldShowOffer
 import org.olcbox.app.update.updateStatusMessage
 import org.olcbox.app.vpn.DesktopSocksProxySettings
 import org.olcbox.app.vpn.DesktopRoutingMode
+import org.olcbox.app.vpn.usesProxyRoutingSettings
 import org.olcbox.app.vpn.DesktopVpnManager
 import org.olcbox.app.vpn.JvmDesktopSocksProxySettingsStore
 import org.olcbox.app.vpn.desktop.verifyDesktopNativeAssets
@@ -201,7 +202,7 @@ fun main(args: Array<String>) {
     if (WindowsProcessSecurity.shouldRefuseCurrentProcess()) {
         val language = java.util.Locale.getDefault().language
         val message = localizeUiText(
-            "Unified VPN cannot run as administrator. Restart it normally. Windows TUN is temporarily unavailable; use System proxy or Local SOCKS.",
+            "Unified VPN cannot run as administrator. Restart it normally. TUN requests separate administrator consent for its network helper.",
             language
         )
         System.err.println(message)
@@ -250,10 +251,11 @@ private fun runDesktopApplication() = application {
 
     fun desktopText(text: String): String = localizeUiText(text, desktopLanguage)
 
-    fun selectRoutingMode(mode: DesktopRoutingMode, isOlcRtcProfile: Boolean) {
-        val currentMode = socksProxySettings.routingModeFor(isOlcRtcProfile)
+    fun selectRoutingMode(mode: DesktopRoutingMode, usesProxySettings: Boolean) {
+        if (mode !in DesktopRoutingMode.availableForCurrentPlatform(usesProxySettings)) return
+        val currentMode = socksProxySettings.routingModeFor(usesProxySettings)
         if (mode == currentMode) return
-        val settings = if (isOlcRtcProfile) {
+        val settings = if (usesProxySettings) {
             socksProxySettings.copy(routingMode = mode).normalized()
         } else {
             socksProxySettings.copy(externalRoutingMode = mode).normalized()
@@ -387,12 +389,12 @@ private fun runDesktopApplication() = application {
     }
 
     if (isTrayReady) {
-        val trayIsOlcRtcProfile = trayHomeState.activeProfile?.isOlcRtc() != false
+        val trayUsesProxySettings = trayHomeState.activeProfile.usesProxyRoutingSettings()
         val showRouting = trayHomeState.activeProfile != null &&
             (trayHomeState.isVpnConnected || trayHomeState.isVpnLoading)
-        val configuredTrayMode = socksProxySettings.routingModeFor(trayIsOlcRtcProfile)
-        val effectiveTrayMode = configuredTrayMode.effectiveMode(trayIsOlcRtcProfile)
-        val availableTrayModes = DesktopRoutingMode.availableForCurrentPlatform()
+        val configuredTrayMode = socksProxySettings.routingModeFor(trayUsesProxySettings)
+        val effectiveTrayMode = configuredTrayMode.effectiveMode(trayUsesProxySettings)
+        val availableTrayModes = DesktopRoutingMode.availableForCurrentPlatform(trayUsesProxySettings)
             .filterNot { it == DesktopRoutingMode.Auto }
         val currentTrayModeIndex = availableTrayModes.indexOf(effectiveTrayMode)
         val nextTrayMode = when {
@@ -421,7 +423,7 @@ private fun runDesktopApplication() = application {
                         desktopText("SOCKS5 -> VPN")
                     DesktopRoutingMode.Tun to DesktopRoutingMode.LocalSocks ->
                         desktopText("VPN -> SOCKS5")
-                    else -> effectiveTrayMode.effectiveDisplayName(trayIsOlcRtcProfile)
+                    else -> effectiveTrayMode.effectiveDisplayName(trayUsesProxySettings)
                 }
             } else {
                 null
@@ -432,7 +434,7 @@ private fun runDesktopApplication() = application {
             onOpen = { isWindowVisible = true },
             onToggle = { dependencies.homeViewModel.ToggleVpn() },
             onRoutingToggle = {
-                selectRoutingMode(nextTrayMode, isOlcRtcProfile = trayIsOlcRtcProfile)
+                selectRoutingMode(nextTrayMode, usesProxySettings = trayUsesProxySettings)
             },
             onSettings = {
                 isWindowVisible = true
@@ -464,8 +466,8 @@ private fun runDesktopApplication() = application {
         ) {
             val logs by dependencies.homeViewModel.logs.collectAsState()
             val homeState by dependencies.homeViewModel.state.collectAsState()
-            val settingsIsOlcRtcProfile = homeState.activeProfile?.isOlcRtc() != false
-            val selectedRoutingMode = socksProxySettings.routingModeFor(settingsIsOlcRtcProfile)
+            val settingsUsesProxySettings = homeState.activeProfile.usesProxyRoutingSettings()
+            val selectedRoutingMode = socksProxySettings.routingModeFor(settingsUsesProxySettings)
 
             fun reloadLocationsAfterImport(onComplete: () -> Unit = {}) {
                 dependencies.locationViewModel.loadLocations {
@@ -533,6 +535,11 @@ private fun runDesktopApplication() = application {
                     onShareLocationRequested = { config ->
                         sharePayload = "Location QR" to ConfigShareService.olcRtcUri(config)
                     },
+                    onShareOpenFluxRequested = { config, name ->
+                        val uri = ConfigShareService.openFluxUri(config, name)
+                        if (uri != null) sharePayload = "OpenFlux profile" to uri
+                        else desktopNotice = "Could not share this profile"
+                    },
                     onSaveLogsRequested = { onSaved, onError ->
                         chooseSaveFile(
                             owner = window,
@@ -547,6 +554,10 @@ private fun runDesktopApplication() = application {
                         }
                     },
                     showAppSettingsButton = true,
+                    showAddOlcRtcButton = !System.getProperty("os.name").startsWith("Windows", ignoreCase = true),
+                    protocolSummary = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
+                        "olcRTC, VLESS, Amnezia, OpenFlux"
+                    } else "olcRTC, VLESS, Amnezia",
                     showSplitTunnelingButton = false,
                     canScanQr = false,
                     onSelfHostedRequested = { showSelfHostedSetup = true },
@@ -560,16 +571,16 @@ private fun runDesktopApplication() = application {
                         updateStatusText = updateMessage,
                         subscriptions = desktopSubscriptionItems(dependencies.locationViewModel.locations.toList()),
                         logs = logs,
-                        connectionSummary = "${selectedRoutingMode.effectiveDisplayName(settingsIsOlcRtcProfile)} · " +
-                            if (settingsIsOlcRtcProfile) "olcRTC" else "VLESS / Amnezia",
+                        connectionSummary = "${selectedRoutingMode.effectiveDisplayName(settingsUsesProxySettings)} · " +
+                            (homeState.activeProfile?.typeLabel() ?: "olcRTC"),
                         connectionDetails = buildList {
                             add(
                                 "Routing" to selectedRoutingMode.effectiveDisplayName(
-                                    settingsIsOlcRtcProfile
+                                    settingsUsesProxySettings
                                 )
                             )
                             add("SOCKS5" to "${socksProxySettings.host}:${socksProxySettings.port}")
-                            when (selectedRoutingMode.effectiveMode(settingsIsOlcRtcProfile)) {
+                            when (selectedRoutingMode.effectiveMode(settingsUsesProxySettings)) {
                                 DesktopRoutingMode.Tun -> add(
                                     "Administrator rights" to "Requested when TUN (VPN) starts"
                                 )
@@ -581,11 +592,13 @@ private fun runDesktopApplication() = application {
                             }
                         },
                         socksProxySettings = socksProxySettings.toApplicationSocksProxySettings(),
-                        routingModeOptions = DesktopRoutingMode.availableForCurrentPlatform().map { mode ->
+                        routingModeOptions = DesktopRoutingMode.availableForCurrentPlatform(settingsUsesProxySettings).map { mode ->
                             ApplicationRoutingModeOption(
                                 id = mode.name,
                                 title = mode.displayName(),
-                                subtitle = mode.description()
+                                subtitle = if (mode == DesktopRoutingMode.Tun && System.getProperty("os.name").startsWith("Windows", true)) {
+                                    "Experimental: VLESS / Amnezia; requires administrator approval"
+                                } else mode.description()
                             )
                         },
                         selectedRoutingModeId = selectedRoutingMode.name,
@@ -691,7 +704,7 @@ private fun runDesktopApplication() = application {
                         onRoutingModeSelected = { id ->
                             val mode = runCatching { DesktopRoutingMode.valueOf(id) }
                                 .getOrDefault(DesktopRoutingMode.Auto)
-                            selectRoutingMode(mode, settingsIsOlcRtcProfile)
+                            selectRoutingMode(mode, settingsUsesProxySettings)
                         },
                         onAppearanceSettingsChanged = { settings ->
                             appearanceSettings = settings

@@ -2,17 +2,19 @@ param(
     [switch]$PrepareOnly,
     [switch]$SkipAndroid,
     [string]$AndroidNdk = '',
-    [string]$SourcePath = ''
+    [string]$SourcePath = '',
+    [string]$ArtifactsPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$upstream = '4f1bdb554c262f3ae9adbfe317a092c6b929ba7d'
+$upstream = 'd34dc8caa70ca059cd80d8f5753499361052dabc'
 $protocol = 'unified-openflux-aesgcm-v1'
-$versionText = "unified-openflux 1 upstream=$upstream protocol=$protocol"
-if (-not $SourcePath) { $SourcePath = Join-Path $repo '.downloads\openflux\source' }
+$versionText = "unified-openflux 5 upstream=$upstream protocol=$protocol"
+if (-not $SourcePath) { $SourcePath = Join-Path $repo ('.downloads\openflux\source-' + $upstream.Substring(0, 12)) }
 $SourcePath = [IO.Path]::GetFullPath($SourcePath)
-$artifacts = Join-Path $repo '.downloads\openflux\artifacts'
+if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $repo '.downloads\openflux\artifacts' }
+$artifacts = [IO.Path]::GetFullPath($ArtifactsPath)
 
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments)
@@ -50,7 +52,7 @@ try {
     $env:GOOS = 'windows'
     $env:GOARCH = 'amd64'
     $env:CGO_ENABLED = '0'
-    Invoke-Checked go @('test', '-p=2', '-count=1', './transport', './transport/yandex', './cmd/unified-openflux')
+    Invoke-Checked go @('test', '-p=2', '-count=1', './transport', './transport/yandex', './tunnel', './cmd/unified-openflux')
     $manifestFiles = [ordered]@{}
     foreach ($os in @('windows', 'linux')) {
         $env:GOOS = $os
@@ -100,6 +102,7 @@ try {
     }
     $manifest = [ordered]@{
         schema = 1; upstream = $upstream; protocol = $protocol; version_text = $versionText
+        server_backend = 'l4'; default_codec = 'legacy'; tcp_buffers = @(65536, 262144, 1048576)
         go_version = 'go1.26.4'; socks5_module = 'github.com/things-go/go-socks5@v0.1.3'; files = $manifestFiles
     }
     $utf8 = New-Object Text.UTF8Encoding($false)

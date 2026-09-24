@@ -1,9 +1,17 @@
 package org.olcbox.app.data.share
 
+import io.ktor.http.encodeURLParameter
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
+import org.olcbox.app.data.model.OpenFluxProfileConfig
 
 object ConfigShareService {
+    fun openFluxUri(config: OpenFluxProfileConfig, name: String): String? {
+        if (!config.isValid()) return null
+        val encodedName = name.trim().ifBlank { "OpenFlux" }.encodeURLParameter()
+        return (config.toUri() + "#" + encodedName).takeIf { it.length <= 32768 }
+    }
+
     fun olcRtcUri(entry: LocationEntry): String = olcRtcUri(entry.location)
 
     fun olcRtcUri(config: LocationConfig): String {

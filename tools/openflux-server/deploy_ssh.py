@@ -78,7 +78,8 @@ def private_output(path, access_path, new=False):
         fail("private_output_unavailable")
 
 
-def collect_bundle(bundle, config_path):
+def collect_bundle(bundle, config_path, instance="default"):
+    remote.validate_instance(instance)
     sources = {"bundle/" + name: HERE / name for name in ("manage.py", "Dockerfile", "runtime.Dockerfile", "entrypoint.sh")}
     sources.update({"bundle/" + name: bundle / name for name in ("openflux-linux-amd64", "openflux-source.tar.gz", "manifest.json")})
     sources.update({"bundle/licenses/" + name: bundle / "licenses" / name for name in ("LICENSE", "NOTICE", "COPYRIGHT")})
@@ -104,6 +105,8 @@ def collect_bundle(bundle, config_path):
         fail("invalid_source_archive")
     manifest = {"schema": remote.SCHEMA, "upstream": remote.UPSTREAM,
                 "files": {name: {"size": len(data), "sha256": remote.hash_bytes(data)} for name, data in contents.items()}}
+    if instance != "default":
+        manifest["instance"] = instance
     remote.validate_manifest(manifest)
     return manifest, contents
 
@@ -115,8 +118,9 @@ def target_hash(access):
 def read_receipt(path, access):
     receipt = remote.decode_json(local_file(path, remote.MAX_METADATA, private=True))
     fields = {"schema", "stage", "manifest_sha256", "target_sha256"}
-    if not isinstance(receipt, dict) or set(receipt) != fields or receipt["schema"] != RECEIPT_SCHEMA:
+    if not isinstance(receipt, dict) or set(receipt) not in (fields, fields | {"instance"}) or receipt["schema"] != RECEIPT_SCHEMA:
         fail("invalid_receipt")
+    remote.validate_instance(receipt.get("instance", "default"))
     remote.stage_path(receipt["stage"])
     if not remote.valid_hash(receipt["manifest_sha256"]) or receipt["target_sha256"] != target_hash(access):
         fail("receipt_target_mismatch")
@@ -126,8 +130,12 @@ def read_receipt(path, access):
 def request_for(args, receipt, manifest=None):
     request = {"schema": remote.SCHEMA, "phase": args.phase, "stage": receipt["stage"],
                "manifest_sha256": receipt["manifest_sha256"], "apply": args.apply}
+    if "instance" in receipt:
+        request["instance"] = receipt["instance"]
     if args.phase == "upload":
         request["manifest"] = manifest
+        if getattr(args, "reuse_installed_artifacts", False):
+            request["reuse_installed_artifacts"] = True
     if args.phase in ("preflight", "install"):
         request.update(runtime_image=args.runtime_image, subnet=args.subnet)
     if args.phase in ("runtime-pull", "runtime-build"):
@@ -140,6 +148,7 @@ def request_for(args, receipt, manifest=None):
 
 
 def framed_payload(request, contents=None):
+    remote.validate_request(request)
     source = local_file(HERE / "deploy_remote.py", 131072)
     metadata = remote.json_bytes(request)
     if len(metadata) > remote.MAX_METADATA:
@@ -149,6 +158,8 @@ def framed_payload(request, contents=None):
     stream.write(str(len(metadata)).encode("ascii") + b"\n" + metadata)
     if contents is not None:
         for name in remote.FILES:
+            if request.get("reuse_installed_artifacts") is True and name in remote.REUSABLE_ARTIFACTS:
+                continue
             stream.write(contents[name])
     return stream.getvalue()
 
@@ -228,9 +239,11 @@ def deploy(args):
     receipt_path = private_output(args.receipt_file, access_path, new=args.phase == "upload")
     manifest, contents = None, None
     if args.phase == "upload":
-        manifest, contents = collect_bundle(args.bundle_dir, args.server_config)
+        manifest, contents = collect_bundle(args.bundle_dir, args.server_config, args.instance)
         receipt = {"schema": RECEIPT_SCHEMA, "stage": secrets.token_hex(16),
                    "manifest_sha256": remote.hash_bytes(remote.json_bytes(manifest)), "target_sha256": target_hash(access)}
+        if args.instance != "default":
+            receipt["instance"] = args.instance
         request = request_for(args, receipt, manifest)
         # Retain the target/stage binding even when an interrupted upload leaves partial files.
         ssh.write_private(receipt_path, remote.json_bytes(receipt) + b"\n")
@@ -273,6 +286,9 @@ def parser():
         proxies.add_argument("--socks-port", type=int)
         proxies.add_argument("--http-proxy-port", type=int)
         if phase == "upload":
+            current.add_argument("--instance", default="default")
+            current.add_argument("--reuse-installed-artifacts", action="store_true",
+                                 help="Copy matching public artifacts from the original server installation; named instances only")
             current.add_argument("--bundle-dir", type=Path, required=True)
             current.add_argument("--server-config", type=Path, required=True)
         if phase in ("preflight", "install"):

@@ -9,7 +9,6 @@ COPY openflux /usr/local/bin/openflux
 COPY entrypoint.sh /usr/local/bin/openflux-entrypoint
 COPY LICENSE NOTICE COPYRIGHT provenance.json source.tar.gz /usr/share/openflux/
 RUN chmod 0755 /usr/local/bin/openflux /usr/local/bin/openflux-entrypoint \
-    && command -v iptables >/dev/null \
     && command -v readlink >/dev/null \
     && test -s /etc/ssl/certs/ca-certificates.crt \
     && test "$(/usr/local/bin/openflux --version)" = "$EXPECTED_VERSION"

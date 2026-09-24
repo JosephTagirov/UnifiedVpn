@@ -1,13 +1,31 @@
 # Encrypted OpenFlux Exit Node
 
 Opt-in Linux amd64 deployment for the Unified VPN wrapper, pinned to
-OpenFlux `4f1bdb554c262f3ae9adbfe317a092c6b929ba7d`. Yandex Docs only.
+OpenFlux `d34dc8caa70ca059cd80d8f5753499361052dabc`. Yandex Docs only.
 The wrapper requires AES-256-GCM and an authenticated client/server handshake;
 upstream's original executable is not interchangeable with this entrypoint.
 
-**Status:** prepared and unit-tested locally, not deployed or tested on the
-shared Finland server. First validate on a disposable Linux VM. A document
-share link may need to be replaced with its supported legacy editor link.
+New candidate packages require wrapper version 5 and use the upstream L4 TCP exit.
+They allow explicit `yandex` (legacy editor) or `vyandex` (new Volga editor);
+the default remains `yandex`, with no automatic detection or fallback. A new
+transport requires matching client/server binaries and separate real traffic
+validation. Do not replace an active document or reuse its key for this test. The
+legacy AES/LZ4 wire format, peer authentication and private profile schema remain
+unchanged. The anonymous, sandboxed browser
+companion is a separate, opt-in experimental path documented in
+[BROWSER_BOOTSTRAP.md](BROWSER_BOOTSTRAP.md). Ordinary manager commands do not
+launch a browser. Installed legacy helpers/configurations are not upgraded
+or changed by editing this repository. See [staged upgrades](UPGRADE.md) for the
+explicit, receipt-bound path that retains the original installation for rollback.
+
+**Status:** wrapper 4 passed a bounded VPS trial with real traffic from the
+packaged Windows client; Android browser verification still fails. The trial
+restored the original server, not a permanent migration. The separate
+[systemd browser lifecycle](BROWSER_LIFECYCLE.md) passed real controller-loss
+recovery; a host reboot remains untested. See the
+[current validation report](../../docs/testing/openflux-runtime-2026092405.md).
+Do not change an encrypted profile's exact document URL merely to try another
+editor URL; it is part of the peer context.
 
 ## Isolation And Limits
 
@@ -21,18 +39,19 @@ share link may need to be replaced with its supported legacy editor link.
   deployment. Subnet checks cannot predict future VPN routes or custom rules.
 - No host networking, published ports, host PID namespace, privileged mode,
   kernel modules, device mounts, or automatic restart. The container drops all
-  capabilities before adding `NET_RAW` and `NET_ADMIN`, with a read-only root,
+  capabilities without adding `NET_RAW` or `NET_ADMIN`, with a read-only root,
   no-new-privileges, 512 MiB memory, one CPU, and 128-process limits.
-- RST suppression exists only in the container's own network namespace. The
-  entrypoint refuses the recorded host namespace and fails if any rule fails.
-  There is no host-wide RST suppression or firewall flush fallback.
+- Wrappers 4 and 5 use OS TCP sockets instead of the old raw exit. No RST suppression
+  or other firewall command is run, even inside the new container. The
+  entrypoint still refuses the recorded host namespace. The root UID is retained
+  only to read the existing root-only secret mount, not to grant capabilities.
 - No OpenFlux logs are retained: underlying transport errors can contain the
   private document URL. `check` reports state, not end-to-end readiness.
 
 Do not change, restart, or remove working olcRTC, Xray, AWG, Docker networks, or
 host firewall rules to make this test pass. A separate VM remains preferable.
 [Docker bridge behavior](https://docs.docker.com/engine/network/drivers/bridge/)
-and [upstream exit-node requirements](https://github.com/p1neappleXpress/OpenFlux/blob/4f1bdb554c262f3ae9adbfe317a092c6b929ba7d/README.md)
+and [upstream exit-node requirements](https://github.com/p1neappleXpress/OpenFlux/blob/d34dc8caa70ca059cd80d8f5753499361052dabc/README.md)
 explain why the separation matters.
 
 ## Prepare Offline Inputs
@@ -43,7 +62,7 @@ server as part of this procedure.
 
 On a disposable builder, obtain the reviewed runtime using `runtime.Dockerfile`
 with an explicit `ALPINE_IMAGE=repository@sha256:<reviewed-digest>`. It installs
-only CA certificates and iptables; package versions at that build time are not
+only CA certificates; package versions at that build time are not
 locked. Review and record the resulting image ID, keep an original image tag,
 then transfer it with Docker's normal save/load workflow. The server manager
 accepts only an already-present immutable image ID or repository digest. It
@@ -64,7 +83,7 @@ checks both hashes and validates the executable header. An isolated build with
 utilities. Nothing starts the exit node during installation.
 
 ```text
-unified-openflux 1 upstream=4f1bdb554c262f3ae9adbfe317a092c6b929ba7d protocol=unified-openflux-aesgcm-v1
+unified-openflux 5 upstream=d34dc8caa70ca059cd80d8f5753499361052dabc protocol=unified-openflux-aesgcm-v1
 ```
 
 Place the manager and inputs under a root-owned directory, such as
@@ -75,6 +94,11 @@ variables, links, screenshots, or a Docker build context.
 
 ## Private Configuration
 
+Already have a verified installation and need another device? The local
+[profile creation helper](CREATE_PROFILE.md) generates a separate private
+profile and reuses verified public artifacts. Its default is preparation only;
+Docker changes require explicit `--apply`.
+
 Create a fresh private configuration in an interactive terminal. The document
 URL is entered with echo disabled; a random 32-byte key is generated into the
 mode-0600 file. Existing files are never overwritten.
@@ -82,6 +106,10 @@ mode-0600 file. Existing files are never overwritten.
 ```sh
 sudo python3 manage.py configure --apply --output /root/openflux-server.json
 ```
+
+For a separate new-editor document, use `configure --transport vyandex` with a
+new output path. `--transport` is accepted only by `configure`; installation and
+run commands use the value inside the private JSON and cannot override it.
 
 The schema is:
 
@@ -174,7 +202,7 @@ python -m unittest discover -s tools/openflux-server/tests -v
 ```
 
 These tests use mocked Docker calls and fake public credentials. They do not
-exercise a Linux kernel, raw sockets, Docker networking, or real Yandex service.
+exercise a Linux kernel, Docker networking, or real Yandex service.
 The server folder does not install anything when imported or tested.
 
 OpenFlux is GPL-3.0-or-later. The supplied upstream `LICENSE`, `NOTICE`, and
@@ -182,17 +210,36 @@ OpenFlux is GPL-3.0-or-later. The supplied upstream `LICENSE`, `NOTICE`, and
 installation and at `/usr/share/openflux` in the image. These deployment and
 wrapper changes belong to Unified VPN, not the upstream author. Preserve the
 license notices and provide corresponding source when distributing the binary
-or image. [Upstream license and notices](https://github.com/p1neappleXpress/OpenFlux/tree/4f1bdb554c262f3ae9adbfe317a092c6b929ba7d).
+or image. [Upstream license and notices](https://github.com/p1neappleXpress/OpenFlux/tree/d34dc8caa70ca059cd80d8f5753499361052dabc).
 
 ## Русский
 
-Это подготовленный, но ещё не развёрнутый серверный вариант для Linux amd64.
-Поддерживается только Яндекс Документы и обязательное шифрование AES-256-GCM.
-Клиент и сервер должны использовать одну версию обёртки, одинаковую ссылку на
-документ и один случайный 32-байтовый ключ. Обычный upstream-бинарник не подходит.
+Для дополнительного устройства при уже работающем проверенном сервере есть
+[пошаговый помощник создания профиля](CREATE_PROFILE.md#русский): отдельный
+документ, новый случайный ключ и приватный файл импорта. По умолчанию выполняется
+только подготовка; Docker меняется лишь с явным `--apply`.
 
-Сначала проверяйте на отдельной временной VM. На рабочем сервере Финляндии
-ничего не запускалось и не менялось. Скрипт не подключается по SSH, не ставит
+Новые пакеты-кандидаты требуют wrapper 5: `yandex` выбирает старый редактор,
+`vyandex` выбирает новый Volga. По умолчанию остаётся `yandex`, без автоматической
+подмены транспорта. Для отдельного нового документа укажите
+`configure --transport vyandex` и новый путь `--output`. Этот параметр допустим
+только при создании конфига; запуск использует транспорт из приватного JSON.
+Нужны соответствующие клиент и сервер и отдельная проверка реального трафика.
+Не меняйте рабочий документ и не переносите его ключ в тестовый профиль.
+
+Серверный wrapper 4 для Linux amd64 прошёл ограниченный тест с реальным трафиком
+упакованного Windows-клиента. Android пока не проходит браузерную проверку.
+Испытание вернуло исходный сервер; постоянной миграции не было. См.
+[актуальный отчёт](../../docs/testing/openflux-runtime-2026092405.md).
+Поддерживается только Яндекс Документы и обязательное шифрование AES-256-GCM.
+Новый L4-сервер сохраняет прежний защищённый протокол, LZ4 и формат профиля;
+существующим клиентам не нужна замена ссылки или ключа. Обе стороны используют
+одинаковую ссылку на документ и один случайный 32-байтовый ключ. Обычный
+upstream-бинарник не подходит. Raw-сокеты, NET_RAW, NET_ADMIN и правила подавления
+RST новому контейнеру не нужны.
+
+Сначала проверяйте на отдельной временной VM. Эти изменения wrapper 4 на рабочем
+сервере ещё не применялись. Скрипт не подключается по SSH, не ставит
 Docker, не перезапускает службы и не меняет напрямую host firewall, маршруты,
 DNS или прокси. Однако создание Docker bridge добавляет собственные правила
 NAT и маршрут через Docker. Полное отсутствие влияния на работающие VPN не
@@ -202,7 +249,8 @@ NAT и маршрут через Docker. Полное отсутствие вл�
 требуется явный `--apply`. Ссылку вводите только через скрытый запрос
 `configure`; ключ и ссылка хранятся в root-файле с правами 0600. Не отправляйте
 их в логи, команды, публичные ссылки или архив исходников. Нужна поддерживаемая
-ссылка на старый редактор; обычная ссылка общего доступа может не подойти.
+ссылка на редактор, соответствующий выбранному транспорту, с редактированием
+без входа в аккаунт; обычная ссылка общего доступа может не подойти.
 
 `stop` удаляет только свой контейнер и сеть. `remove` дополнительно удаляет
 свой образ и известные файлы установки, включая копию конфигурации. Исходные
@@ -211,3 +259,14 @@ NAT и маршрут через Docker. Полное отсутствие вл�
 останавливать или перенастраивать ради этого теста. Логи OpenFlux отключены,
 поскольку ошибки транспорта могут содержать приватную ссылку. Успешный `check`
 не заменяет проверку соединения и защищённого handshake с клиентом.
+
+Для обновления существующей установки предназначен отдельный [upgrade.py](UPGRADE.md):
+старые файлы, профиль, образ и контейнер сохраняются для отката. Выбор экземпляра
+всегда явный. До остановки старого контейнера новый бинарник обязан пройти
+HTTPS-проверку документа; затем в ограниченном пробном запуске нужны реальные
+handshake, HTTPS и DNS через туннель. Для JavaScript-проверки и независимого
+восстановления подготовлен отдельный [systemd-контроллер](BROWSER_LIFECYCLE.md).
+Он проверен при SIGKILL пробного контроллера, но не при перезагрузке VPS.
+Обычный foreground `upgrade.py` сам по себе не даёт такого восстановления.
+Не меняйте точную ссылку зашифрованного профиля ради другого редактора:
+она участвует в контексте соединения.

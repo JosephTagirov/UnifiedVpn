@@ -93,6 +93,19 @@ class InspectionSshTests(unittest.TestCase):
             with self.assertRaises(ssh.InspectionError):
                 ssh.SocksRelay(access(), port)
 
+    def test_proxy_relay_rejects_unbounded_io_timeouts(self):
+        for timeout in (True, None, 0, 14, 121, "90", float("inf")):
+            with self.assertRaises(ssh.InspectionError):
+                ssh.SocksRelay(access(), 10808, io_timeout=timeout)
+
+    def test_slow_upload_relay_still_cleans_up_without_connections(self):
+        relay = ssh.SocksRelay(access(), 18080, http=True, io_timeout=90)
+        with relay as endpoint:
+            self.assertEqual(endpoint["host"], "127.0.0.1")
+            self.assertEqual(relay.proxy_type, relay.socks.HTTP)
+        self.assertFalse(relay.thread.is_alive())
+        self.assertEqual(relay.server.socket.fileno(), -1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,7 @@ MAX_DOCUMENT_FILE = 32768
 MAX_RESPONSE_BODY = 4 * 1024 * 1024
 HTTP_TIMEOUT = 20
 OUTPUT_FILES = ("server.json", "client.json", "profile.json", "profile.uri")
+TRANSPORTS = ("yandex", "vyandex")
 SCHEMA_PATHS = {
     "officeActionData": ("officeActionData",),
     "editor_config": ("officeActionData", "editor_config"),
@@ -133,14 +134,16 @@ def json_bytes(value, pretty=False):
                       separators=None if pretty else (",", ":")).encode("utf-8")
 
 
-def generate(document_file, directory, socks_port):
+def generate(document_file, directory, socks_port, transport="yandex"):
+    if not isinstance(transport, str) or transport not in TRANSPORTS:
+        raise PreparationError("Select the yandex or vyandex transport explicitly; automatic fallback is not supported.")
     if type(socks_port) is not int or not 1 <= socks_port <= 65535 or socks_port == 10808:
         raise PreparationError("Use an isolated SOCKS port from 1 through 65535, excluding 10808.")
     document_url = read_document(document_file)
     create_private_directory(directory)
     # Refusing an existing directory happens before creating any new key.
     key = secrets.token_hex(32)
-    profile = {"document_url": document_url, "encryption_key": key, "version": 1, "transport": "yandex"}
+    profile = {"document_url": document_url, "encryption_key": key, "version": 1, "transport": transport}
     server = dict(profile, mode="server", handshake_timeout_seconds=60)
     client = dict(profile, mode="client", handshake_timeout_seconds=60, socks5=f"127.0.0.1:{socks_port}",
                   socks_username="", socks_password="", dns_server="1.1.1.1:53")
@@ -347,6 +350,8 @@ def argument_parser():
     generate_parser.add_argument("--document-file", type=Path, required=True)
     generate_parser.add_argument("--directory", type=Path, required=True)
     generate_parser.add_argument("--socks-port", type=int, required=True)
+    generate_parser.add_argument("--transport", choices=TRANSPORTS, default="yandex",
+                                 help="yandex: legacy editor (default); vyandex: new Volga editor; no automatic fallback")
     probe_parser = commands.add_parser("probe")
     probe_parser.add_argument("--document-file", type=Path, required=True)
     return parser
@@ -356,7 +361,7 @@ def main(argv=None):
     try:
         args = argument_parser().parse_args(argv)
         if args.command == "generate":
-            result = generate(args.document_file, args.directory, args.socks_port)
+            result = generate(args.document_file, args.directory, args.socks_port, args.transport)
         else:
             result = probe(args.document_file)
     except (PreparationError, OSError, KeyboardInterrupt, EOFError):

@@ -1,12 +1,14 @@
 package org.olcbox.app.vpn.desktop
 
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.vpn.DesktopRoutingMode
 import org.olcbox.app.vpn.DesktopSocksProxySettings
 import org.olcbox.app.vpn.desktopOlcRtcStartupFailure
 import org.olcbox.app.vpn.isDesktopEngineReady
 import org.olcbox.app.vpn.olcRtcNativeLibrarySpec
+import org.olcbox.app.vpn.usesProxyRoutingSettings
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.nio.file.Path
@@ -14,17 +16,22 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonArray
 
 class DesktopProxyModeTest {
 
     @Test
-    fun windowsUsesProxyModesUntilProtectedTunHelperExists() {
+    fun windowsKeepsTunForExternalProfilesAndBlocksItForProxyProfiles() {
         assertEquals(
             DesktopRoutingMode.SystemProxy,
             DesktopRoutingMode.SystemProxy.resolveFor(DesktopOs.Windows)
         )
         assertEquals(
-            DesktopRoutingMode.SystemProxy,
+            DesktopRoutingMode.Tun,
             DesktopRoutingMode.Tun.resolveFor(DesktopOs.Windows)
         )
         assertEquals(
@@ -35,25 +42,49 @@ class DesktopProxyModeTest {
             DesktopRoutingMode.LocalSocks,
             DesktopRoutingMode.Auto.resolveFor(
                 os = DesktopOs.Windows,
-                isOlcRtcProfile = true
+                usesProxySettings = true
             )
         )
+        assertEquals(DesktopRoutingMode.LocalSocks, DesktopRoutingMode.Tun.resolveFor(DesktopOs.Windows, true))
+        assertEquals(DesktopRoutingMode.SystemProxy, DesktopRoutingMode.SystemProxy.resolveFor(DesktopOs.Windows, true))
     }
 
     @Test
-    fun olcRtcAndExternalProfilesKeepIndependentRoutingChoices() {
+    fun olcRtcAndOpenFluxShareProxyModesIndependentlyOfVlessAndAwg() {
         val settings = DesktopSocksProxySettings(
-            routingMode = DesktopRoutingMode.Auto,
+            routingMode = DesktopRoutingMode.SystemProxy,
             externalRoutingMode = DesktopRoutingMode.Tun
-        ).normalized()
+        ).normalizedFor(DesktopOs.Windows)
+        for (type in listOf(VpnProfileConfig.TYPE_OLCRTC, VpnProfileConfig.TYPE_OPENFLUX)) {
+            val group = VpnProfileConfig(type = type).usesProxyRoutingSettings(DesktopOs.Windows)
+            assertTrue(group)
+            assertEquals(DesktopRoutingMode.SystemProxy, settings.routingModeFor(group))
+            assertTrue(DesktopRoutingMode.Tun !in DesktopRoutingMode.availableFor(DesktopOs.Windows, group))
+        }
+        for (type in listOf(VpnProfileConfig.TYPE_VLESS, VpnProfileConfig.TYPE_AMNEZIA_WG, VpnProfileConfig.TYPE_AMNEZIA_VPN)) {
+            val group = VpnProfileConfig(type = type).usesProxyRoutingSettings(DesktopOs.Windows)
+            assertTrue(!group)
+            assertEquals(DesktopRoutingMode.Tun, settings.routingModeFor(group))
+            assertTrue(DesktopRoutingMode.Tun in DesktopRoutingMode.availableFor(DesktopOs.Windows, group))
+        }
+    }
 
-        assertEquals(DesktopRoutingMode.Auto, settings.routingModeFor(isOlcRtcProfile = true))
-        assertEquals(DesktopRoutingMode.Auto, settings.routingModeFor(isOlcRtcProfile = false))
-        assertEquals(
-            DesktopRoutingMode.LocalSocks,
-            settings.routingModeFor(isOlcRtcProfile = true)
-                .resolveFor(DesktopOs.Windows, isOlcRtcProfile = true)
-        )
+    @Test
+    fun oldTunSettingCannotReachOpenFluxOrOlcRtcOnWindows() {
+        val settings = DesktopSocksProxySettings(
+            routingMode = DesktopRoutingMode.Tun, externalRoutingMode = DesktopRoutingMode.Tun
+        ).normalizedFor(DesktopOs.Windows)
+        assertEquals(DesktopRoutingMode.Auto, settings.routingMode)
+        assertEquals(DesktopRoutingMode.LocalSocks, settings.routingMode.resolveFor(DesktopOs.Windows, true))
+        assertEquals(DesktopRoutingMode.Tun, settings.externalRoutingMode)
+    }
+
+    @Test
+    fun linuxRoutingBehaviorIsUnchanged() {
+        assertEquals(DesktopRoutingMode.Tun, DesktopRoutingMode.Tun.resolveFor(DesktopOs.Linux, true))
+        assertEquals(DesktopRoutingMode.LocalSocks, DesktopRoutingMode.Auto.resolveFor(DesktopOs.Linux, true))
+        assertEquals(DesktopRoutingMode.Tun, DesktopRoutingMode.Auto.resolveFor(DesktopOs.Linux, false))
+        assertTrue(!VpnProfileConfig(type = VpnProfileConfig.TYPE_OPENFLUX).usesProxyRoutingSettings(DesktopOs.Linux))
     }
 
     @Test
@@ -372,22 +403,22 @@ class DesktopProxyModeTest {
     }
 
     @Test
-    fun windowsTunCommandUsesTun2SocksWintunAndLocalSocks() {
-        val tun2SocksBinary = Path.of("C:/Olcbox/bin/tun2socks-windows-amd64.exe")
-        val command = WindowsTunController.tun2SocksCommand(
-            tun2SocksBinary = tun2SocksBinary,
-            socksPort = 10812,
-            socksUsername = "user name",
-            socksPassword = "p@ss:word"
-        )
+    fun windowsTunPassesCredentialsAsJsonWithNoExecutableOrCommandField() {
+        val config = Json.parseToJsonElement(WindowsTunController.helperConfiguration(
+            10812, "user name", "p@ss:\"word", listOf("203.0.113.7")
+        )).jsonObject
+        assertEquals(setOf("port", "username", "password", "endpoints"), config.keys)
+        assertEquals("10812", config.getValue("port").jsonPrimitive.content)
+        assertEquals("user name", config.getValue("username").jsonPrimitive.content)
+        assertEquals("p@ss:\"word", config.getValue("password").jsonPrimitive.content)
+        assertEquals("203.0.113.7", config.getValue("endpoints").jsonArray.single().jsonPrimitive.content)
+    }
 
-        assertContains(command, tun2SocksBinary.toString())
-        assertContains(command, "--device")
-        assertContains(command, "Olcbox")
-        assertContains(command, "--proxy")
-        assertContains(command, "socks5://user%20name:p%40ss%3Aword@127.0.0.1:10812")
-        assertContains(command, "--mtu")
-        assertContains(command, "1500")
+    @Test
+    fun windowsTunRejectsInvalidLocalSettingsBeforeLaunchingUac() {
+        assertFailsWith<IllegalArgumentException> { WindowsTunController.helperConfiguration(80, "", "", listOf("203.0.113.7")) }
+        assertFailsWith<IllegalArgumentException> { WindowsTunController.helperConfiguration(10808, "", "", emptyList()) }
+        assertFailsWith<IllegalArgumentException> { WindowsTunController.helperConfiguration(10808, "x".repeat(65), "", listOf("203.0.113.7")) }
     }
 
     @Test

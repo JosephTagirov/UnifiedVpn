@@ -1,6 +1,7 @@
 package org.olcbox.app
 
 import android.Manifest
+import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -12,9 +13,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.launch
-import org.olcbox.app.data.datasource.LocationsDataSourceImpl
-import org.olcbox.app.data.datasource.LocationsRepositoryImpl
+import org.olcbox.app.data.datasource.AndroidLocationsRepository
 import org.olcbox.app.data.exporter.AndroidLogExporter
 import org.olcbox.app.data.importer.AndroidConfigImporter
 import org.olcbox.app.ui.activities.AndroidMainScreen
@@ -43,24 +47,30 @@ class AppActivity : ComponentActivity() {
             requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        val vpnManager = AndroidVpnManager(this)
-        val locationsDataSource = LocationsDataSourceImpl(this)
-        val locationsRepository = LocationsRepositoryImpl(locationsDataSource)
-        val configImporter = AndroidConfigImporter(this)
-        val logExporter = AndroidLogExporter(this)
+        val vpnUi = ViewModelProvider(this, viewModelFactory {
+            initializer { AndroidVpnUiViewModel(applicationContext) }
+        })[AndroidVpnUiViewModel::class.java]
+        val vpnManager = vpnUi.vpnManager
+        val locationsRepository = AndroidLocationsRepository.get(applicationContext)
+        val configImporter = AndroidConfigImporter(applicationContext)
+        val logExporter = AndroidLogExporter(applicationContext)
         val updateService = AppUpdateService()
         val appearanceSettingsStore = AndroidAppearanceSettingsStore(this)
         val initialAppearanceSettings = appearanceSettingsStore.loadNow()
 
-        val viewModel = HomeScreenViewModel(
-            vpnManager = vpnManager,
-            locationsRepository = locationsRepository,
-            configImporter = configImporter,
-            logExporter = logExporter
-        )
-        val locationViewModel = LocationViewModel(
-            locationsRepository = locationsRepository
-        )
+        val models = ViewModelProvider(this, viewModelFactory {
+            initializer {
+                HomeScreenViewModel(
+                    vpnManager = vpnManager,
+                    locationsRepository = locationsRepository,
+                    configImporter = configImporter,
+                    logExporter = logExporter
+                )
+            }
+            initializer { LocationViewModel(locationsRepository) }
+        })
+        val viewModel = models[HomeScreenViewModel::class.java]
+        val locationViewModel = models[LocationViewModel::class.java]
 
         setContent {
             var appearanceSettings by remember { mutableStateOf(initialAppearanceSettings) }
@@ -88,5 +98,13 @@ class AppActivity : ComponentActivity() {
                 )
             }
         }
+    }
+}
+
+private class AndroidVpnUiViewModel(context: Context) : ViewModel() {
+    val vpnManager = AndroidVpnManager(context.applicationContext)
+
+    override fun onCleared() {
+        vpnManager.closeUi()
     }
 }

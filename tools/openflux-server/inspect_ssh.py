@@ -38,13 +38,15 @@ class SocksRelay:
     connection end to end; the proxy has no access to the SSH private key.
     """
 
-    def __init__(self, access, proxy_port, http=False):
+    def __init__(self, access, proxy_port, http=False, io_timeout=15):
         try:
             import socks
         except ImportError:
             raise InspectionError("PySocks is required for the optional local-proxy route.") from None
         if type(proxy_port) is not int or not 1 <= proxy_port <= 65535:
             raise InspectionError("Invalid local SOCKS port.")
+        if type(io_timeout) is not int or not 15 <= io_timeout <= 120:
+            raise InspectionError("Invalid bounded relay I/O timeout.")
         self.access = access
         self.proxy_port = proxy_port
         self.socks = socks
@@ -66,7 +68,8 @@ class SocksRelay:
                         (owner.access["host"], owner.access["port"]), timeout=15,
                         proxy_type=owner.proxy_type, proxy_addr="127.0.0.1",
                         proxy_port=owner.proxy_port, proxy_rdns=True)
-                    self.request.settimeout(15)
+                    outgoing.settimeout(io_timeout)
+                    self.request.settimeout(io_timeout)
                     with owner.lock:
                         owner.connections.update((self.request, outgoing))
                     with selectors.DefaultSelector() as selector:

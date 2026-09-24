@@ -8,7 +8,6 @@ import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
@@ -47,16 +46,15 @@ class HomeScreenViewModel(
         )
     )
     private val subscriptionRefreshWake = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private var loadCurrentConfigRequest = 0L
     val state get() = _state.asStateFlow()
     val logs get() = vpnManager.logs
 
     init {
-        loadCurrentConfig()
         startSubscriptionAutoRefresh()
 
         viewModelScope.launch {
             locationsRepository.changes
-                .drop(1)
                 .collect {
                     loadCurrentConfigNow()
                     subscriptionRefreshWake.tryEmit(Unit)
@@ -87,7 +85,9 @@ class HomeScreenViewModel(
     }
 
     private suspend fun loadCurrentConfigNow() {
+        val requestId = ++loadCurrentConfigRequest
         val active = locationsRepository.getActiveLocation()
+        if (requestId != loadCurrentConfigRequest) return
         if (active == null) {
             _state.update {
                 it.copy(
@@ -445,6 +445,7 @@ class HomeScreenViewModel(
     }
 
     fun onForeground() {
+        loadCurrentConfig()
         subscriptionRefreshWake.tryEmit(Unit)
     }
 

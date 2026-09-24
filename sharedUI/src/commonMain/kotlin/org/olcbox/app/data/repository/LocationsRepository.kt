@@ -44,6 +44,7 @@ interface LocationsRepository {
     suspend fun getAllLocations(): List<LocationEntry>
     suspend fun getActiveLocationId(): String?
     suspend fun setActiveLocationId(storageId: String?)
+    suspend fun compareAndSetActiveLocationId(expectedRevision: Long, storageId: String?): Long?
     suspend fun getActiveLocation(): LocationEntry?
     suspend fun getDeviceIdentity(): String
 }

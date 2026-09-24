@@ -289,10 +289,13 @@ val androidAbiFilters = providers.gradleProperty("olcbox.android.abiFilters")
             .filter { it.isNotEmpty() }
     }
     .getOrElse(defaultAndroidAbiFilters)
-val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(".downloads/openflux/artifacts")
+val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
+    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts")
+)
 val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
 val generatedOpenFluxJniLibs = layout.buildDirectory.dir("generated/openfluxJniLibs")
-val expectedOpenFluxUpstream = "4f1bdb554c262f3ae9adbfe317a092c6b929ba7d"
+val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
+val expectedOpenFluxWrapper = 5
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
 
 fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFile: File, abi: String) {
@@ -305,7 +308,7 @@ fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFi
         manifest["schema"] == 1 &&
             manifest["upstream"] == expectedOpenFluxUpstream &&
             manifest["protocol"] == expectedOpenFluxProtocol &&
-            manifest["version_text"] == "unified-openflux 1 upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol"
+            manifest["version_text"] == "unified-openflux $expectedOpenFluxWrapper upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol"
     ) { "OpenFlux artifact manifest does not match the pinned encrypted engine" }
     val expectedSha = ((manifest["files"] as? Map<*, *>)?.get(artifactName) as? String)?.lowercase()
     check(expectedSha?.matches(Regex("[0-9a-f]{64}")) == true) {
@@ -343,6 +346,7 @@ val stageOpenFluxAndroidLibraries = tasks.register<StageOpenFluxAndroidLibraries
     description = "Stages manifest-verified encrypted OpenFlux executables for Android packaging."
     inputs.file(openFluxManifest)
     inputs.property("openFluxUpstream", expectedOpenFluxUpstream)
+    inputs.property("openFluxWrapper", expectedOpenFluxWrapper)
     inputs.property("openFluxProtocol", expectedOpenFluxProtocol)
     inputs.property("openFluxAbis", androidAbiFilters)
     androidAbiFilters.forEach { abi ->
@@ -491,6 +495,7 @@ dependencies {
 
 tasks.matching { task -> task.name == "preBuild" }.configureEach {
     dependsOn(":sharedUI:buildOlcrtcAndroidAar")
+    dependsOn(":verifyAwgAndroidBinaries")
 }
 
 androidComponents.onVariants { variant ->

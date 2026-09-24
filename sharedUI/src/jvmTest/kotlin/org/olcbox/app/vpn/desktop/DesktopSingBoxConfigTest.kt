@@ -1,6 +1,7 @@
 package org.olcbox.app.vpn.desktop
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -12,12 +13,129 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Base64
 import java.util.zip.DeflaterOutputStream
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class DesktopSingBoxConfigTest {
+    @Test
+    fun awg31FlagsAreBooleanAndKeepaliveRangesArePreserved() {
+        val endpoint = buildAwgOptions("RandomTrailers = 1\nDisableCookies = off", "22-30")
+        val awg = endpoint.getValue("amnezia_wg").jsonObject
+        assertEquals(true, awg.getValue("random_trailers").jsonPrimitive.boolean)
+        assertEquals(false, awg.getValue("disable_cookies").jsonPrimitive.boolean)
+        assertEquals("22-30", endpoint.getValue("peers").jsonArray.single().jsonObject
+            .getValue("persistent_keepalive_interval").jsonPrimitive.content)
+    }
+
+    @Test
+    fun legacyAwgDoesNotAcquireNewFlagsAndNumericKeepaliveStaysNumeric() {
+        val endpoint = buildAwgOptions("Jc = 4", "25")
+        val awg = endpoint.getValue("amnezia_wg").jsonObject
+        assertNull(awg["random_trailers"])
+        assertNull(awg["disable_cookies"])
+        assertEquals(25, endpoint.getValue("peers").jsonArray.single().jsonObject
+            .getValue("persistent_keepalive_interval").jsonPrimitive.int)
+        assertNull(buildAwgOptions()["amnezia_wg"])
+    }
+
+    @Test
+    fun rejectsInvalidExplicitAwgFlagsAndKeepaliveInsteadOfIgnoringThem() {
+        for (field in listOf("RandomTrailers", "DisableCookies")) {
+            assertFailsWith<IllegalArgumentException> { buildAwgOptions("$field = invalid") }
+        }
+        assertFailsWith<IllegalArgumentException> { buildAwgOptions(keepalive = "30-20") }
+        assertFailsWith<IllegalArgumentException> { buildAwgOptions(keepalive = "25-999999999999999999999") }
+    }
+
+    private fun buildAwgOptions(options: String = "", keepalive: String? = null) = Json.parseToJsonElement(
+        DesktopSingBoxConfig.build(VpnProfileConfig(type = VpnProfileConfig.TYPE_AMNEZIA_WG, rawConfig = """
+            [Interface]
+            Address = 10.8.1.2/32
+            PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            $options
+            [Peer]
+            PublicKey = vgKFDTXvNqWd2VsJWBBqqJHN1o420gQisA9067eKFxs=
+            Endpoint = 203.0.113.42:55424
+            ${keepalive?.let { "PersistentKeepalive = $it" }.orEmpty()}
+        """.trimIndent()), DesktopSocksProxySettings())
+    ).jsonObject.getValue("endpoints").jsonArray.single().jsonObject
+
+    @Test
+    fun tunPinsAmneziaEndpointAndKeepsTunnelDns() {
+        val profile = VpnProfileConfig(type = VpnProfileConfig.TYPE_AMNEZIA_WG, rawConfig = """
+            [Interface]
+            Address = 10.8.1.2/32
+            PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            DNS = 9.9.9.9
+            [Peer]
+            PublicKey = vgKFDTXvNqWd2VsJWBBqqJHN1o420gQisA9067eKFxs=
+            AllowedIPs = 0.0.0.0/0, ::/0
+            Endpoint = vpn.example.com:55424
+        """.trimIndent())
+        val root = Json.parseToJsonElement(DesktopSingBoxConfig.build(
+            profile, DesktopSocksProxySettings(), endpointAddress = "203.0.113.42"
+        )).jsonObject
+        val peer = root.getValue("endpoints").jsonArray.single().jsonObject.getValue("peers").jsonArray.single().jsonObject
+        assertEquals("203.0.113.42", peer.getValue("address").jsonPrimitive.content)
+        assertEquals(55424, peer.getValue("port").jsonPrimitive.int)
+        assertEquals("dns-tunnel-0", root.getValue("dns").jsonObject.getValue("final").jsonPrimitive.content)
+        val dnsRule = root.getValue("route").jsonObject.getValue("rules").jsonArray.first().jsonObject
+        assertEquals("local-socks", dnsRule.getValue("inbound").jsonPrimitive.content)
+        assertEquals(53, dnsRule.getValue("port").jsonPrimitive.int)
+        assertEquals("hijack-dns", dnsRule.getValue("action").jsonPrimitive.content)
+    }
+
+    @Test
+    fun tunDnsUsesPrivateProfileResolverOverAwgWithoutChangingProxyRules() {
+        val profile = VpnProfileConfig(type = VpnProfileConfig.TYPE_AMNEZIA_WG, rawConfig = """
+            [Interface]
+            Address = 10.8.1.2/32
+            PrivateKey = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+            DNS = 10.8.1.1:5353
+            [Peer]
+            PublicKey = vgKFDTXvNqWd2VsJWBBqqJHN1o420gQisA9067eKFxs=
+            AllowedIPs = 0.0.0.0/0
+            Endpoint = 203.0.113.42:55424
+        """.trimIndent())
+        val config = DesktopSingBoxConfig.build(profile, DesktopSocksProxySettings(), "203.0.113.42")
+        val root = Json.parseToJsonElement(config).jsonObject
+        val dns = root.getValue("dns").jsonObject
+        val resolver = dns.getValue("servers").jsonArray[1].jsonObject
+        assertEquals("10.8.1.1", resolver.getValue("server").jsonPrimitive.content)
+        assertEquals(5353, resolver.getValue("server_port").jsonPrimitive.int)
+        assertEquals("tcp", resolver.getValue("type").jsonPrimitive.content)
+        assertEquals("amnezia-wireguard", resolver.getValue("detour").jsonPrimitive.content)
+        assertEquals("dns-tunnel-0", dns.getValue("final").jsonPrimitive.content)
+        val proxyRoot = Json.parseToJsonElement(
+            DesktopSingBoxConfig.build(profile, DesktopSocksProxySettings())
+        ).jsonObject
+        val proxyRules = proxyRoot.getValue("route").jsonObject.getValue("rules").jsonArray
+        assertEquals("sniff", proxyRules.single().jsonObject.getValue("action").jsonPrimitive.content)
+
+        val binary = System.getenv("SING_BOX_AWG_BINARY")?.takeIf(String::isNotBlank) ?: return
+        val path = Files.createTempFile("unifiedvpn-tun-dns-synthetic-", ".json")
+        try {
+            Files.writeString(path, config)
+            val process = ProcessBuilder(binary, "check", "-c", path.toString()).redirectErrorStream(true).start()
+            try {
+                assertTrue(process.waitFor(20, TimeUnit.SECONDS), "sing-box config check timed out")
+                val output = process.inputStream.bufferedReader().readText()
+                assertEquals(0, process.exitValue(), output)
+            } finally {
+                if (process.isAlive) {
+                    process.destroyForcibly()
+                    process.waitFor(5, TimeUnit.SECONDS)
+                }
+            }
+        } finally {
+            Files.deleteIfExists(path)
+        }
+    }
+
     @Test
     fun buildsNestedAmneziaOptionsAndAuthenticatedSocksInbound() {
         val profile = VpnProfileConfig(

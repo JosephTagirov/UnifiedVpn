@@ -19,9 +19,11 @@ internal object DesktopNativeAssets {
         when (DesktopPaths.os) {
             DesktopOs.Windows -> {
                 assets.add(resolveWindowsTun2SocksBinary())
+                assets.add(resolveWindowsTunHelper())
                 assets.add(resolveSingBoxBinary())
                 assets.add(resolveXrayBinary())
                 assets.add(resolveOpenFluxBinary())
+                assets.add(resolveWindowsBrowserHelper())
             }
             DesktopOs.Linux -> {
                 assets.add(resolveHevSocks5TunnelBinary())
@@ -89,6 +91,20 @@ internal object DesktopNativeAssets {
             resourceName = "native/$fileName",
             candidates = hevSocks5TunnelSourceCandidates(fileName)
         )
+    }
+
+    fun resolveWindowsTunHelper(): Path {
+        require(DesktopPaths.os == DesktopOs.Windows)
+        val name = "unifiedvpn-tun-helper.exe"
+        return resolveBinary(name, "native/$name", desktopNativeResourceCandidates(name))
+    }
+
+    fun resolveWindowsBrowserHelper(): Path {
+        require(DesktopPaths.os == DesktopOs.Windows)
+        listOf("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll")
+            .forEach(::copyRuntimeAsset)
+        val name = "unifiedvpn-browser-helper.exe"
+        return resolveBinary(name, "native/$name", desktopNativeResourceCandidates(name))
     }
 
     fun resolveWindowsTun2SocksBinary(): Path {

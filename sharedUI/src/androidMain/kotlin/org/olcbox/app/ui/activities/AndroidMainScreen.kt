@@ -478,6 +478,11 @@ fun AndroidMainScreen(
         onShareLocationRequested = { config ->
             shareSheetPayload = "Location QR" to ConfigShareService.olcRtcUri(config)
         },
+        onShareOpenFluxRequested = { config, name ->
+            val uri = ConfigShareService.openFluxUri(config, name)
+            if (uri != null) shareSheetPayload = "OpenFlux profile" to uri
+            else showLocalizedToast("Could not share this profile")
+        },
         onSaveLogsRequested = { onSaved, onError ->
             pendingLogSaveCallbacks.value = onSaved to onError
             logSaveLauncher.launch(viewModel.suggestedLogsFileName())

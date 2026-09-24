@@ -1,4 +1,5 @@
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -10,7 +11,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 SPEC = importlib.util.spec_from_file_location("openflux_server_manager", Path(__file__).resolve().parents[1] / "manage.py")
@@ -48,6 +49,21 @@ class FakeDocker:
         self.networks = {}
         self.fail_build = False
         self.build_context = None
+        self.identity_counts = {"image": 0, "container": 0, "network": 0}
+
+    def next_identity(self, kind):
+        original = {"image": IMAGE_ID.removeprefix("sha256:"), "container": CONTAINER_ID, "network": NETWORK_ID}[kind]
+        value = f"{int(original, 16) + self.identity_counts[kind]:064x}"
+        self.identity_counts[kind] += 1
+        return "sha256:" + value if kind == "image" else value
+
+    @staticmethod
+    def named_resource(collection, reference):
+        match = next(((name, value) for name, value in collection.items()
+                      if name == reference or value["Id"] == reference), None)
+        if match is None:
+            raise AssertionError("Fake Docker resource is missing: " + reference)
+        return match
 
     @staticmethod
     def result(stdout="", returncode=0):
@@ -70,9 +86,10 @@ class FakeDocker:
             self.build_context = {path.name: path.read_bytes() for path in Path(args[-1]).iterdir()}
             if self.fail_build:
                 raise manage.DeploymentError("Simulated build failure")
-            self.images[IMAGE_ID] = {"Id": IMAGE_ID, "Config": {"Labels": self.labels(args)}}
-            self.tags[args[args.index("--tag") + 1]] = IMAGE_ID
-            return self.result(IMAGE_ID)
+            image_id = self.next_identity("image")
+            self.images[image_id] = {"Id": image_id, "Config": {"Labels": self.labels(args)}}
+            self.tags[args[args.index("--tag") + 1]] = image_id
+            return self.result(image_id)
         kind, operation = args[:2]
         names = args[2:]
         if operation == "inspect":
@@ -102,35 +119,125 @@ class FakeDocker:
                 self.tags = {tag: image for tag, image in self.tags.items() if image != names[0]}
             return self.result()
         if (kind, operation) == ("network", "create"):
-            self.networks[names[-1]] = {"Id": NETWORK_ID, "Labels": self.labels(args), "Containers": {},
+            network_id = self.next_identity("network")
+            self.networks[names[-1]] = {"Id": network_id, "Labels": self.labels(args), "Containers": {},
                                        "IPAM": {"Config": [{"Subnet": args[args.index("--subnet") + 1]}]}}
-            return self.result(NETWORK_ID + "\n")
+            return self.result(network_id + "\n")
         if (kind, operation) == ("container", "create"):
-            self.containers[manage.NAME] = {"Id": CONTAINER_ID, "Config": {"Labels": self.labels(args)},
-                                            "State": {"Running": False, "Status": "created"}}
-            self.networks[manage.NETWORK]["Containers"][CONTAINER_ID] = {"Name": manage.NAME}
-            return self.result(CONTAINER_ID + "\n")
+            container_id = self.next_identity("container")
+            name = args[args.index("--name") + 1]
+            network = args[args.index("--network") + 1]
+            self.containers[name] = {"Id": container_id, "Config": {"Labels": self.labels(args)},
+                                     "State": {"Running": False, "Status": "created"}}
+            self.networks[network]["Containers"][container_id] = {"Name": name}
+            return self.result(container_id + "\n")
         if (kind, operation) in (("container", "start"), ("container", "stop")):
-            self.containers[manage.NAME]["State"] = {"Running": operation == "start", "Status": "running" if operation == "start" else "exited"}
+            _, container = self.named_resource(self.containers, names[-1])
+            container["State"] = {"Running": operation == "start", "Status": "running" if operation == "start" else "exited"}
             return self.result()
         if (kind, operation) == ("container", "rm"):
-            self.containers.pop(manage.NAME)
-            self.networks[manage.NETWORK]["Containers"].pop(CONTAINER_ID, None)
+            name, container = self.named_resource(self.containers, names[-1])
+            self.containers.pop(name)
+            for network in self.networks.values():
+                network.get("Containers", {}).pop(container["Id"], None)
             return self.result()
         if (kind, operation) == ("network", "rm"):
-            self.networks.pop(manage.NETWORK)
+            name, _ = self.named_resource(self.networks, names[-1])
+            self.networks.pop(name)
             return self.result()
         raise AssertionError("Unexpected command: " + repr(args))
 
 
+class HostPreflightTests(unittest.TestCase):
+    def setUp(self):
+        self.manager = manage.Manager()
+        self.manager.docker = Mock(return_value=SimpleNamespace(stdout=json.dumps({'OSType':'linux','SecurityOptions':[]})))
+        self.links = Mock(side_effect=lambda path: {'/proc/1/ns/net':'net:[123]', '/proc/self/ns/net':'net:[123]'}[path])
+        for mock in (patch.object(manage.platform,'system',return_value='Linux'),
+                     patch.object(manage.platform,'machine',return_value='x86_64'),
+                     patch.object(manage.os,'geteuid',return_value=0,create=True),
+                     patch.object(manage.Path,'exists',return_value=False),
+                     patch.object(manage.os,'readlink',self.links),
+                     patch.object(manage.shutil,'which',return_value='/usr/bin/checked'),
+                     patch.object(manage,'DOCKER_SOCKET',SimpleNamespace(stat=lambda:SimpleNamespace(st_mode=stat.S_IFSOCK | 0o660,st_uid=0)))):
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def test_regular_preflight_checks_pid_one(self):
+        self.manager.preflight()
+        self.assertIn(('/proc/1/ns/net',),[call.args for call in self.links.call_args_list])
+
+    def test_bound_service_does_not_need_ptrace_permission(self):
+        self.links.side_effect = lambda path: 'net:[123]' if path == '/proc/self/ns/net' else (_ for _ in ()).throw(PermissionError())
+        self.manager.preflight(network_namespace='net:[123]')
+        self.links.assert_called_once_with('/proc/self/ns/net')
+
+    def test_foreign_or_invalid_namespace_is_rejected(self):
+        for value in ('net:[456]','invalid',True):
+            with self.subTest(value=value), self.assertRaises(manage.DeploymentError):
+                self.manager.preflight(network_namespace=value)
+        self.manager.docker.assert_not_called()
+
+
 class ValidationTests(unittest.TestCase):
-    def test_only_encrypted_yandex_server_config(self):
-        self.assertEqual(manage.validate_config(config()), config())
+    def test_default_and_named_instance_paths_are_distinct(self):
+        default = manage.Manager()
+        self.assertEqual(default.root, manage.INSTALL_DIR)
+        self.assertEqual(default.name, manage.NAME)
+        self.assertEqual(default.network, manage.NETWORK)
+        second = manage.Manager(instance="phone2")
+        self.assertEqual(second.root, manage.INSTALL_DIR.with_name(manage.NAME + "-phone2"))
+        self.assertEqual(second.name, manage.NAME + "-phone2")
+        self.assertEqual(second.network, manage.NAME + "-phone2-net")
+
+    def test_invalid_instance_names_are_rejected_before_commands(self):
+        values = (None, [], {}, True, 1, "", "Phone", "1phone", "phone-2", "phone_2", "../phone",
+                  "/opt/other", "default/../phone", "phone;command", "phone\n", "ph\u043ene", "a" * 17)
+        for value in values:
+            with self.subTest(value=repr(value)), self.assertRaises(manage.DeploymentError):
+                manage.Manager(instance=value)
+        with patch.object(manage.Manager, "preflight") as preflight, contextlib.redirect_stderr(io.StringIO()):
+            for command in ("check", "install", "run", "stop", "remove"):
+                self.assertEqual(manage.main([command, "--apply", "--instance", "../phone"]), 1)
+            preflight.assert_not_called()
+
+    def test_installed_named_manager_refuses_missing_or_other_instance_before_actions(self):
+        installed = manage.INSTALL_DIR.with_name(manage.NAME + "-phone2")
+        with patch.object(manage, "SCRIPT_DIR", installed), patch.object(manage, "Manager") as factory, \
+                patch.object(manage, "configure") as configure, contextlib.redirect_stderr(io.StringIO()):
+            for command in ("check", "configure", "install", "run", "stop", "remove"):
+                for extra in ([], ["--instance", "default"], ["--instance", "tablet"]):
+                    with self.subTest(command=command, extra=extra):
+                        self.assertEqual(manage.main([command, "--apply", *extra]), 1)
+            factory.assert_not_called()
+            configure.assert_not_called()
+
+    def test_installed_named_manager_accepts_only_matching_instance(self):
+        installed = manage.INSTALL_DIR.with_name(manage.NAME + "-phone2")
+        with patch.object(manage, "SCRIPT_DIR", installed), patch.object(manage, "Manager") as factory:
+            self.assertEqual(manage.main(["stop", "--apply", "--instance", "phone2"]), 0)
+            factory.assert_called_once_with(instance="phone2")
+            factory.return_value.stop.assert_called_once_with()
+
+    def test_installed_manager_guard_keeps_default_and_staged_commands_compatible(self):
+        stage = Path("/root/unifiedvpn-openflux-stage-" + "ab" * 16) / "bundle"
+        for directory, instance in ((manage.INSTALL_DIR, "default"), (stage, "default"), (stage, "phone2")):
+            with self.subTest(directory=str(directory), instance=instance), \
+                    patch.object(manage, "SCRIPT_DIR", directory), patch.object(manage, "Manager") as factory:
+                extra = [] if instance == "default" else ["--instance", instance]
+                self.assertEqual(manage.main(["stop", "--apply", *extra]), 0)
+                factory.assert_called_once_with(instance=instance)
+                factory.return_value.stop.assert_called_once_with()
+
+    def test_only_explicit_encrypted_yandex_transports_in_server_config(self):
+        for transport in ("yandex", "vyandex"):
+            value = dict(config(), transport=transport)
+            self.assertEqual(manage.validate_config(value), value)
         mutations = [{"version": True}, {"mode": "client"}, {"transport": "oneme"},
                      {"encryption_key": ""}, {"encryption_key": "x" * 64},
                      {"handshake_timeout_seconds": True}, {"handshake_timeout_seconds": 181},
                      {"handshake_timeout_seconds": 4}, {"debug": True}, {"allow_plaintext": True},
-                     {"dns_server": "1.1.1.1:53"}]
+                     {"dns_server": "1.1.1.1:53"}, {"codec": "legacy"}, {"codec": "batched"}, {"codec": None}]
         for mutation in mutations:
             with self.subTest(mutation=mutation), self.assertRaises(manage.DeploymentError):
                 manage.validate_config(dict(config(), **mutation))
@@ -138,6 +245,45 @@ class ValidationTests(unittest.TestCase):
         del incomplete["encryption_key"]
         with self.assertRaises(manage.DeploymentError):
             manage.validate_config(incomplete)
+
+    def test_unknown_and_non_string_transports_never_fall_back(self):
+        for transport in ("", "auto", "volga", "Yandex", "VYANDEX", None, True, [], {}):
+            with self.subTest(transport=transport), self.assertRaises(manage.DeploymentError):
+                manage.validate_config(dict(config(), transport=transport))
+        incomplete = config()
+        del incomplete["transport"]
+        with self.assertRaises(manage.DeploymentError):
+            manage.validate_config(incomplete)
+
+    def test_configure_cli_passes_selected_transport_or_legacy_default(self):
+        for extra, expected in (([], "yandex"), (["--transport", "yandex"], "yandex"),
+                                (["--transport", "vyandex"], "vyandex")):
+            with self.subTest(extra=extra), patch.object(manage, "configure") as configure:
+                self.assertEqual(manage.main(["configure", "--output", "test.json", "--apply", *extra]), 0)
+                configure.assert_called_once_with(Path("test.json"), expected)
+
+    def test_existing_config_transport_cannot_be_overridden_by_cli(self):
+        with patch.object(manage, "Manager") as factory, contextlib.redirect_stderr(io.StringIO()):
+            for command in ("check", "install", "run", "stop", "remove"):
+                with self.subTest(command=command):
+                    self.assertEqual(manage.main([command, "--transport", "vyandex", "--apply"]), 1)
+            factory.assert_not_called()
+
+    def test_configure_writes_explicit_transport_without_leaking_secrets(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(manage.platform, "system", return_value="Linux"), \
+                patch.object(manage.os, "geteuid", return_value=0, create=True), \
+                patch.object(manage.Manager, "secure_directory"), \
+                patch.object(manage.sys.stdin, "isatty", return_value=True), \
+                patch.object(manage.getpass, "getpass", return_value=config()["document_url"]), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            for transport in ("yandex", "vyandex"):
+                path = Path(directory) / (transport + ".json")
+                manage.configure(path, transport)
+                value = manage.validate_config(json.loads(path.read_text()))
+                self.assertEqual(value["transport"], transport)
+                self.assertNotIn(value["encryption_key"], output.getvalue())
+                self.assertNotIn(value["document_url"], output.getvalue())
 
     def test_url_validation_does_not_print_url(self):
         for value in ("http://docs.yandex.ru/i/SECRET", "https://docs.yandex.ru.evil.test/i/SECRET",
@@ -216,15 +362,15 @@ class ValidationTests(unittest.TestCase):
 
     def test_entrypoint_is_fail_closed_and_namespace_scoped(self):
         script = (manage.SCRIPT_DIR / "entrypoint.sh").read_text(encoding="utf-8")
-        self.assertLess(script.index('[ -f /.dockerenv ]'), script.index("iptables -w"))
-        self.assertLess(script.index('[ "$namespace" != "$OPENFLUX_HOST_NETNS" ]'), script.index("iptables -w"))
+        self.assertLess(script.index('[ -f /.dockerenv ]'), script.index("exec /usr/local/bin/openflux"))
+        self.assertLess(script.index('[ "$namespace" != "$OPENFLUX_HOST_NETNS" ]'), script.index("exec /usr/local/bin/openflux"))
         self.assertIn("--config /run/secrets/server.json >/dev/null 2>&1", script)
         self.assertNotIn("--url", script)
         self.assertNotIn("--encryption-key", script)
         self.assertNotIn("|| true", script)
-        for line in script.splitlines():
-            if line.startswith("iptables "):
-                self.assertTrue(line.endswith("|| fail"))
+        self.assertNotIn("iptables", script)
+        self.assertNotIn("UVPN_OFLUX_RST", script)
+        self.assertNotIn("iptables", (manage.SCRIPT_DIR / "Dockerfile").read_text(encoding="utf-8"))
 
 
 class LifecycleTests(unittest.TestCase):
@@ -336,7 +482,7 @@ class LifecycleTests(unittest.TestCase):
         create = next(argv for argv in self.fake.commands if argv[3:5] == ["container", "create"])
         self.assertEqual(create[create.index("--network") + 1], manage.NETWORK)
         self.assertEqual(create[create.index("--cap-drop") + 1], "ALL")
-        self.assertEqual([item for index, item in enumerate(create) if index and create[index - 1] == "--cap-add"], ["NET_RAW", "NET_ADMIN"])
+        self.assertNotIn("--cap-add", create)
         self.assertEqual(create[create.index("--log-driver") + 1], "none")
         self.assertEqual(create[create.index("--restart") + 1], "no")
         self.assertIn("--read-only", create)
@@ -357,6 +503,24 @@ class LifecycleTests(unittest.TestCase):
         self.manager.check(self.args)
         self.assertEqual(self.mutations(), [])
         self.assertIn("running", self.output.getvalue())
+
+    def test_browser_stdio_prepares_only_the_new_owned_native_container(self):
+        self.manager.install(self.args)
+        self.fake.commands.clear()
+        state = self.manager.run(bootstrap_stdio=True, start=False)
+        create = next(argv for argv in self.fake.commands if argv[3:5] == ["container", "create"])
+        self.assertIn("--interactive", create)
+        self.assertIn("OPENFLUX_BROWSER_BOOTSTRAP=stdio", create)
+        self.assertEqual(create[create.index("--log-driver") + 1], "none")
+        self.assertEqual(create[create.index("--restart") + 1], "no")
+        self.assertTrue(state["browser_bootstrap_stdio"])
+        self.assertFalse(any(argv[3:5] == ["container", "start"] for argv in self.fake.commands))
+        self.assertTrue((self.root / "server.json").exists())
+
+    def test_deferred_nonbrowser_start_is_rejected_before_preflight(self):
+        with patch.object(self.manager, "preflight") as preflight, self.assertRaises(manage.DeploymentError):
+            self.manager.run(start=False)
+        preflight.assert_not_called()
 
     def test_stop_removes_only_owned_resources_and_retains_config(self):
         self.install_and_run()
@@ -445,6 +609,93 @@ class LifecycleTests(unittest.TestCase):
         self.manager.stop()
         self.assertFalse((self.root / "state.new").exists())
         self.assertEqual(self.manager.load_state()["upstream"], manage.UPSTREAM)
+
+    def test_legacy_state_is_accepted_only_by_default_instance(self):
+        self.install_and_run()
+        state = self.manager.load_state()
+        state.pop("instance")
+        self.manager.write_state(state)
+        before = (self.root / "state.json").read_bytes()
+        self.assertEqual(self.manager.load_state(), state)
+        second = manage.Manager(self.root, self.fake, instance="phone")
+        self.fake.commands.clear()
+        with self.assertRaisesRegex(manage.DeploymentError, "different instance"):
+            second.stop()
+        self.assertEqual(self.fake.commands, [])
+        self.assertEqual((self.root / "state.json").read_bytes(), before)
+        self.assertTrue(self.fake.containers[manage.NAME]["State"]["Running"])
+
+    def test_named_state_cannot_be_used_by_another_instance(self):
+        manager = manage.Manager(self.root, self.fake, instance="phone")
+        manager.install(self.args)
+        manager.run()
+        state_before = (self.root / "state.json").read_bytes()
+        for instance in ("default", "tablet"):
+            wrong = manage.Manager(self.root, self.fake, instance=instance)
+            for action in ("check", "run", "stop", "remove"):
+                self.fake.commands.clear()
+                with self.subTest(instance=instance, action=action), self.assertRaisesRegex(manage.DeploymentError, "different instance"):
+                    getattr(wrong, action)(self.args) if action == "check" else getattr(wrong, action)()
+                self.assertEqual(self.fake.commands, [])
+                self.assertEqual((self.root / "state.json").read_bytes(), state_before)
+        self.assertTrue(self.fake.containers[manager.name]["State"]["Running"])
+
+    def test_two_instances_lifecycle_preserves_original_resources_and_files(self):
+        self.install_and_run()
+        original_state = self.manager.load_state()
+
+        def original_snapshot():
+            return {
+                "files": {path.name: path.read_bytes() for path in self.root.iterdir() if path.is_file()},
+                "container": copy.deepcopy(self.fake.containers[manage.NAME]),
+                "network": copy.deepcopy(self.fake.networks[manage.NETWORK]),
+                "image": copy.deepcopy(self.fake.images[original_state["image_id"]]),
+                "runtime": copy.deepcopy(self.fake.images[RUNTIME_ID]),
+                "retained_tags": {tag: image for tag, image in self.fake.tags.items()
+                                  if image in (original_state["image_id"], RUNTIME_ID)},
+            }
+
+        original = original_snapshot()
+        second_root = self.directory / "phone-installation"
+        second = manage.Manager(second_root, self.fake, instance="phone")
+        second_config = self.directory / "phone-server.json"
+        second_config.write_text(json.dumps(dict(config(), document_url="https://disk.yandex.ru/i/second-test-placeholder",
+                                                 encryption_key="cd" * 32)), encoding="utf-8")
+        second_args = SimpleNamespace(**dict(vars(self.args), config=second_config, subnet="172.30.252.0/28"))
+
+        second.install(second_args)
+        second.run()
+        second_state = second.load_state()
+        self.assertEqual(second_state["instance"], "phone")
+        for identity in ("owner", "image_id", "container_id", "network_id"):
+            self.assertNotEqual(original_state[identity], second_state[identity])
+        self.assertEqual(original_snapshot(), original)
+        self.assertTrue(all(container["State"]["Running"] for container in self.fake.containers.values()))
+        create = next(argv for argv in reversed(self.fake.commands) if argv[3:5] == ["container", "create"])
+        self.assertEqual(create[create.index("--name") + 1], second.name)
+        self.assertEqual(create[create.index("--network") + 1], second.network)
+        self.assertIn(f"src={second_root / 'server.json'},", create[create.index("--mount") + 1])
+        self.assertNotEqual((self.root / "server.json").read_bytes(), (second_root / "server.json").read_bytes())
+
+        self.fake.commands.clear()
+        second.stop()
+        self.assertEqual(original_snapshot(), original)
+        self.assertEqual(set(self.fake.containers), {manage.NAME})
+        self.assertEqual(set(self.fake.networks), {manage.NETWORK})
+        for command in self.mutations():
+            self.assertIn(command[-1], (second_state["container_id"], second_state["network_id"]))
+        self.assertTrue((second_root / "server.json").exists())
+
+        second.run()
+        self.assertEqual(original_snapshot(), original)
+        second.remove()
+        self.assertEqual(original_snapshot(), original)
+        self.assertFalse(second_root.exists())
+        self.assertTrue(second_config.exists())
+        self.assertNotIn(second_state["image_id"], self.fake.images)
+        self.assertEqual(set(self.fake.containers), {manage.NAME})
+        self.assertEqual(set(self.fake.networks), {manage.NETWORK})
+        self.assertTrue(all(not tag.startswith(second.name + "-runtime:") for tag in self.fake.tags))
 
 
 if __name__ == "__main__":

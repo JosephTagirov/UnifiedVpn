@@ -25,7 +25,7 @@ document URLs, encryption keys, or profile URIs as arguments.
 | --- | --- | --- |
 | `upload` | `--bundle-dir ARTIFACTS --server-config PRIVATE_SERVER_JSON --apply` | Creates a new exclusive local receipt and new root-owned staging directory. |
 | `runtime-pull` | `--alpine-image docker.io/library/alpine@sha256:DIGEST --allow-network --apply` | Pulls only this independently reviewed immutable official Alpine image and retains a unique local tag. |
-| `runtime-build` | Same `--alpine-image`, plus `--allow-build-network --apply` | Uses the already-present base to build CA certificates and iptables into an image. |
+| `runtime-build` | Same `--alpine-image`, plus `--allow-build-network --apply` | Uses the already-present base to build CA certificates into an image. |
 | `preflight` | `--runtime-image sha256:IMAGE_ID --subnet UNUSED_PRIVATE_SUBNET` | Runs the manager's read-only preinstallation checks. |
 | `install` | Same runtime/subnet arguments, plus `--apply` | Installs only a new owned installation and its verified image; starts no exit node. |
 | `run` | `--apply` | Starts the owned container and bridge. |
@@ -36,6 +36,71 @@ Use the same receipt and access file for all phases. If a reviewed suitable
 runtime image already exists locally, skip both runtime phases. Its immutable
 image ID and an original tag must be retained. Runtime build returns its image
 ID **only in the private phase report**, not the terminal summary.
+
+## Separate Devices
+
+When working directly in the server terminal, the optional
+[local profile helper](CREATE_PROFILE.md) provides hidden URL input, a new key,
+private client export, and explicit plan-owned apply/rollback. It does not use
+SSH or alter this controller's receipt protocol.
+
+Each simultaneously connected device needs its own legacy-editor document,
+random encryption key, server configuration and server instance. Never run two
+clients against the same document or reuse the first installation's receipt.
+
+On a new `upload`, add `--instance phone2` and use a **new** private receipt and
+server configuration. The name accepts 1 through 16 lowercase ASCII letters or
+digits, starting with a letter. Subsequent phases derive the instance from the
+receipt. The original default deployment remains unchanged when the option is
+omitted. `phone2` uses `/opt/unifiedvpn-openflux-phone2`, container
+`unifiedvpn-openflux-phone2` and bridge `unifiedvpn-openflux-phone2-net`.
+
+Reuse the verified immutable runtime image, but select a distinct unused bridge
+subnet. Preflight checks existing routes and Docker networks for overlaps.
+For slow SSH connections, `upload --reuse-installed-artifacts` can copy the two
+large public artifacts from the original installation instead of transmitting
+them again. This is allowed only for a named instance. Sizes, secure file
+metadata and SHA256 must match the local bundle; original files are read-only,
+and its configuration and state are never used as sources.
+`stop --apply` with the **second receipt** stops only the second instance. For
+direct management on the server, always select the matching instance:
+
+```sh
+sudo python3 /opt/unifiedvpn-openflux-phone2/manage.py check --instance phone2
+sudo python3 /opt/unifiedvpn-openflux-phone2/manage.py stop --instance phone2 --apply
+```
+
+The installed named manager refuses to run without its matching instance flag.
+The document and key stay outside the image build context. An instance is not
+ready for use until its client authenticates and passes real tunneled traffic.
+
+### Отдельные устройства
+
+При работе прямо в терминале сервера можно использовать
+[локальный помощник профилей](CREATE_PROFILE.md#русский): скрытый ввод ссылки,
+новый ключ, приватный файл импорта и явная установка/откат только нового
+экземпляра. SSH и протокол квитанций этого контроллера не меняются.
+
+Для одновременного подключения двух устройств нужны два документа старого
+редактора, два случайных ключа и два экземпляра сервера. Первый профиль оставьте
+на одном устройстве, новый импортируйте на другом. Один документ нельзя
+использовать двумя активными клиентами одновременно.
+
+При новой загрузке укажите `--instance phone2`, новый приватный файл квитанции
+`--receipt-file` и новый серверный конфиг. Остальные этапы берут имя экземпляра
+из этой квитанции. Для второго экземпляра выбирайте отдельную свободную подсеть;
+проверенный runtime-образ можно использовать повторно. Остановка со второй
+квитанцией затрагивает только второй экземпляр. При запуске `manage.py` напрямую
+обязательно указывайте `--instance phone2`, как в командах выше.
+
+При медленной передаче добавьте к `upload` флаг `--reuse-installed-artifacts`:
+два крупных публичных файла копируются из первой установки без её изменения.
+Их размеры и SHA256 должны совпасть с локальным пакетом. Секреты и состояние
+первой установки не копируются.
+
+Не публикуйте документы, ключи, профили и приватные квитанции. После установки
+проверьте зашифрованное подключение и реальный трафик: состояние Docker `running`
+само по себе не подтверждает работу VPN.
 
 ## Boundaries
 

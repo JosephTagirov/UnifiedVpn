@@ -3,6 +3,7 @@ package main
 
 import (
 	"encoding/json"
+	"openflux/transport/yandex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,31 @@ func validClientConfig() configuration {
 	return configuration{Version: 1, Mode: "client", Transport: "yandex",
 		DocumentURL:   "https://docs.yandex.ru/docs/view?url=test-fixture",
 		EncryptionKey: strings.Repeat("ab", 32), SOCKS5: "127.0.0.1:19808"}
+}
+
+func TestDocumentTransportIsExplicitAndEncrypted(t *testing.T) {
+	for _, kind := range []string{"yandex", "vyandex"} {
+		c := validClientConfig()
+		c.Transport = kind
+		if err := c.validate(); err != nil {
+			t.Fatal(err)
+		}
+		base := newDocumentTransport(c)
+		_, volga := base.(*yandex.YandexVolgaTransport)
+		if volga != (kind == "vyandex") {
+			t.Fatal("transport was silently changed")
+		}
+		base.Stop()
+		c.EncryptionKey = ""
+		if c.validate() == nil {
+			t.Fatal("plaintext accepted")
+		}
+	}
+	c := validClientConfig()
+	c.Transport = "future"
+	if c.validate() == nil {
+		t.Fatal("unknown transport accepted")
+	}
 }
 
 func TestReadConfigReturnsNormalizedDefaults(t *testing.T) {

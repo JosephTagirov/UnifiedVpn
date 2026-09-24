@@ -35,9 +35,9 @@ val olcrtcAndroidAar = layout.buildDirectory.file("generated/olcrtc/olcrtc.aar")
 val olcrtcAndroidAarFile = olcrtcAndroidAar.get().asFile
 val olcrtcAndroidBindDir = rootProject.file("tools/olcrtc-android-bind")
 val olcrtcAndroidModule = "github.com/openlibrecommunity/olcrtc"
-val olcrtcAndroidModuleVersion = "v0.0.2-0.20260818184357-f616f57bb3a9"
-val olcrtcAndroidModuleCommit = "f616f57bb3a90740f1755922ffeaa7acc5cfe4ed"
-val olcrtcAndroidModuleSum = "h1:bv0Tec2WwlWvhoaP9T94SnSFKBw1VQURo5bofHzMj08="
+val olcrtcAndroidModuleVersion = "v0.0.2-0.20260827214920-d7a00da5242f"
+val olcrtcAndroidModuleCommit = "d7a00da5242f72a48b505ffc4b6aa8246376bf25"
+val olcrtcAndroidModuleSum = "h1:UDWaXHI5nHTo+O1L21T10U3JzB9noORcn2AvUGxPLwQ="
 val localProperties = Properties().apply {
     rootProject.file("local.properties")
         .takeIf { it.isFile }

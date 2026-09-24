@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"universal-bypass-tool/transport"
+	"openflux/transport"
 )
 
 // Control records are inside upstream authenticated encryption, not a second
@@ -27,6 +27,8 @@ type peerSession struct {
 	stopOnce   sync.Once
 	stopErr    error
 	deliveries sync.WaitGroup
+	started    bool
+	startDone  chan struct{}
 }
 
 type peerAttempt struct {
@@ -44,11 +46,22 @@ func newPeerSession(inner transport.Transport, server bool) *peerSession {
 
 func (s *peerSession) Start() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.isStopped() {
+	if s.isStopped() || s.started {
+		s.mu.Unlock()
 		return errors.New("encrypted peer session is stopped")
 	}
-	return s.Transport.Start()
+	s.started = true
+	done := make(chan struct{})
+	s.startDone = done
+	s.mu.Unlock()
+	defer close(done)
+	err := s.Transport.Start()
+	if s.isStopped() {
+		// Stop may have won just before the underlying Start was entered.
+		_ = s.Transport.Stop()
+		return errors.New("encrypted peer session is stopped")
+	}
+	return err
 }
 
 func (s *peerSession) isStopped() bool {
@@ -65,8 +78,12 @@ func (s *peerSession) Stop() error {
 		s.mu.Lock()
 		close(s.stopped)
 		s.confirmed, s.callback, s.attempt = false, nil, nil
+		started := s.startDone
 		s.mu.Unlock()
 		s.stopErr = s.Transport.Stop()
+		if started != nil {
+			<-started
+		}
 		// Drain deliveries before the caller closes the gVisor network stack.
 		s.deliveries.Wait()
 	})

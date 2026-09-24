@@ -14,6 +14,47 @@ import kotlin.test.assertTrue
 
 class OpenFluxProfileConfigTest {
     @Test
+    fun profilesWithoutTransportKeepTheClassicDefault() {
+        val parsed = assertNotNull(OpenFluxProfileConfig.parse(
+            """{"document_url":"$DOCUMENT_URL","encryption_key":"$KEY"}"""
+        ))
+
+        assertEquals(CONFIG, parsed)
+        assertEquals("yandex", OpenFluxProfileConfig().transport)
+        assertEquals("yandex", Json.parseToJsonElement(parsed.toEngineJson()).jsonObject
+            .getValue("transport").jsonPrimitive.content)
+    }
+
+    @Test
+    fun volgaTransportRoundTripsWithoutChangingTheClassicProfile() {
+        val config = CONFIG.copy(transport = "vyandex")
+        val raw = config.copy(transport = " VyAnDeX ")
+
+        assertTrue(raw.isValid())
+        assertEquals(config, OpenFluxProfileConfig.parse(raw.toJson()))
+        assertEquals(config, OpenFluxProfileConfig.parse(raw.toUri()))
+        assertEquals("yandex", CONFIG.transport)
+        assertEquals(listOf("yandex", "vyandex"), OpenFluxProfileConfig.supportedTransports)
+    }
+
+    @Test
+    fun volgaEngineConfigurationPreservesTransportAndRequiresEncryptionForBothRoles() {
+        val config = CONFIG.copy(transport = "vyandex")
+        listOf("client", "server").forEach { mode ->
+            val runtime = Json.parseToJsonElement(config.toEngineJson(mode = mode)).jsonObject
+            assertEquals("vyandex", runtime.getValue("transport").jsonPrimitive.content)
+            assertEquals(DOCUMENT_URL, runtime.getValue("document_url").jsonPrimitive.content)
+            assertEquals(KEY, runtime.getValue("encryption_key").jsonPrimitive.content)
+            assertFailsWith<IllegalArgumentException> {
+                config.copy(encryptionKey = "").toEngineJson(mode = mode)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                config.copy(documentUrl = "https://example.invalid/document").toEngineJson(mode = mode)
+            }
+        }
+    }
+
+    @Test
     fun normalizationPreservesTheDocumentAndCanonicalizesKeyAndTransport() {
         val input = OpenFluxProfileConfig(
             documentUrl = "  $DOCUMENT_URL \n",
@@ -103,6 +144,8 @@ class OpenFluxProfileConfigTest {
             .forEach { profile ->
                 assertFalse(profile.isValid())
                 assertFailsWith<IllegalArgumentException> { profile.toEngineJson() }
+                assertFailsWith<IllegalArgumentException> { profile.toUri() }
+                assertEquals(profile, OpenFluxProfileConfig.parse(profile.toJson()))
             }
     }
 

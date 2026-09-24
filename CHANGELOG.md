@@ -2,6 +2,150 @@
 
 Все существенные изменения Unified VPN / Olcbox фиксируются в этом файле.
 
+## [0.0.14 / 2026092406] - 2026-09-24 (Preview / Предварительная)
+
+### English
+
+- Added explicit OpenFlux transport selection: the classic Yandex Docs editor (`yandex`) or the new Volga text editor (`vyandex`). Editing, manual entry, sharing, bundle import and server profile tools preserve that selection. Existing profiles stay on `yandex`; unsupported transports are rejected without fallback.
+- Native wrapper 5 keeps mandatory AES-256-GCM and authenticated readiness for both transports. Volga uses bounded anonymous browser verification, origin-scoped in-memory cookies, cancellation-aware HTTP/WebSocket requests and bounded queues. Expired sessions fail explicitly instead of silently retrying stale credentials.
+- Fixed stopping a session during transport startup. Added profile, browser-policy, transport, server-tool and Android harness regressions. Validation uses a separate document and server instance without replacing existing profiles or changing the Windows proxy, DNS or routes.
+- Prepared the exact tested APK and EXE for the GitHub prerelease, with corresponding source, license notices and checksums. Two separate Volga profiles passed packaged Windows HTTPS/stop and unchanged Android release APK TUN/HTTPS/stop in emulators. AWG 3.1 also passed real Windows/Android-emulator traffic with separate keys and rekeying. See the [release notes](docs/releases/0.0.14-build.2026092406.md) and [Volga validation report](docs/testing/openflux-volga-2026092406.md) for limits; the stable update channel remains unchanged.
+
+### Русский
+
+- Добавлен явный выбор транспорта OpenFlux: старый редактор Яндекс Документов (`yandex`) или новый текстовый редактор Volga (`vyandex`). Редактирование, ручной ввод, экспорт, импорт набора профилей и серверные инструменты сохраняют этот выбор. Существующие профили остаются на `yandex`; неизвестные транспорты отклоняются без автоматической подмены.
+- Нативная обёртка 5 сохраняет обязательное AES-256-GCM и подтверждение зашифрованного соединения для обоих транспортов. Volga использует ограниченную анонимную браузерную проверку, cookies в памяти с привязкой к доменам, отменяемые HTTP/WebSocket-запросы и ограниченные очереди. Недействительная сессия завершается явной ошибкой вместо бесконечного повтора с устаревшими данными.
+- Исправлена остановка сессии во время запуска транспорта. Добавлены проверки профилей, браузерных ограничений, транспорта, серверных инструментов и Android-стенда. Испытания используют отдельный документ и серверный экземпляр, не заменяя прежние профили и не меняя прокси, DNS и маршруты Windows.
+- Точные проверенные APK и EXE подготовлены для предварительного релиза GitHub с исходниками, лицензиями и хешами. Два отдельных Volga-профиля прошли HTTPS/остановку собранной Windows-версии и TUN/HTTPS/остановку неизменённой релизной APK в эмуляторах. AWG 3.1 также прошёл реальный Windows/Android-трафик с отдельными ключами и обновлением сессионных ключей. Ограничения указаны в [описании выпуска](docs/releases/0.0.14-build.2026092406.md) и [отчёте Volga](docs/testing/openflux-volga-2026092406.md); стабильный канал обновлений не меняется.
+
+## [0.0.14 / 2026092405] - Unreleased / Не опубликовано
+
+### English
+
+- Android browser verification requests the legacy desktop editor using the installed Chromium version. Anonymous cookies from the exact Disk and Docs origins are handed to native code separately; they are not widened to parent domains. Profile URLs, encryption keys, AES-256-GCM and legacy LZ4 remain unchanged.
+- Added fixed-field, debug-only browser checkpoints and regression tests for redirect cookie isolation. Intermediate local builds 2026092402/03 added diagnostics; 2026092404 selected the desktop editor; 2026092405 fixes the two-origin cookie handoff. None was published.
+- Added a receipt-bound systemd browser lifecycle with independently supervised trial recovery. A real controller-SIGKILL test restored the exact original OpenFlux container in 7.21 seconds after fixing namespace preflight and normal-stop handling. This does not prove host-reboot recovery.
+- Passed 227 server-tool tests on Windows and offline Linux, systemd unit validation, 344 JVM tests, 226 Android host tests and 120 Android harness checks. The packaged Windows build passed authenticated OpenFlux, HTTPS to two external sites, a 25-second liveness check and stop without changing host network settings. Two fresh Android runtime tests timed out during browser verification before TUN. That earlier server trial restored the original through independent recovery in 17.207 seconds; see its [historical report](docs/testing/openflux-runtime-2026092405.md).
+- Later new-server work enabled the main managed OpenFlux service after one complete Windows traffic pass, retaining rollback files. A post-commit Windows repeat failed after initial HTTPS success; a fresh Android test again failed browser verification. OpenFlux stability and release gates remain unpassed. A separate AWG peer/export passed two Windows HTTPS checks, including the packaged profile decoder/config builder. No application binary change or GitHub publication; see [new-server results](docs/testing/new-server-connectivity-20260924.md).
+
+### Русский
+
+- Браузерная проверка Android запрашивает старый настольный редактор с версией установленного Chromium. Анонимные cookies Disk и Docs передаются ядру раздельно, только для соответствующих точных хостов, без расширения на родительские домены. Ссылки профилей, ключи, AES-256-GCM и прежний LZ4 не меняются.
+- Добавлены фиксированные диагностические этапы только для debug-сборок и тесты изоляции cookies при перенаправлении. Локальные сборки 2026092402/03 добавляли диагностику, 2026092404 выбирала настольный редактор, 2026092405 исправляет передачу cookies двух хостов. Они не публиковались.
+- Добавлен systemd-контроллер браузерного процесса с независимым восстановлением после прерванного пробного обновления. Реальный тест SIGKILL восстановил исходный контейнер OpenFlux за 7,21 секунды после исправления проверки namespace и обычной остановки. Это не подтверждает восстановление после перезагрузки VPS.
+- Прошли 227 серверных тестов на Windows и в изолированном Linux, проверка systemd, 344 JVM-теста, 226 Android host-тестов и 120 проверок Android-стенда. Упакованная Windows-сборка прошла зашифрованное подключение, HTTPS к двум внешним сайтам, проверку через 25 секунд и остановку без изменения сетевых настроек хоста. Два чистых Android-теста завершились тайм-аутом браузерной проверки до TUN. То предыдущее серверное испытание восстановило исходный экземпляр независимым откатом за 17,207 секунды; см. [исторический отчёт](docs/testing/openflux-runtime-2026092405.md).
+- Позднее на новом сервере основной OpenFlux переведён на управляемую службу с автозапуском после одного полного Windows-теста; файлы отката сохранены. Повтор Windows оборвался после первых успешных HTTPS-запросов, а новый Android-тест снова не прошёл браузерную проверку. Устойчивость OpenFlux и готовность к выпуску не подтверждены. Отдельный профиль AWG прошёл два Windows HTTPS-теста, включая декодер и построитель конфигурации собранного приложения. Бинарники приложения не менялись, публикации на GitHub нет; см. [результаты на новом сервере](docs/testing/new-server-connectivity-20260924.md).
+
+## [0.0.14 / 2026092401] - Unreleased / Не опубликовано
+
+### English
+
+- Updated the OpenFlux source base to `d34dc8c` and native wrapper to 4. The server uses explicit L4 forwarding without raw sockets or per-container iptables setup. Existing profile schema, mandatory AES-256-GCM, authenticated readiness and legacy LZ4 framing are preserved; upstream batch/zstd is not silently enabled.
+- The L4 adapter keeps the former per-stack TCP buffer limits, waits for destination connection before accepting a tunnel connection, preserves TCP half-close, and cancels outstanding server connections on shutdown. Added loopback-only encrypted traffic and lifecycle regressions.
+- Added an explicit staged server-upgrade tool that keeps the original container, image and configuration for rollback. HTTPS document access is checked before stopping the original; a bounded traffic trial requires fresh authenticated peer/DNS/HTTPS evidence before committing. This is not a release or a claim that the live deployment passed. See [validation status](docs/testing/openflux-upstream-2026092401.md).
+- Native builds, 205 server-tool tests, 344 JVM tests and 221 Android host tests passed. The new Windows document check passed with isolated WebView2. An isolated server Chromium sandbox and browser-to-native document handoff also passed, using pinned dependencies and no added capabilities. The original server was not replaced; durable migration, real new-pair VPN traffic and Android runtime checks remain pending.
+
+### Русский
+
+- База исходников OpenFlux обновлена до `d34dc8c`, native-обёртка до 4. Сервер использует L4 без raw-сокетов и настройки iptables внутри контейнера. Сохранены формат профилей, обязательное AES-256-GCM, проверка готовности сервера и прежний LZ4; новый batch/zstd не включается незаметно.
+- L4-адаптер сохраняет прежние лимиты TCP-буферов, подтверждает соединение только после подключения к назначению, поддерживает TCP half-close и отменяет серверные соединения при остановке. Добавлены локальные тесты зашифрованного трафика и жизненного цикла.
+- Добавлено отдельное поэтапное обновление сервера с сохранением прежнего контейнера, образа и конфигурации для отката. HTTPS-доступ к документу проверяется до остановки старого экземпляра; ограниченный пробный запуск требует свежих результатов проверки зашифрованного соединения, DNS и HTTPS перед фиксацией. Это не выпуск и не утверждение об успешном обновлении действующего сервера. См. [статус проверок](docs/testing/openflux-upstream-2026092401.md).
+- Прошли native-сборки, 205 серверных тестов, 344 JVM и 221 Android host-тест. Новый Windows-клиент проверил документ через отдельный WebView2. На VPS также прошли реальная sandbox Chromium и передача браузерной сессии ядру, с закреплёнными зависимостями и без дополнительных capabilities. Старый сервер не заменён; постоянный запуск с откатом, реальный VPN-трафик новой пары и проверки Android на устройстве ещё не пройдены.
+
+## [0.0.14 / 2026092302] - Unreleased / Не опубликовано
+
+### English
+
+- Reviewed OpenFlux main `d34dc8c` against the bundled `4f1bdb5` base. Selectively backported Yandex reconnect/socket cleanup, pending-queue recovery and precompiled parsers from `4513a14` and `945cefd`. This is not a full upstream upgrade: the new batch/zstd wire format and rewritten server network stack are not enabled.
+- Authenticates a replacement WebSocket before queued packets or keepalives can use it; Stop cancels idle/pending writers, keepalive and reconnect waits. An old connection cannot mark a replacement disconnected.
+- Native wrapper is now 3; AES-256-GCM, authenticated readiness, legacy LZ4 and profile format remain unchanged. The artifact manifest records the reviewed head and selected backports. Builds are local only; no server deployment, installer/APK release or GitHub publication. See [validation report](docs/testing/openflux-upstream-backports-2026092302.md).
+
+### Русский
+
+- OpenFlux main `d34dc8c` сравнен со встроенной базой `4f1bdb5`. Выборочно перенесены исправления переподключения Яндекса, закрытия сокетов, сохранения очереди отправки и предварительной компиляции регулярных выражений из `4513a14` и `945cefd`. Это не полный переход на upstream: новый формат batch/zstd и переработанный серверный сетевой стек не включены.
+- Авторизация нового WebSocket проходит до отправки очереди и keepalive; Stop прерывает ожидания отправителя, keepalive и переподключения. Старое соединение не может пометить новое отключённым.
+- Версия native-обёртки повышена до 3; AES-256-GCM, проверка готовности сервера, прежний LZ4 и формат профилей сохранены. Манифест содержит проверенный upstream и перенесённые коммиты. Только локальные сборки: сервер, установщик/APK и GitHub не обновлялись. См. [отчёт о проверках](docs/testing/openflux-upstream-backports-2026092302.md).
+
+## [0.0.14 / 2026092301] - Unreleased / Не опубликовано
+
+### English
+
+- Added an experimental anonymous browser-verification path for the OpenFlux Yandex Documents transport. Native wrapper 2 exchanges short-lived cookies over inherited pipes; profile format, mandatory AES-256-GCM and peer authentication remain unchanged. Account cookies are rejected; cancellation, response limits and renewal backoff are covered by tests.
+- Added an isolated Windows WebView2 helper and an Android API 28+ private-process WebView service. Neither reads a personal browser profile or receives the tunnel encryption key. Automated verification only; an interactive challenge fails explicitly instead of being treated as a connected VPN.
+- Added `--check-document` to test the production HTTPS bootstrap without joining a document room, starting SOCKS/TUN or sending tunnel traffic. A real-document check with an isolated Chrome provider passed; this is not an end-to-end connection result for the packaged apps.
+- Live WebView2 checks produced one handoff failure followed by one separately approved success. Added fixed, redacted failure-stage diagnostics and regression tests; the first failure remains unexplained, full VPN traffic is unverified and the build remains unreleased.
+- Added opt-in server browser-companion tooling restricted to a new test instance, without modifying existing containers. VPS sandbox compatibility, Android WebView runtime and encrypted end-to-end traffic remain release gates. No deployment, installer/APK release or GitHub publication was performed for this build. See [validation status](docs/testing/openflux-browser-bootstrap-2026092301.md).
+
+### Русский
+
+- Добавлен экспериментальный путь анонимной браузерной проверки для OpenFlux через Яндекс Документы. Обёртка ядра версии 2 получает временные cookies через закрытые каналы процессов; формат профилей, обязательное AES-256-GCM и проверка сервера не меняются. Cookies аккаунта отклоняются; отмена, ограничения ответов и интервалы повторной проверки покрыты тестами.
+- Добавлены отдельный помощник WebView2 для Windows и WebView-сервис в приватном процессе для Android API 28+. Они не читают личный профиль браузера и не получают ключ шифрования туннеля. Пока поддерживается только автоматическая проверка; интерактивная проверка завершается явной ошибкой, а не ложным статусом подключения.
+- Добавлен режим `--check-document`: проверка HTTPS-доступа к редактору без входа в комнату, SOCKS/TUN и VPN-трафика. Проверка реального документа с отдельным Chrome прошла; это не результат сквозного подключения собранных приложений.
+- Первая живая проверка WebView2 завершилась ошибкой передачи сессии; отдельно разрешённая повторная попытка прошла. Добавлены безопасные метки этапа ошибки и регрессионные тесты; причина первого сбоя неизвестна, полный VPN-трафик не проверен, сборка не опубликована.
+- Подготовлен серверный браузерный помощник только для нового тестового экземпляра, без изменения существующих контейнеров. До выпуска нужны проверка sandbox на VPS, WebView на Android и реального зашифрованного трафика. Развёртывания, выпуска установщика/APK и публикации этой сборки на GitHub не было. См. [статус проверок](docs/testing/openflux-browser-bootstrap-2026092301.md).
+
+## [0.0.14] - Server Tools / Серверные инструменты
+
+### English
+
+- The private update bot now watches Unified VPN stable releases and replacement/new application builds within the same version. Per-platform build numbers are included; cosmetic release edits are ignored. Updating only the bot program preserves credentials, notification state and timer settings.
+- Added isolated named OpenFlux server instances for simultaneous devices using separate Yandex documents and encryption keys. Installation paths, containers, bridges, ownership records and deployment receipts are instance-bound; the original default installation remains compatible.
+- Added opt-in reuse of hash-verified public server artifacts for slow SSH uploads, without copying the original configuration or changing its files. An installed named manager refuses a missing or mismatched instance argument.
+- On 2026-09-17, the server-tools-only change passed 112 tests and real traffic checks on Windows LocalSocks and an Android 35 emulator TUN without changing application binaries. The later application rebuild is recorded below; see [server validation](docs/testing/openflux-multi-instance-20260917.md).
+
+### Русский
+
+- Приватный бот обновлений теперь следит за стабильными релизами Unified VPN и заменой/добавлением сборок приложения той же версии. В сообщениях указаны номера сборок по платформам; правки описания релиза игнорируются. Замена только программы бота сохраняет секреты, историю уведомлений и настройки таймера.
+- Добавлены отдельные именованные экземпляры сервера OpenFlux для одновременной работы устройств с разными документами Яндекса и ключами шифрования. Каталоги, контейнеры, сети, записи владения и квитанции развёртывания привязаны к экземпляру; совместимость первой установки сохранена.
+- При медленном SSH можно повторно использовать публичные серверные артефакты с проверкой SHA256, не копируя старую конфигурацию и не изменяя её файлы. Установленный именованный manager отказывает при отсутствующем или неверном имени экземпляра.
+- 17.09.2026 изменение только серверных инструментов прошло 112 тестов и проверки реального трафика через Windows LocalSocks и TUN эмулятора Android 35 без замены бинарников приложения. Последующая пересборка приложения описана ниже; см. [серверный отчёт](docs/testing/openflux-multi-instance-20260917.md).
+
+## [0.0.14] - 2026-09-23 (Preview / Предварительная)
+
+Build / Сборка: `2026092201` for Android and Windows / для Android и Windows.
+[Release notes / Описание выпуска](docs/releases/0.0.14.md).
+Earlier local build / Предыдущая локальная сборка: `2026092101`
+([Android validation / Проверки Android](docs/testing/android-notifications-openflux-ping-2026092101.md)).
+Stable updates remain on 0.0.12. Стабильный канал остаётся на 0.0.12.
+
+### English
+
+- Android's notification profile chooser stays open after connection results and Stop. A separate Reconnect action retries the failed profile, including after an automatic return to the previous working profile; busy requests cannot start parallel engines.
+- OpenFlux profiles can be shared from their editor as a QR code or importable link, with Android's system share action. Export requires confirmation that the link contains a secret encryption key and that a document supports only one active client; Android clipboard copies are marked sensitive and expire.
+- Added an interactive OpenFlux server profile helper: prepare a new private key/config/import link using verified installed artifacts, then explicitly install or roll back only the new named instance. The default action is offline preparation, not deployment; creating a separate legacy-editor document remains manual. See [instructions](tools/openflux-server/CREATE_PROFILE.md).
+- Refreshed the AWG core to Throne sing-box `7745e9a` (`wip/1.14.0`) and its AmneziaWG backend to `b311c8ac`, including AWG 3.1 flags and the reserved-byte corruption fix. Both adapters preserve validated keepalive ranges and Boolean options. Native source/target/backend pins are checked before packaging.
+- Tested the newest olcbox 1.0.129 core `08843d6` first. Its new Jitsi envelope is unreadable by an existing `f616` receiver, so this build selects the preceding compatible `d7a00da` core instead. OLC2 encryption is unchanged; servers are not upgraded automatically. See the [upstream compatibility report](docs/testing/upstream-refresh-2026092103.md).
+- Ported bounded readiness polling from current olcbox: Android waits up to 60 seconds in cancellable 200ms slices, while retaining Unified VPN's serialized cleanup. Jitsi settling is limited to restarting the same room. This is a focused integration update, not a wholesale import of the upstream application.
+- The private notifier now follows the actual AWG `wip/1.14.0` branch instead of its older default branch; a missing branch is an error, not a silent fallback.
+- Windows VLESS now accepts TCP/RAW, WS/WebSocket, gRPC and HTTPUpgrade in addition to XHTTP/SplitHTTP. TUN pins the remote endpoint while preserving TLS/Reality SNI and HTTP/gRPC authority. Unsupported transports or combinations fail explicitly.
+- Windows AWG TUN DNS requests now use the profile's tunnel resolvers, including private addresses and custom DNS ports. Proxy-mode DNS routing remains unchanged. The separate TUN helper handles both UAC and already elevated broker contexts, with stricter address validation; GUI elevation remains refused.
+- Windows TUN remains experimental for VLESS/AWG. olcRTC/OpenFlux TUN is still disabled on Windows until dynamic transport sockets can bypass capture safely and TCP-only DNS handling is added; their Android VPN path is unchanged. Real Windows TUN traffic, DNS/IPv6 leakage and crash recovery are not yet validated.
+- Android's main screen, notification profile chooser and VPN service now share one profile repository, mutation lock and change stream. Switching or rolling back from a notification updates the main screen too. Initial subscription and delayed-read races are covered by regression tests.
+- The Unified VPN icon in the notification profile chooser opens the main application. Its 48dp touch target has an accessibility label; lock-screen and obscured-touch protection remain enabled.
+- Android UI models follow the Activity's ViewModel lifecycle. Returning to the foreground refreshes the saved selection; releasing UI observers does not stop the independently running VPN service.
+- OpenFlux latency checks use an HTTPS response through the matching, already connected encrypted tunnel, not the document website or a localhost connect time. Inactive OpenFlux profiles require connecting first; checks never create another document client or fall back to direct traffic.
+- Editing a profile's connection settings or deleting it cancels pending latency checks and clears stale results. A late old check cannot overwrite a replacement; renaming a profile preserves valid measurements.
+- The separate private update bot now monitors OpenFlux, olcRTC and the AWG core used by Unified VPN, in addition to original olcbox and Amnezia VPN. Core commit changes are tracked independently of releases. Updating the bot program preserves its secrets, notification history and timer; no server component is updated automatically.
+
+### Русский
+
+- Окно профилей из шторки Android остаётся открытым после результата подключения и Stop. Отдельная кнопка «Переподключить» повторяет именно неудавшийся профиль, в том числе после автоматического возврата к прежнему рабочему; повторные нажатия не запускают параллельные движки.
+- OpenFlux-профиль можно передать из редактора QR-кодом или ссылкой, а на Android также через системное меню отправки. Перед экспортом нужно подтвердить предупреждение о секретном ключе и одном активном клиенте на документ; буфер Android помечается конфиденциальным и очищается по таймеру.
+- Добавлен интерактивный помощник серверных профилей OpenFlux: новый приватный ключ, конфиг и ссылка для импорта создаются на основе проверенных установленных артефактов; установка и откат только нового экземпляра требуют явного действия. По умолчанию выполняется подготовка без сети, не развёртывание; отдельный документ старого редактора создаётся вручную. См. [инструкцию](tools/openflux-server/CREATE_PROFILE.md).
+- Ядро AWG обновлено до Throne sing-box `7745e9a` (`wip/1.14.0`), реализация AmneziaWG до `b311c8ac`: параметры AWG 3.1 и исправление повреждения пакетов при обработке reserved bytes. Оба адаптера сохраняют проверенные диапазоны keepalive и логические параметры. Перед упаковкой проверяются настоящие версии исходников, архитектура и AWG-модуль внутри бинарников.
+- Сначала проверено свежее ядро olcbox 1.0.129 `08843d6`. Его новый Jitsi-конверт не читается прежним сервером `f616`, поэтому выбран предшествующий совместимый `d7a00da`. Шифрование OLC2 не менялось; серверы автоматически не обновляются. См. [отчёт совместимости](docs/testing/upstream-refresh-2026092103.md).
+- Из актуального olcbox перенесено ожидание готовности Android до 60 секунд с отменяемыми интервалами по 200 мс; последовательная остановка Unified VPN сохранена. Задержка очистки Jitsi применяется только при повторном входе в ту же комнату. Это обновление конкретных компонентов, не полное копирование исходного приложения.
+- Приватный бот теперь следит за используемой веткой AWG `wip/1.14.0`, а не более старой веткой по умолчанию; пропавшая ветка вызывает ошибку, а не незаметную подмену источника.
+- Windows VLESS теперь принимает TCP/RAW, WS/WebSocket, gRPC и HTTPUpgrade в дополнение к XHTTP/SplitHTTP. TUN закрепляет адрес сервера, сохраняя TLS/Reality SNI и HTTP/gRPC authority. Неподдерживаемые транспорты и сочетания параметров отклоняются явно.
+- Запросы DNS в Windows AWG TUN теперь используют резолверы профиля внутри туннеля, включая приватные адреса и нестандартные DNS-порты. Маршрутизация DNS прокси-режима не изменена. Отдельный компонент TUN обрабатывает UAC и уже повышенный контекст broker, строже проверяет адреса; запуск GUI от администратора по-прежнему запрещён.
+- Windows TUN остаётся экспериментальным для VLESS/AWG. Для olcRTC/OpenFlux он пока отключён: нужны безопасный обход TUN динамическими транспортными сокетами и обработка DNS поверх TCP. Их VPN-путь Android не изменён. Реальный Windows TUN-трафик, утечки DNS/IPv6 и восстановление после сбоя пока не проверены.
+- Главный экран Android, окно выбора в шторке и VPN-служба теперь используют общее хранилище профилей, блокировку записи и поток изменений. Переключение или откат через уведомление обновляют и главный экран. Добавлены регрессионные тесты начальной подписки и запоздалого чтения.
+- Значок Unified VPN в окне выбора профилей из уведомления открывает само приложение. Область нажатия 48dp имеет подпись для специальных возможностей; защита заблокированного экрана и от перекрывающих касаний сохранена.
+- Android ViewModel привязаны к жизненному циклу Activity. При возврате на экран перечитывается сохранённый выбор; освобождение UI-наблюдателей не останавливает независимо работающую VPN-службу.
+- Пинг OpenFlux измеряет HTTPS-ответ через соответствующий уже подключённый зашифрованный туннель, а не доступность сайта документов или локального порта. Неактивный профиль сначала нужно подключить; проверка не создаёт второго клиента документа и не переходит на прямой трафик.
+- Изменение параметров подключения или удаление профиля отменяет незавершённые проверки задержки и сбрасывает устаревший результат. Запоздалый старый запрос не перезаписывает новый; переименование сохраняет актуальные измерения.
+- Отдельный приватный бот обновлений теперь отслеживает OpenFlux, olcRTC и используемое Unified VPN ядро AWG, сохраняя проверки оригинальных olcbox и Amnezia VPN. Для ядер отслеживаются новые коммиты независимо от релизов. Замена программы бота сохраняет секреты, историю уведомлений и таймер; автоматического обновления серверных компонентов нет.
+
 ## [0.0.13] - 2026-09-15 (Preview / Предварительная)
 
 Build / Сборка: `2026091401`. Experimental preview; stable updates remain on 0.0.12. Экспериментальная версия; стабильные обновления остаются на 0.0.12.

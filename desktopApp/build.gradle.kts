@@ -454,9 +454,12 @@ val wintunVersion = "0.14.1"
 val xrayVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("26.3.27").get()
 val expectedAwgCoreCommit = providers.gradleProperty("olcbox.awgCoreSha")
 val expectedXrayCommit = providers.gradleProperty("olcbox.xraySha")
-val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(".downloads/openflux/artifacts")
+val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
+    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts")
+)
 val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
-val expectedOpenFluxUpstream = "4f1bdb554c262f3ae9adbfe317a092c6b929ba7d"
+val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
+val expectedOpenFluxWrapper = 5
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
 val singBoxAwgRepoDir = providers.environmentVariable("SING_BOX_AWG_REPO")
     .map { rootProject.file(it) }
@@ -490,7 +493,7 @@ fun verifyOpenFluxWindowsArtifact(binary: File) {
         manifest["schema"] == 1 &&
             manifest["upstream"] == expectedOpenFluxUpstream &&
             manifest["protocol"] == expectedOpenFluxProtocol &&
-            manifest["version_text"] == "unified-openflux 1 upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol"
+            manifest["version_text"] == "unified-openflux $expectedOpenFluxWrapper upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol"
     ) { "OpenFlux artifact manifest does not match the pinned encrypted engine" }
     val expectedSha = ((manifest["files"] as? Map<*, *>)?.get("openflux-windows-amd64.exe") as? String)?.lowercase()
     check(expectedSha?.matches(Regex("[0-9a-f]{64}")) == true) {
@@ -867,12 +870,14 @@ if (currentBuildOs.isWindows) {
         inputs.file(openFluxWindowsSource)
         inputs.file(openFluxManifest)
         inputs.property("openFluxUpstream", expectedOpenFluxUpstream)
+        inputs.property("openFluxWrapper", expectedOpenFluxWrapper)
         inputs.property("openFluxProtocol", expectedOpenFluxProtocol)
         outputs.file(openFluxWindowsOutput)
         doFirst { verifyOpenFluxWindowsArtifact(openFluxWindowsSource.get()) }
     }
 
     val copySingBoxAwgWindowsAmd64 = tasks.register<Copy>("copySingBoxAwgWindowsAmd64") {
+        dependsOn(":verifyAwgWindowsBinary")
         from(singBoxAwgWindowsSource)
         into(singBoxAwgWindowsOutput.map { it.asFile.parentFile })
         rename { "sing-box-awg-windows-amd64.exe" }
@@ -924,6 +929,55 @@ if (currentBuildOs.isWindows) {
         outputFile.set(wintunWindowsOutput)
     }
 
+    val buildWindowsTunHelper = tasks.register<Exec>("buildWindowsTunHelper") {
+        dependsOn(extractTun2SocksWindowsAmd64, extractWintunWindowsAmd64)
+        // Copy tasks declare the shared native directory as their output.
+        mustRunAfter(copyOpenFluxWindowsAmd64, copySingBoxAwgWindowsAmd64, copyXrayWindowsAmd64)
+        val helperSource = rootProject.layout.projectDirectory.dir("desktopApp/src/windowsTunHelper")
+        val buildScript = rootProject.layout.projectDirectory.file("tools/Build-WindowsTunHelper.ps1")
+        val helperOutput = generatedNativeResources.map { it.file("native/unifiedvpn-tun-helper.exe") }
+        inputs.dir(helperSource)
+        inputs.file(buildScript)
+        inputs.file(tun2SocksWindowsOutput)
+        inputs.file(wintunWindowsOutput)
+        outputs.file(helperOutput)
+        val windowsRoot = providers.environmentVariable("SystemRoot").orElse("C:/Windows").get()
+        commandLine(
+            "$windowsRoot/System32/WindowsPowerShell/v1.0/powershell.exe",
+            "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", buildScript.asFile.absolutePath,
+            "-NativeDirectory", tun2SocksWindowsOutput.get().asFile.parent,
+            "-OutputFile", helperOutput.get().asFile.absolutePath
+        )
+    }
+
+    val buildWindowsBrowserHelper = tasks.register<Exec>("buildWindowsBrowserHelper") {
+        mustRunAfter(copyOpenFluxWindowsAmd64, copySingBoxAwgWindowsAmd64, copyXrayWindowsAmd64)
+        val helperSource = rootProject.layout.projectDirectory.dir("desktopApp/src/windowsBrowserHelper")
+        val buildScript = rootProject.layout.projectDirectory.file("tools/Build-WindowsBrowserHelper.ps1")
+        val nativeDirectory = generatedNativeResources.map { it.dir("native") }
+        inputs.dir(helperSource)
+        inputs.file(buildScript)
+        listOf(
+            "unifiedvpn-browser-helper.exe", "Microsoft.Web.WebView2.Core.dll",
+            "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll",
+            "WebView2-LICENSE.txt", "WebView2-NOTICE.txt"
+        ).forEach { name -> outputs.file(nativeDirectory.map { it.file(name) }) }
+        val windowsRoot = providers.environmentVariable("SystemRoot").orElse("C:/Windows").get()
+        commandLine(
+            listOf(
+                "$windowsRoot/System32/WindowsPowerShell/v1.0/powershell.exe",
+                "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-File", buildScript.asFile.absolutePath,
+                "-OutputDirectory", nativeDirectory.get().asFile.absolutePath
+            ) + if (gradle.startParameter.isOffline) listOf("-Offline") else emptyList()
+        )
+    }
+
+    desktopNativeAssetTasks.add(buildWindowsBrowserHelper)
+    hostDesktopNativeAssetTasks.add(buildWindowsBrowserHelper)
+    desktopNativeAssetTasks.add(buildWindowsTunHelper)
+    hostDesktopNativeAssetTasks.add(buildWindowsTunHelper)
     desktopNativeAssetTasks.add(extractTun2SocksWindowsAmd64)
     desktopNativeAssetTasks.add(extractWintunWindowsAmd64)
     desktopNativeAssetTasks.add(copySingBoxAwgWindowsAmd64)
@@ -944,6 +998,13 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/olcrtc-windows-amd64.exe")
             // add("native/olcrtc-windows-amd64.dll")
             add("native/tun2socks-windows-amd64.exe")
+            add("native/unifiedvpn-tun-helper.exe")
+            add("native/unifiedvpn-browser-helper.exe")
+            add("native/Microsoft.Web.WebView2.Core.dll")
+            add("native/Microsoft.Web.WebView2.WinForms.dll")
+            add("native/WebView2Loader.dll")
+            add("native/WebView2-LICENSE.txt")
+            add("native/WebView2-NOTICE.txt")
             add("native/wintun.dll")
             add("native/sing-box-awg-windows-amd64.exe")
             add("native/xray-windows-amd64.exe")

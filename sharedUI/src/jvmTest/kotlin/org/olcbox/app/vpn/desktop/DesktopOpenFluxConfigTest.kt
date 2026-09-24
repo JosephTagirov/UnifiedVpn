@@ -56,13 +56,34 @@ class DesktopOpenFluxConfigTest {
     }
 
     @Test
+    fun legacyProfileKeepsTheVersionOneEngineContract() {
+        val imported = """{"document_url":"$DOCUMENT_URL","encryption_key":"$ENCRYPTION_KEY","version":1,"transport":"yandex"}"""
+        val legacy = requireNotNull(OpenFluxProfileConfig.parse(imported))
+        val exported = Json.parseToJsonElement(legacy.toJson()).jsonObject
+        val generated = Json.parseToJsonElement(
+            DesktopOpenFluxConfig.build(profile(imported), DesktopSocksProxySettings())
+        ).jsonObject
+
+        assertEquals(setOf("document_url", "encryption_key", "version", "transport"), exported.keys)
+        assertEquals(
+            setOf(
+                "version", "mode", "transport", "document_url", "encryption_key",
+                "handshake_timeout_seconds", "socks5", "socks_username", "socks_password", "dns_server"
+            ),
+            generated.keys
+        )
+        assertEquals("1", generated.getValue("version").jsonPrimitive.content)
+        assertEquals(legacy, OpenFluxProfileConfig.parse(legacy.toUri()))
+    }
+
+    @Test
     fun commandLineContainsOnlyThePrivateConfigPath() {
         val binary = Path.of("test runtime", "openflux-windows-amd64.exe")
         val privateConfig = Path.of("test runtime", "openflux-private.json")
         val command = DesktopOpenFluxConfig.args(binary, privateConfig)
 
         assertEquals(
-            listOf(binary.toAbsolutePath().toString(), "--config", privateConfig.toAbsolutePath().toString()),
+            listOf(binary.toAbsolutePath().toString(), "--bootstrap-stdio", "--config", privateConfig.toAbsolutePath().toString()),
             command
         )
         assertFalse(command.any { ENCRYPTION_KEY in it || DOCUMENT_URL in it })

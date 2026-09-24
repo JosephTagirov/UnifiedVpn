@@ -2,7 +2,7 @@ module unified-vpn.local/olcrtc-bind
 
 go 1.26.3
 
-require github.com/openlibrecommunity/olcrtc v0.0.2-0.20260818184357-f616f57bb3a9
+require github.com/openlibrecommunity/olcrtc v0.0.2-0.20260827214920-d7a00da5242f
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.11-20260415201107-50325440f8f2.1 // indirect

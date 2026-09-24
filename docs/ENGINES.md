@@ -10,10 +10,16 @@ This project uses one Android `VpnService` and switches the active transport by 
 
 ## Experimental OpenFlux
 
-The 0.0.13 preview integrates [OpenFlux](https://github.com/p1neappleXpress/OpenFlux)
-at `4f1bdb554c262f3ae9adbfe317a092c6b929ba7d` through Yandex Documents.
+The local 0.0.14 / 2026092406 candidate integrates [OpenFlux](https://github.com/p1neappleXpress/OpenFlux)
+at `d34dc8caa70ca059cd80d8f5753499361052dabc` through Yandex Documents.
+It preserves legacy encrypted framing and selects the L4 server backend.
+Wrapper 5 is not published on GitHub. A separate Volga instance passed real traffic
+checks and was enabled without replacing the existing OpenFlux instances; see the
+[current validation report](testing/openflux-volga-2026092406.md).
 Use `+ -> Add OpenFlux` for manual document URL/key entry, or import URI/JSON.
-The legacy editor and a matching `unified-openflux-aesgcm-v1` server are required.
+Select `yandex` for the legacy editor or `vyandex` for the new Volga text editor.
+Both peers need the same transport and a matching `unified-openflux-aesgcm-v1`
+wrapper; Volga requires wrapper 5. Existing profiles are not automatically migrated.
 Only one active client per document/key/server instance is supported.
 
 AES-256-GCM is mandatory, and readiness requires a fresh authenticated server
@@ -24,22 +30,33 @@ DNS uses encrypted TCP, while the Yandex transport needs the underlying network.
 Android routes OpenFlux through its existing VPN bridge and **shares the olcRTC
 per-app split-tunneling rules**. The original lists are preserved; VLESS/AWG rules
 remain separate. These per-app rules apply in Android VPN mode, not proxy mode.
-Windows provides Local SOCKS and System proxy; Windows TUN remains unavailable.
+On Windows OpenFlux shares Local SOCKS/System proxy settings with olcRTC; TUN is
+excluded for both. The experimental VLESS/AWG TUN helper is described in the
+[Windows routing report](testing/windows-tun-2026092102.md).
 Linux OpenFlux output is a server binary, not a tested desktop client integration.
 
 Windows encrypted SOCKS/HTTPS and Android 35 emulator TUN/HTTPS passed on
 2026-09-15, including process-liveness and shutdown checks. Earlier Android
 failures were traced to missing VPN preparation in the debug test entry point.
-See the [current test report](testing/openflux-2026091401.md), including limits.
+These earlier-build results do not validate the new candidate. The separate
+[Volga report](testing/openflux-volga-2026092406.md) records the exact new artifacts.
+See the
+[historical test report](testing/openflux-2026091401.md), including limits.
 Native Ready or compilation alone is not proof that traffic works.
 [Build instructions, corresponding source, and limits](../tools/openflux/README.md).
 
 ### OpenFlux На Русском
 
-Предварительная 0.0.13 включает OpenFlux указанного выше коммита через Яндекс
-Документы. `+ -> Добавить OpenFlux` открывает ручной ввод ссылки и ключа; есть
-импорт URI/JSON. Нужны старый редактор и сервер с нашей обёрткой
-`unified-openflux-aesgcm-v1`. На документ/ключ/экземпляр разрешён один активный клиент.
+Локальный кандидат 0.0.14 / 2026092406 включает OpenFlux указанного выше коммита
+через Яндекс Документы, сохраняя прежний зашифрованный формат и выбирая L4 на сервере.
+Обёртка 5 не опубликована на GitHub. Отдельный экземпляр Volga прошёл проверку
+трафика и включён без замены существующих OpenFlux; см.
+[текущий отчёт](testing/openflux-volga-2026092406.md).
+`+ -> Добавить OpenFlux` открывает ручной ввод ссылки и ключа; есть
+импорт URI/JSON. Выберите `yandex` для старого редактора или `vyandex` для нового
+текстового Volga. Клиенту и серверу нужны одинаковый транспорт и совместимая обёртка
+`unified-openflux-aesgcm-v1`; Volga требует обёртку 5. Старые профили автоматически
+не меняются. На документ/ключ/экземпляр разрешён один активный клиент.
 
 AES-256-GCM обязателен, готовность требует свежего аутентифицированного ответа
 сервера; передачи без шифрования нет. Это не подтверждение аудита безопасности
@@ -50,13 +67,17 @@ DNS назначения идёт внутри зашифрованного TCP-
 На Android OpenFlux использует существующий VPN-мост и **общие с olcRTC правила
 раздельного туннелирования приложений**. Прежние списки сохраняются, VLESS/AWG
 остаются отдельной группой. Эти правила действуют в VPN-режиме, не в прокси.
-Windows поддерживает Local SOCKS и системный прокси; TUN остаётся недоступным.
+На Windows OpenFlux использует общую с olcRTC настройку Local SOCKS/системного
+прокси; TUN исключён для обоих. Экспериментальный компонент TUN для VLESS/AWG
+описан в [отчёте Windows](testing/windows-tun-2026092102.md).
 Linux-бинарник OpenFlux предназначен для сервера, не подтверждает desktop-интеграцию.
 
 2026-09-15 Windows прошёл зашифрованный SOCKS/HTTPS, а Android 35 на эмуляторе
 прошёл TUN/HTTPS, включая контроль процессов и остановку. Прежние ошибки Android
 были связаны с пропущенной подготовкой VPN в тестовом входе. См.
-[текущий отчёт](testing/openflux-2026091401.md) и его ограничения.
+[исторический отчёт](testing/openflux-2026091401.md) и его ограничения.
+Результаты прежней сборки не подтверждают работоспособность нового кандидата;
+его точные артефакты и проверки указаны в [отчёте Volga](testing/openflux-volga-2026092406.md).
 Одних Native Ready и компиляции недостаточно для подтверждения трафика.
 
 ## VLESS core packaging
@@ -92,7 +113,84 @@ Native-library packaging is preferred on modern Android because executing files 
 
 On Windows, Xray is bundled as `native/xray-windows-amd64.exe`. The release build copies the official binary selected by `XRAY_BINARY`, or the verified local file under `.downloads/xray/v<version>/windows-64/xray.exe`.
 
+### Windows TUN, Local Build 2026092102
+
+Windows VLESS uses the pinned Xray core for `tcp`/`raw` (also the default),
+`ws`/`websocket`, `grpc`, `httpupgrade`, `xhttp`/`splithttp`. Unsupported transports
+and TCP HTTP-header obfuscation are rejected. Local SOCKS, System proxy and
+experimental TUN use the same configuration builder. When TUN pins the server
+IP, the original TLS/Reality SNI and HTTP/gRPC authority are preserved.
+
+AWG's TUN-mode SOCKS inbound intercepts DNS on port 53 and uses the existing
+profile DNS resolvers over TCP through the WireGuard endpoint. The virtual
+adapter's DNS address is not used as a direct physical-network fallback.
+This does not prove Windows-wide DNS isolation: physical adapters and their
+settings are deliberately not overwritten, and more-specific LAN routes remain.
+
+The GUI stays unprivileged; its network helper requests UAC. The helper also
+handles an already elevated broker, without changing the GUI launch policy.
+Windows olcRTC/OpenFlux TUN remains disabled: protecting one static server IP is
+not sufficient for their dynamic transport sockets, and they need DNS bridging
+over TCP. Android's existing VPN path is unchanged.
+See [verification and remaining tests](testing/windows-tun-2026092102.md).
+
+### Windows TUN На Русском
+
+В локальной сборке `2026092102` Windows VLESS использует закреплённый Xray для
+`tcp`/`raw` (также по умолчанию), `ws`/`websocket`, `grpc`, `httpupgrade`,
+`xhttp`/`splithttp`. Неподдерживаемые транспорты и HTTP-маскировка заголовка TCP
+отклоняются. Конфигурация общая для Local SOCKS, системного прокси и
+экспериментального TUN. При закреплении IP сохраняются исходные TLS/Reality SNI
+и HTTP/gRPC authority.
+
+В TUN-режиме AWG входящий SOCKS перехватывает DNS на порту 53 и использует
+резолверы профиля по TCP через WireGuard. DNS-адрес виртуального адаптера не
+служит прямым резервным выходом в физическую сеть. Это не доказывает изоляцию
+всего Windows DNS: физические адаптеры и их настройки намеренно не изменяются,
+более точные маршруты локальных сетей сохраняются.
+
+GUI остаётся без повышенных прав; сетевой компонент запрашивает UAC. Компонент
+также поддерживает уже повышенный broker, но политика запуска GUI не менялась.
+Windows TUN для olcRTC/OpenFlux пока отключён: одного статического IP недостаточно
+для динамических транспортных сокетов, нужен также DNS-мост поверх TCP.
+Существующий VPN-путь Android не менялся.
+См. [проверки и оставшиеся тесты](testing/windows-tun-2026092102.md).
+
 ## Amnezia
+
+### Native Refresh In Build 2026092103
+
+Unified VPN 0.0.14 Preview packages the AWG-capable Throne sing-box commit
+`7745e9afd0a1f7a5b6216fd114e1ad4a64b974c3` with AmneziaWG backend
+`b311c8ac53aed5637b0bd961b9c6ae1fc1eef093`. Both are pinned, built and verified
+for Windows amd64 and three Android ABIs. This is the `wip/1.14.0` development
+branch, not a stable upstream release. Android and Windows adapters support
+`RandomTrailers`, `DisableCookies` and validated keepalive ranges.
+
+olcRTC is updated to `d7a00da5242f72a48b505ffc4b6aa8246376bf25`. The newest
+olcbox core was tested first; the preceding compatible revision was selected
+because the new Jitsi message envelope is not understood by the existing
+`f616` server. OLC2 is unchanged. No production server/container image is
+upgraded by this client refresh. See the
+[upstream decision](testing/upstream-refresh-2026092103.md) and
+[client checks](testing/release-0.0.14-2026092103.md).
+
+### Обновление Ядер В Сборке 2026092103
+
+Unified VPN 0.0.14 Preview включает AWG-совместимый Throne sing-box `7745e9a`
+с реализацией AmneziaWG `b311c8ac`. Полные commit приведены выше; проверены
+Windows amd64 и три Android ABI. Используется ветка разработки `wip/1.14.0`,
+не стабильный релиз. Адаптеры обеих платформ поддерживают `RandomTrailers`,
+`DisableCookies` и проверяемые диапазоны keepalive.
+
+olcRTC обновлён до `d7a00da`: сначала проверено свежее ядро olcbox, но его новый
+формат сообщений Jitsi не понимается прежним сервером `f616`. Поэтому выбран
+предшествующий совместимый commit. Шифрование OLC2 не менялось. Рабочие серверы
+и образы контейнеров это обновление клиента не заменяет. См.
+[обоснование версий](testing/upstream-refresh-2026092103.md) и
+[проверки клиентов](testing/release-0.0.14-2026092103.md).
+
+### Profile Import
 
 The app imports AmneziaWG `.conf`, `awg://`, and Amnezia `vpn://` profiles and stores them as selectable profiles.
 

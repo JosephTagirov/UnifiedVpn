@@ -56,6 +56,7 @@ import org.olcbox.app.ui.features.locations.reorderGroupKey
 @Composable
 fun LocationSelectorScreen(
     modifier: Modifier = Modifier,
+    showAddOlcRtcButton: Boolean = true,
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
@@ -164,7 +165,7 @@ fun LocationSelectorScreen(
                 }
             }
 
-            FilledTonalButton(
+            if (showAddOlcRtcButton) FilledTonalButton(
                 onClick = onAddLocationClick,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -501,6 +502,7 @@ private fun LocationSelectorRow(
         isLoading = isLoading,
         isError = isOffline,
         pingMs = pingMs,
+        pingUnavailableMessage = pingsState.unavailable[location.storageId],
         isDragging = isDragging,
         dragOffsetY = dragOffsetY,
         settingsEnabled = true,

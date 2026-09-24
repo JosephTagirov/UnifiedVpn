@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,16 +32,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewModelScope
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
+import org.olcbox.app.vpn.VpnPingUnavailableException
 
 sealed class PingState {
     object Idle : PingState()
     object Loading : PingState()
     data class Success(val latency: Long) : PingState()
     data class Error(val message: String) : PingState()
+    data class Unavailable(val message: String) : PingState()
 }
 
 @Composable
@@ -49,12 +53,17 @@ fun PingButton(
     homeViewModel: HomeScreenViewModel,
     configGetter: () -> LocationConfig? = { null }
 ) {
-    var pingState by remember { mutableStateOf<PingState>(PingState.Idle) }
+    val homeState by homeViewModel.state.collectAsState()
+    var pingState by remember(homeState.activeProfile, homeState.isVpnConnected, homeState.isVpnLoading) {
+        mutableStateOf<PingState>(PingState.Idle)
+    }
+    val scope = rememberCoroutineScope()
 
     val descriptionText = when (pingState) {
         is PingState.Error -> "Offline"
         is PingState.Loading -> "Checking..."
         is PingState.Success -> "Connected ${(pingState as PingState.Success).latency}ms"
+        is PingState.Unavailable -> (pingState as PingState.Unavailable).message
         else -> "Click To Verify Reachability"
     }
 
@@ -95,18 +104,22 @@ fun PingButton(
         modifier = modifier
             .fillMaxWidth()
             .clickable(enabled = pingState !is PingState.Loading) {
-                homeViewModel.viewModelScope.launch {
+                scope.launch {
                     pingState = PingState.Loading
-                    val config = configGetter()
-                    val result = if (config != null) {
-                        homeViewModel.performPingFor(config)
-                    } else {
-                        homeViewModel.performPing()
-                    }
-
-                    pingState = if (result != null) {
-                        PingState.Success(result)
-                    } else {
+                    pingState = try {
+                        val config = configGetter()
+                        val result = if (config != null) {
+                            homeViewModel.performPingFor(config)
+                        } else {
+                            homeViewModel.performPing()
+                        }
+                        if (result != null) PingState.Success(result) else PingState.Error("Offline")
+                    } catch (cancelled: CancellationException) {
+                        pingState = PingState.Idle
+                        throw cancelled
+                    } catch (unavailable: VpnPingUnavailableException) {
+                        PingState.Unavailable(unavailable.message.orEmpty())
+                    } catch (_: Exception) {
                         PingState.Error("Offline")
                     }
                 }

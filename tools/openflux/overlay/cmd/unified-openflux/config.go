@@ -14,7 +14,7 @@ import (
 	"unicode"
 )
 
-const versionText = "unified-openflux 1 upstream=4f1bdb554c262f3ae9adbfe317a092c6b929ba7d protocol=unified-openflux-aesgcm-v1"
+const versionText = "unified-openflux 5 upstream=d34dc8caa70ca059cd80d8f5753499361052dabc protocol=unified-openflux-aesgcm-v1"
 
 type configuration struct {
 	Version                 int    `json:"version"`
@@ -55,7 +55,7 @@ func readConfiguration(path string) (configuration, error) {
 }
 
 func (c *configuration) validate() error {
-	if c.Version != 1 || c.Transport != "yandex" || (c.Mode != "client" && c.Mode != "server") {
+	if c.Version != 1 || (c.Transport != "yandex" && c.Transport != "vyandex") || (c.Mode != "client" && c.Mode != "server") {
 		return errors.New("unsupported OpenFlux version, mode, or transport")
 	}
 	c.DocumentURL = strings.TrimSpace(c.DocumentURL)

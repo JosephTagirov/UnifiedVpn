@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreenAppBar(
+    protocolSummary: String = "olcRTC, VLESS, Amnezia",
     onHistoryClick: () -> Unit = {},
     showAppSettingsButton: Boolean = false,
     onAppSettingsClick: () -> Unit = {},
@@ -34,7 +35,7 @@ fun HomeScreenAppBar(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "olcRTC, VLESS, Amnezia",
+                    text = protocolSummary,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

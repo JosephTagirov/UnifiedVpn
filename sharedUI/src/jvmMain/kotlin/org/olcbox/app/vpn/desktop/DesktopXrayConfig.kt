@@ -19,10 +19,20 @@ internal object DesktopXrayConfig {
 
     fun endpointHost(profile: VpnProfileConfig): String = parse(profile).host
 
-    fun build(profile: VpnProfileConfig, socks: DesktopSocksProxySettings): String {
+    fun build(profile: VpnProfileConfig, socks: DesktopSocksProxySettings, endpointAddress: String? = null): String {
         val outbound = parse(profile)
         require(outbound.transport in XRAY_TRANSPORTS) {
-            "Xray is only required for VLESS XHTTP profiles"
+            "Unsupported desktop VLESS transport: ${outbound.transport}. " +
+                "Use tcp/raw, ws, grpc, httpupgrade or xhttp."
+        }
+        require(outbound.transport != "raw" || outbound.headerType in setOf(null, "none")) {
+            "Desktop VLESS TCP header obfuscation is not supported"
+        }
+        require(outbound.transport != "grpc" || outbound.mode in setOf(null, "gun", "multi")) {
+            "Unsupported desktop VLESS gRPC mode; use gun or multi"
+        }
+        require(outbound.security != "reality" || outbound.transport in setOf("raw", "grpc", "xhttp")) {
+            "VLESS REALITY requires tcp/raw, grpc or xhttp transport"
         }
         val settings = socks.normalized()
         val inbound = buildJsonObject {
@@ -68,7 +78,7 @@ internal object DesktopXrayConfig {
                         buildJsonArray {
                             add(
                                 buildJsonObject {
-                                    put("address", outbound.host)
+                                    put("address", endpointAddress ?: outbound.host)
                                     put("port", outbound.port)
                                     put("users", buildJsonArray { add(user) })
                                 }
@@ -77,7 +87,7 @@ internal object DesktopXrayConfig {
                     )
                 }
             )
-            put("streamSettings", buildStreamSettings(outbound))
+            put("streamSettings", buildStreamSettings(outbound, endpointAddress != null))
         }
         val root = buildJsonObject {
             put(
@@ -104,24 +114,47 @@ internal object DesktopXrayConfig {
         return json.encodeToString(JsonElement.serializer(), root)
     }
 
-    private fun buildStreamSettings(outbound: VlessOutbound) = buildJsonObject {
-        put("network", "xhttp")
+    private fun buildStreamSettings(outbound: VlessOutbound, pinnedEndpoint: Boolean) = buildJsonObject {
+        put("network", outbound.transport)
         put("security", outbound.security ?: "none")
-        put(
-            "xhttpSettings",
-            buildJsonObject {
-                put("path", outbound.path ?: "/")
-                outbound.hostHeader?.let { put("host", it) }
-                outbound.mode?.let { put("mode", it) }
-            }
-        )
+        // Xray otherwise derives HTTP authority from SNI or the endpoint. Keep it when TUN pins an IP.
+        val pinnedHttpHost = if (pinnedEndpoint) {
+            outbound.sni?.takeIf { outbound.security in setOf("tls", "reality") } ?: outbound.host
+        } else null
+        when (outbound.transport) {
+            "xhttp" -> put(
+                "xhttpSettings",
+                buildJsonObject {
+                    put("path", outbound.path ?: "/")
+                    (outbound.hostHeader ?: pinnedHttpHost)?.let { put("host", it) }
+                    outbound.mode?.let { put("mode", it) }
+                }
+            )
+            "ws", "httpupgrade" -> put(
+                if (outbound.transport == "ws") "wsSettings" else "httpupgradeSettings",
+                buildJsonObject {
+                    put("path", outbound.path ?: "/")
+                    (outbound.hostHeader ?: pinnedHttpHost)?.let { put("host", it) }
+                }
+            )
+            "grpc" -> put(
+                "grpcSettings",
+                buildJsonObject {
+                    put("serviceName", outbound.serviceName ?: "")
+                    put("multiMode", outbound.mode == "multi")
+                    val authority = outbound.authority ?: outbound.hostHeader ?:
+                        defaultGrpcAuthority(outbound).takeIf { pinnedEndpoint }
+                    authority?.let { put("authority", it) }
+                }
+            )
+        }
 
         when (outbound.security) {
             "reality" -> put(
                 "realitySettings",
                 buildJsonObject {
                     put("show", false)
-                    outbound.sni?.let { put("serverName", it) }
+                    (outbound.sni ?: outbound.host.takeIf { pinnedEndpoint })?.let { put("serverName", it) }
                     outbound.fingerprint?.let { put("fingerprint", it) }
                     outbound.publicKey?.let { put("publicKey", it) }
                     outbound.shortId?.let { put("shortId", it) }
@@ -131,7 +164,7 @@ internal object DesktopXrayConfig {
             "tls" -> put(
                 "tlsSettings",
                 buildJsonObject {
-                    outbound.sni?.let { put("serverName", it) }
+                    (outbound.sni ?: outbound.host.takeIf { pinnedEndpoint })?.let { put("serverName", it) }
                     outbound.fingerprint?.let { put("fingerprint", it) }
                     outbound.alpn?.takeIf(List<String>::isNotEmpty)?.let { values ->
                         put("alpn", buildJsonArray { values.forEach { add(JsonPrimitive(it)) } })
@@ -140,6 +173,18 @@ internal object DesktopXrayConfig {
                 }
             )
         }
+    }
+
+    private fun defaultGrpcAuthority(outbound: VlessOutbound): String {
+        if (outbound.security == "tls" && outbound.sni != null) return outbound.sni
+        val octets = outbound.host.split('.')
+        val isIp = ':' in outbound.host || (octets.size == 4 && octets.all {
+            it.toIntOrNull()?.let { number -> number in 0..255 } == true
+        })
+        // Without explicit TLS SNI, gRPC derives REALITY/IP authorities from the full dial target.
+        if (outbound.security != "reality" && !isIp) return outbound.host
+        val host = if (':' in outbound.host) "[${outbound.host}]" else outbound.host
+        return "$host:${outbound.port}"
     }
 
     private fun parse(profile: VpnProfileConfig): VlessOutbound {
@@ -173,15 +218,23 @@ internal object DesktopXrayConfig {
             encryption = params["encryption"],
             flow = params["flow"]?.takeIf(String::isNotBlank),
             security = params["security"]?.lowercase()?.takeIf(String::isNotBlank),
-            sni = params["sni"] ?: params["serverName"],
+            sni = (params["sni"] ?: params["serverName"])?.takeIf(String::isNotBlank),
             fingerprint = params["fp"] ?: params["fingerprint"],
             publicKey = params["pbk"] ?: params["publicKey"],
             shortId = params["sid"] ?: params["shortId"],
             spiderX = params["spx"] ?: params["spiderX"],
-            transport = params["type"]?.lowercase(),
+            transport = when (val transport = params["type"]?.lowercase()?.takeIf(String::isNotBlank)) {
+                null, "tcp" -> "raw"
+                "websocket" -> "ws"
+                "splithttp" -> "xhttp"
+                else -> transport
+            },
             path = params["path"],
-            hostHeader = params["host"],
-            mode = params["mode"],
+            hostHeader = params["host"]?.takeIf(String::isNotBlank),
+            mode = params["mode"]?.lowercase()?.takeIf(String::isNotBlank),
+            headerType = params["headerType"]?.lowercase()?.takeIf(String::isNotBlank),
+            serviceName = params["serviceName"] ?: params["service_name"],
+            authority = params["authority"]?.takeIf(String::isNotBlank),
             alpn = params["alpn"]?.split(',')?.map(String::trim)?.filter(String::isNotBlank),
             allowInsecure = params["allowInsecure"]?.toBooleanStrictOrNull()
         )
@@ -234,14 +287,17 @@ internal object DesktopXrayConfig {
         val publicKey: String?,
         val shortId: String?,
         val spiderX: String?,
-        val transport: String?,
+        val transport: String,
         val path: String?,
         val hostHeader: String?,
         val mode: String?,
+        val headerType: String?,
+        val serviceName: String?,
+        val authority: String?,
         val alpn: List<String>?,
         val allowInsecure: Boolean?
     )
 
     private const val PROXY_TAG = "proxy"
-    private val XRAY_TRANSPORTS = setOf("xhttp", "splithttp")
+    private val XRAY_TRANSPORTS = setOf("raw", "ws", "grpc", "httpupgrade", "xhttp")
 }

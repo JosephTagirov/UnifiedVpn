@@ -31,6 +31,8 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.MeetingRoom
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -63,13 +65,17 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.intl.Locale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.ui.components.PingButton
 import org.olcbox.app.ui.components.SensitiveValueVisibilityButton
 import org.olcbox.app.ui.features.home.HomeScreenViewModel
+import org.olcbox.app.ui.localization.localizeUiText
+import org.olcbox.app.ui.theme.LocalAppLanguagePreference
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -112,11 +118,13 @@ fun LocationSettingsScreen(
     viewModel: LocationViewModel,
     homeViewModel: HomeScreenViewModel,
     onShareLocationRequested: (LocationConfig) -> Unit = {},
+    onShareOpenFluxRequested: (OpenFluxProfileConfig, String) -> Unit = { _, _ -> },
     onBack: () -> Unit
 ) {
     val config = viewModel.editingConfig
     val name = viewModel.editingName
     val isSaving = viewModel.isSaving
+    var pendingOpenFluxShare by remember { mutableStateOf<Pair<OpenFluxProfileConfig, String>?>(null) }
     val normalizedTransport = LocationConfig.normalizeTransport(
         config.transport,
         config.bypassProvider
@@ -124,9 +132,16 @@ fun LocationSettingsScreen(
     Scaffold(
         topBar = {
             LocationSettingsTopBar(
-                shareEnabled = viewModel.isEditingOlcRtc && viewModel.isFormValid && !isSaving,
+                shareEnabled = (viewModel.isEditingOlcRtc || viewModel.isEditingOpenFlux) &&
+                    viewModel.isFormValid && !isSaving,
                 onBack = onBack,
-                onShare = { onShareLocationRequested(viewModel.editingConfig) }
+                onShare = {
+                    if (viewModel.isEditingOpenFlux) {
+                        pendingOpenFluxShare = viewModel.editingOpenFluxConfig to viewModel.editingName
+                    } else {
+                        onShareLocationRequested(viewModel.editingConfig)
+                    }
+                }
             )
         },
         bottomBar = {
@@ -292,6 +307,23 @@ fun LocationSettingsScreen(
                 }
             } else if (viewModel.isEditingOpenFlux) {
                 item {
+                    SettingsDropdown(
+                        label = "Transport",
+                        selectedValue = viewModel.editingOpenFluxConfig.normalized().transport,
+                        options = OpenFluxProfileConfig.supportedTransports,
+                        enabled = !isSaving,
+                        onValueSelected = viewModel::onOpenFluxTransportChanged,
+                        supportingText = viewModel.openFluxTransportError,
+                        valueLabel = { transport ->
+                            when (transport) {
+                                OpenFluxProfileConfig.TRANSPORT_YANDEX -> "Yandex Docs (classic)"
+                                OpenFluxProfileConfig.TRANSPORT_VYANDEX -> "Yandex Docs (Volga)"
+                                else -> "Unsupported OpenFlux transport"
+                            }
+                        }
+                    )
+                }
+                item {
                     SettingsTextField(
                         value = viewModel.editingOpenFluxConfig.documentUrl,
                         onValueChange = viewModel::onOpenFluxDocumentUrlChanged,
@@ -403,6 +435,27 @@ fun LocationSettingsScreen(
                 Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
+    pendingOpenFluxShare?.let { (shareConfig, shareName) ->
+        AlertDialog(
+            onDismissRequest = { pendingOpenFluxShare = null },
+            title = { Text("Share OpenFlux profile") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("This link contains the encryption key. Share it only with trusted people.")
+                    Text("Only one device can use this OpenFlux document at a time. A second connection may disconnect the first.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingOpenFluxShare = null
+                    onShareOpenFluxRequested(shareConfig, shareName)
+                }) { Text("Continue") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingOpenFluxShare = null }) { Text("Cancel") }
+            }
+        )
     }
 }
 
@@ -556,10 +609,12 @@ private fun SettingsDropdown(
     options: List<String>,
     enabled: Boolean,
     onValueSelected: (String) -> Unit,
+    supportingText: String? = null,
     valueLabel: (String) -> String
 ) {
     var expanded by remember { mutableStateOf(false) }
     val canExpand = enabled && options.size > 1
+    val language = LocalAppLanguagePreference.current.resolve(Locale.current.language)
 
     ExposedDropdownMenuBox(
         expanded = expanded,
@@ -567,12 +622,14 @@ private fun SettingsDropdown(
         modifier = Modifier.fillMaxWidth()
     ) {
         OutlinedTextField(
-            value = valueLabel(selectedValue),
+            value = localizeUiText(valueLabel(selectedValue), language),
             onValueChange = {},
             label = { Text(label) },
             enabled = enabled,
             readOnly = true,
             singleLine = true,
+            isError = supportingText != null,
+            supportingText = supportingText?.let { { Text(it) } },
             trailingIcon = {
                 ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
             },

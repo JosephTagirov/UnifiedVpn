@@ -591,6 +591,19 @@ class LocationsRepositoryImpl(
         }
     }
 
+    override suspend fun compareAndSetActiveLocationId(
+        expectedRevision: Long,
+        storageId: String?
+    ): Long? = mutationMutex.withLock {
+        if (_changes.value != expectedRevision) return@withLock null
+        val bundle = getBundleUnlocked()
+        if (storageId != null && bundle.locations.none { it.storageId == storageId }) {
+            return@withLock null
+        }
+        saveBundleUnlocked(bundle.copy(activeLocationId = storageId))
+        _changes.value
+    }
+
     override suspend fun getActiveLocation(): LocationEntry? {
         return mutationMutex.withLock {
             val bundle = getBundleUnlocked()

@@ -135,16 +135,24 @@ Invoke-PipeCase 'valid checksum output with changed payload still fails' {
     try { Assert-TransferredProfileChecksum -Response (('0' * 64) + '  files/locations_v4.json') -ExpectedHash $hash } catch { $failure = $_ }
     Assert-True ($null -ne $failure -and $failure.Exception.Message -eq 'Private profile stdin transfer was incomplete') 'Actual payload mismatch was not classified correctly'
 }
-Invoke-PipeCase 'public profile transfer uses acknowledged non-PTY stdin and verifies received bytes' {
+foreach ($transportCase in @(
+    @{ Name = 'classic'; Value = 'yandex'; Expected = 'yandex'; Omit = $false },
+    @{ Name = 'Volga'; Value = 'vyandex'; Expected = 'vyandex'; Omit = $false },
+    @{ Name = 'normalized Volga'; Value = ' VyAnDeX '; Expected = 'vyandex'; Omit = $false },
+    @{ Name = 'legacy missing transport'; Value = ''; Expected = 'yandex'; Omit = $true }
+)) {
+Invoke-PipeCase ('public profile transfer preserves ' + $transportCase.Name + ' through acknowledged non-PTY stdin') {
     $fixtureRoot = Join-Path $repo ('.downloads\openflux\android-app-test\public-stdin-' + [Guid]::NewGuid().ToString('N'))
     $PrivateProfilePath = Join-Path $fixtureRoot 'public-profile.json'
-    $transferState = @{ Hash = ''; Length = 0; Calls = [Collections.Generic.List[string]]::new() }
+    $transferState = @{ Hash = ''; Length = 0; Canonical = $null; Calls = [Collections.Generic.List[string]]::new() }
     function Invoke-IsolatedAdb {
         param([string[]]$AdbArguments, [int]$TimeoutSeconds = 30, [byte[]]$InputBytes = $null)
         $command = $AdbArguments -join ' '
         $transferState.Calls.Add($command)
         if ($null -ne $InputBytes) {
             Assert-True ($command -eq "shell -T run-as $package dd of=files/locations_v4.json") 'Profile transfer did not use acknowledged non-PTY stdin'
+            $publicBundle = [Text.Encoding]::UTF8.GetString($InputBytes) | ConvertFrom-Json
+            $transferState.Canonical = $publicBundle.locations[0].vpn_profile.raw_config | ConvertFrom-Json
             $result = Invoke-RedirectedChildProcess -StartInfo (New-PublicProbeStartInfo) -InputBytes $InputBytes -TimeoutSeconds 10
             Assert-True ($result.ExitCode -eq 0) 'Public transfer helper failed'
             $received = $result.Output | ConvertFrom-Json
@@ -162,13 +170,40 @@ Invoke-PipeCase 'public profile transfer uses acknowledged non-PTY stdin and ver
     }
     New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
     try {
-        [ordered]@{ version = 1; transport = 'yandex'; document_url = 'https://docs.yandex.ru/i/public-stdin-fixture'; encryption_key = ('01' * 32) } |
-            ConvertTo-Json -Compress | Set-Content -LiteralPath $PrivateProfilePath -Encoding UTF8
+        $fixture = [ordered]@{ version = 1; document_url = 'https://docs.yandex.ru/i/public-stdin-fixture'; encryption_key = ('01' * 32) }
+        if (-not $transportCase.Omit) { $fixture.transport = $transportCase.Value }
+        $fixture | ConvertTo-Json -Compress | Set-Content -LiteralPath $PrivateProfilePath -Encoding UTF8
         Send-PrivateProfileBundle
         Assert-True ($transferState.Length -gt 0 -and $transferState.Calls.Count -eq 4) 'Public profile transfer did not complete and verify its payload'
+        Assert-True ($transferState.Canonical.transport -ceq $transportCase.Expected) 'Profile transport changed during Android transfer'
+        Assert-True ($transferState.Canonical.document_url -ceq $fixture.document_url) 'Document URL changed during Android transfer'
+        Assert-True ($transferState.Canonical.encryption_key -ceq $fixture.encryption_key) 'Encryption key changed during Android transfer'
+        Assert-True ($transferState.Canonical.version -eq 1) 'Encrypted profile version changed during Android transfer'
     } finally {
         Remove-Item -LiteralPath $PrivateProfilePath -Force
         Remove-Item -LiteralPath $fixtureRoot
+    }
+}
+}
+
+foreach ($transport in @('unsupported', '', $null, 1, @('vyandex'), @{ name = 'vyandex' })) {
+    Invoke-PipeCase 'invalid transport is rejected before any Android profile transfer' {
+        $fixtureRoot = Join-Path $repo ('.downloads\openflux\android-app-test\public-stdin-' + [Guid]::NewGuid().ToString('N'))
+        $PrivateProfilePath = Join-Path $fixtureRoot 'public-profile.json'
+        $transferState = @{ Calls = 0 }
+        function Invoke-IsolatedAdb { $transferState.Calls++; throw 'ADB must not receive an invalid profile' }
+        New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+        try {
+            [ordered]@{ version = 1; transport = $transport; document_url = 'https://docs.yandex.ru/i/public-stdin-fixture'; encryption_key = ('01' * 32) } |
+                ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath $PrivateProfilePath -Encoding UTF8
+            $failure = $null
+            try { Send-PrivateProfileBundle } catch { $failure = $_ }
+            Assert-True ($null -ne $failure -and $failure.Exception.Message -eq 'Private OpenFlux profile has an unsupported version or transport') 'Invalid transport was not rejected explicitly'
+            Assert-True ($transferState.Calls -eq 0) 'Invalid transport reached Android before validation'
+        } finally {
+            Remove-Item -LiteralPath $PrivateProfilePath -Force
+            Remove-Item -LiteralPath $fixtureRoot
+        }
     }
 }
 

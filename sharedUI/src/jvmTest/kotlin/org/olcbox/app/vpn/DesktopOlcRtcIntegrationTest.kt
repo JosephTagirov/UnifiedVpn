@@ -7,10 +7,12 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.datasource.JvmLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
+import org.olcbox.app.data.model.VpnProfileConfig
 import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
 import java.nio.file.Path
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -34,11 +36,26 @@ class DesktopOlcRtcIntegrationTest {
         requireIsolatedDesktopTestAppData()
 
         val repository = LocationsRepositoryImpl(JvmLocationsDataSourceImpl(dataDir))
+        val privateProfile = System.getenv("UNIFIEDVPN_PRIVATE_OLCRTC_PROFILE")
+            ?.trim()?.takeIf(String::isNotEmpty)?.let(Path::of)
+        if (privateProfile != null) {
+            require(repository.getAllLocations().isEmpty()) {
+                "Single-profile integration requires a fresh, empty test data directory"
+            }
+            assertTrue(repository.importText(Files.readString(privateProfile).trim()), "Private olcRTC import failed")
+        }
         val profileName = System.getenv(TEST_PROFILE_ENV)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
-            ?: error("$TEST_PROFILE_ENV is required for the private olcRTC integration test")
-        val entry = repository.getAllLocations().single { it.name == profileName }
+        val entry = if (profileName != null) {
+            repository.getAllLocations().single { it.name == profileName }
+        } else {
+            require(privateProfile != null) { "$TEST_PROFILE_ENV or a private olcRTC file is required" }
+            repository.getAllLocations().single()
+        }
+        require(entry.profile.normalizedType == VpnProfileConfig.TYPE_OLCRTC) {
+            "The olcRTC integration test refuses other profile types"
+        }
         repository.setActiveLocationId(entry.storageId)
 
         val manager = DesktopVpnManager(repository)

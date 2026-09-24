@@ -308,6 +308,16 @@ function Get-TunBridgeLogReaderReasonCodes {
     return $reasons.ToArray()
 }
 
+function Get-AndroidBrowserCheckpoint {
+    param([string]$Line)
+    if ($Line -cmatch '^I/OpenFluxBrowser[ ]*\([ ]*\d+\): (OPENFLUX_BROWSER_CHECKPOINT view=(?:true|false) page=(?:true|false) polls=\d{1,3} state=(?:Unknown|Loading|Config|Verification|Other) blocked=\d{1,3})$') {
+        return $Matches[1]
+    }
+    if ($Line -cmatch '^I/OpenFluxBrowser[ ]*\([ ]*\d+\): (OPENFLUX_BROWSER_STAGE (?:request_rejected|service_created|service_bound|request_received|network_bound|cookies_cleared|view_created|page_finished|response_success|response_failed))$') {
+        return $Matches[1]
+    }
+}
+
 function New-AndroidPublicFailureSummary {
     param([string]$Stage, [System.Collections.IDictionary]$Flags, [string]$Logs, [string]$FailureMessage,
         [bool]$LogRefreshSucceeded = $false, [string[]]$RetainedWarningCodes = @())
@@ -323,6 +333,22 @@ function New-AndroidPublicFailureSummary {
         ENCRYPTION_INIT_FAILED = @('cannot initialize mandatory AES-256-GCM encryption')
         NETWORK_STACK_INIT_FAILED = @('cannot initialize OpenFlux network stack')
         YANDEX_TRANSPORT_INIT_FAILED = @('cannot initialize Yandex Docs transport')
+        YANDEX_DOCUMENT_UNAVAILABLE = @('Yandex document editor is unavailable or does not allow editing')
+        YANDEX_HTTPS_FAILED = @('Yandex document HTTPS request failed')
+        BROWSER_VERIFICATION_REQUIRED = @('Yandex browser verification is required')
+        BROWSER_VERIFICATION_FAILED = @('Browser verification failed')
+        BROWSER_VERIFICATION_TIMEOUT = @('Browser verification timed out')
+        BROWSER_NETWORK_UNAVAILABLE = @('Browser verification upstream network is unavailable')
+        BROWSER_ACCOUNT_REJECTED = @('Browser verification refused an authenticated account session')
+        BROWSER_RETRY_LIMIT = @('Browser verification retry limit reached')
+        BROWSER_ANDROID_UNSUPPORTED = @('Browser verification requires Android 9 or newer')
+        BROWSER_PROVIDER_FAILED = @('Yandex browser verification did not complete (stage=provider)')
+        BROWSER_PROVIDER_TIMEOUT = @('Yandex browser verification did not complete (stage=provider_timeout)')
+        BROWSER_COOKIES_REJECTED = @('Yandex browser verification did not complete (stage=cookies)')
+        BROWSER_HTTPS_RETRY_FAILED = @('Yandex browser verification did not complete (stage=retry_https)')
+        BROWSER_CHALLENGE_REPEATED = @('Yandex browser verification did not complete (stage=verification_repeated)')
+        BROWSER_RETRY_BACKOFF = @('Yandex browser verification did not complete (stage=backoff)')
+        BROWSER_ATTEMPT_LIMIT = @('Yandex browser verification did not complete (stage=attempt_limit)')
         PEER_HANDSHAKE_TIMEOUT = @('encrypted peer handshake timed out; check the server, document access, and matching key')
         PEER_SESSION_STOPPED = @('encrypted peer session is stopped')
         PEER_NOT_READY = @('encrypted peer is not ready')
@@ -340,7 +366,7 @@ function New-AndroidPublicFailureSummary {
         PRIVATE_CONFIG_PERMISSION_FAILED = @('OpenFlux private configuration permissions could not be set')
         PROFILE_INVALID = @('OpenFlux profile is invalid')
         NATIVE_EXIT_BEFORE_READY = @('OpenFlux exited before the encrypted transport became ready')
-        NATIVE_READY_TIMEOUT = @('OpenFlux encrypted transport did not become ready within 90 seconds')
+        NATIVE_READY_TIMEOUT = @('OpenFlux encrypted transport did not become ready within 90 seconds', 'OpenFlux encrypted transport did not become ready within 120 seconds')
         NATIVE_STOP_TIMEOUT = @('OpenFlux process is still stopping after a forced stop')
         TUN_BRIDGE_START_FAILED = @('TUN DNS bridge start failed')
         TUN_BRIDGE_EXIT_BEFORE_READY = @('TUN DNS bridge exited before SOCKS became ready')
@@ -356,6 +382,8 @@ function New-AndroidPublicFailureSummary {
         UPSTREAM_UNAVAILABLE = @('no upstream network', 'Waiting for upstream network')
         TRANSPORT_RECOVERY = @('reconnecting transport', 'Retrying transport', 'Watchdog:')
         NATIVE_FATAL_REPORTED = @('OPENFLUX_FATAL:')
+        NATIVE_CONTEXT_DEADLINE = @('OPENFLUX_FATAL: context deadline exceeded')
+        NATIVE_CONTEXT_CANCELED = @('OPENFLUX_FATAL: context canceled')
         OPENFLUX_START_FAILED = @('OpenFlux start failed:')
         VPN_START_FAILED_SAFELY = @('VPN start failed safely:')
         TRANSPORT_HEALTH_REJECTED = @('Android transport reported failure, shutdown, or recovery during the test')
@@ -418,6 +446,14 @@ function Write-AndroidFailureSummary {
     }
     foreach ($code in @(Get-AndroidTransportWarningCodes -Logs $Logs)) {
         if ($null -ne $WarningCodes) { $WarningCodes.Add($code) | Out-Null }
+    }
+    if ($Flags.app_installed -eq $true) {
+        try {
+            $checkpoints = Invoke-IsolatedAdb -AdbArguments @('logcat', '-d', '-v', 'brief', '-s', 'OpenFluxBrowser:I', '*:S') -TimeoutSeconds 3
+            foreach ($line in ($checkpoints.Output -split '\r?\n')) {
+                Get-AndroidBrowserCheckpoint -Line $line
+            }
+        } catch { }
     }
     $summary = New-AndroidPublicFailureSummary -Stage $Stage -Flags $Flags -Logs $Logs `
         -FailureMessage $FailureMessage -LogRefreshSucceeded $refreshed -RetainedWarningCodes @($WarningCodes)
@@ -541,11 +577,16 @@ function Send-PrivateProfileBundle {
     if (-not $document.StartsWith('https://', [StringComparison]::OrdinalIgnoreCase) -or $key -notmatch '^[0-9a-f]{64}$') {
         throw 'Private OpenFlux profile requires an HTTPS document and a 64-character key'
     }
+    $transport = if ($null -eq $profile.PSObject.Properties['transport']) {
+        'yandex'
+    } elseif ($profile.transport -is [string]) {
+        $profile.transport.Trim().ToLowerInvariant()
+    } else { '' }
     if (($null -ne $profile.version -and $profile.version -ne 1) -or
-        ($null -ne $profile.transport -and $profile.transport -ne 'yandex')) {
+        $transport -notin @('yandex', 'vyandex')) {
         throw 'Private OpenFlux profile has an unsupported version or transport'
     }
-    $canonical = [ordered]@{ version = 1; transport = 'yandex'; document_url = $document; encryption_key = $key } |
+    $canonical = [ordered]@{ version = 1; transport = $transport; document_url = $document; encryption_key = $key } |
         ConvertTo-Json -Compress
     $bundle = [ordered]@{
         version = 5

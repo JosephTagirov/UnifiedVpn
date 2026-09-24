@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import org.olcbox.app.data.model.VpnProfileConfig
+import org.olcbox.app.vpn.WireGuardConfigValues
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -711,7 +712,7 @@ private class SingBoxWireGuardEngine(
             .put("allowed_ips", JSONArray(outbound.allowedIps))
 
         outbound.preSharedKey?.let { peer.put("pre_shared_key", it) }
-        outbound.persistentKeepalive?.let { peer.put("persistent_keepalive_interval", it) }
+        outbound.persistentKeepalive?.let { peer.put("persistent_keepalive_interval", it.toLongOrNull() ?: it) }
 
         val endpoint = JSONObject()
             .put("type", "wireguard")
@@ -788,7 +789,7 @@ private class SingBoxWireGuardEngine(
     }
 }
 
-private data class WireGuardOutbound(
+internal data class WireGuardOutbound(
     val privateKey: String,
     val addresses: List<String>,
     val dnsServers: List<String>,
@@ -798,7 +799,7 @@ private data class WireGuardOutbound(
     val peerHost: String,
     val peerPort: Int,
     val allowedIps: List<String>,
-    val persistentKeepalive: Int?,
+    val persistentKeepalive: String?,
     val amneziaWireGuardFields: Map<String, Any> = emptyMap()
 )
 
@@ -927,7 +928,7 @@ private fun decodeCompressedVpnUri(uri: String, prefix: String): String? {
     }.getOrNull()
 }
 
-private fun parseWireGuardConfig(config: String): WireGuardOutbound {
+internal fun parseWireGuardConfig(config: String): WireGuardOutbound {
     val parsed = parseWireGuardIni(config)
     val interfaceConfig = parsed.interfaceConfig
     val peerConfig = parsed.peers.firstOrNull()
@@ -936,7 +937,7 @@ private fun parseWireGuardConfig(config: String): WireGuardOutbound {
     val amneziaWireGuardFields = AMNEZIA_WG_FIELDS
         .mapNotNull { (configKey, singBoxKey) ->
             parsed.allValues[configKey]
-                ?.takeIf { it.isAwgParameterEnabled() }
+                ?.takeIf { singBoxKey in AMNEZIA_WG_BOOLEAN_FIELDS || it.isAwgParameterEnabled() }
                 ?.let { singBoxKey to it.toSingBoxWireGuardValue(singBoxKey) }
         }
         .toMap()
@@ -958,7 +959,7 @@ private fun parseWireGuardConfig(config: String): WireGuardOutbound {
         peerHost = endpoint.host,
         peerPort = endpoint.port,
         allowedIps = peerConfig["allowedips"].orEmpty().splitCsv().ifEmpty { listOf("0.0.0.0/0") },
-        persistentKeepalive = peerConfig["persistentkeepalive"]?.toIntOrNull(),
+        persistentKeepalive = peerConfig["persistentkeepalive"]?.let(WireGuardConfigValues::keepalive),
         amneziaWireGuardFields = amneziaWireGuardFields
     ).also {
         require(it.addresses.isNotEmpty()) { "WireGuard interface address is missing" }
@@ -1090,10 +1091,10 @@ private fun String.isAwgParameterEnabled(): Boolean {
 
 private fun String.toSingBoxWireGuardValue(field: String): Any {
     val normalized = trim().trim('"', '\'')
-    return if (field in AMNEZIA_WG_INTEGER_FIELDS) {
-        normalized.toLongOrNull() ?: normalized
-    } else {
-        normalized
+    return when (field) {
+        in AMNEZIA_WG_BOOLEAN_FIELDS -> WireGuardConfigValues.boolean(this, field)
+        in AMNEZIA_WG_INTEGER_FIELDS -> normalized.toLongOrNull() ?: normalized
+        else -> normalized
     }
 }
 
@@ -1325,6 +1326,7 @@ private val WIREGUARD_PUBLIC_KEY = Regex(
     """^\s*publickey\s*=""",
     setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE)
 )
+private val AMNEZIA_WG_BOOLEAN_FIELDS = setOf("random_trailers", "disable_cookies")
 private val AMNEZIA_WG_INTEGER_FIELDS = setOf(
     "jc", "jmin", "jmax", "s1", "s2", "s3", "s4"
 )
@@ -1351,5 +1353,7 @@ private val AMNEZIA_WG_FIELDS = linkedMapOf(
     "rekeytimeout" to "rekey_timeout",
     "rejectaftertime" to "reject_after_time",
     "keepalivetimeout" to "keepalive_timeout",
-    "maxhandshakeattempts" to "max_handshake_attempts"
+    "maxhandshakeattempts" to "max_handshake_attempts",
+    "randomtrailers" to "random_trailers",
+    "disablecookies" to "disable_cookies"
 )

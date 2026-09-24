@@ -8,6 +8,8 @@ object OlcboxVpnActions {
     const val ACTION_STOP_VPN = "org.olcbox.app.vpn.service.OlcboxVpnService.STOP"
     const val ACTION_APPLY_SELECTED_PROFILE =
         "org.olcbox.app.vpn.service.OlcboxVpnService.APPLY_SELECTED_PROFILE"
+    const val ACTION_RETRY_PROFILE =
+        "org.olcbox.app.vpn.service.OlcboxVpnService.RETRY_PROFILE"
     const val ACTION_SWITCH_PREVIOUS_PROFILE =
         "org.olcbox.app.vpn.service.OlcboxVpnService.SWITCH_PREVIOUS_PROFILE"
     const val ACTION_SWITCH_NEXT_PROFILE =
