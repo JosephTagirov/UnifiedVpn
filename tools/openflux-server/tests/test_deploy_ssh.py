@@ -143,13 +143,13 @@ class LocalDeploymentTests(unittest.TestCase):
         with self.assertRaisesRegex(deploy.DeploymentError, "artifact_hash_mismatch"):
             deploy.collect_bundle(bundle, config)
 
-    def test_new_packages_require_exact_wrapper_four_provenance(self):
-        self.assertTrue(remote.VERSION.startswith("unified-openflux 5 "))
+    def test_new_packages_require_exact_wrapper_seven_provenance(self):
+        self.assertTrue(remote.VERSION.startswith("unified-openflux 8 "))
         self.assertEqual(deploy.manager.VERSION, remote.VERSION)
         bundle, config = self.bundle()
         manifest_path = bundle / "manifest.json"
         manifest = json.loads(manifest_path.read_bytes())
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4, 5, 6):
             with self.subTest(version=version):
                 name, current, metadata = remote.VERSION.split(" ", 2)
                 self.assertNotEqual(current, str(version))

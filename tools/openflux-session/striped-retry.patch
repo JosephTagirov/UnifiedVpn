@@ -1,0 +1,28 @@
+diff --git a/transport/striped.go b/transport/striped.go
+index d8520d0..25cd617 100644
+--- a/transport/striped.go
++++ b/transport/striped.go
+@@ -933,7 +933,10 @@ func (q *sender) pull(i, max int, now time.Time) [][]byte {
+ 				continue
+ 			}
+ 			e.queued = false
+-			e.tries++
++			// A disconnected peer can leave a piece pending for more than 255 sends.
++			if e.tries < 255 {
++				e.tries++
++			}
+ 			e.dups = 0
+ 			if e.tries == 4 && now.Sub(q.triesLogAt) > time.Second {
+ 				q.triesLogAt = now
+@@ -1231,7 +1234,10 @@ func (q *sender) detectLocked(now time.Time) bool {
+ 		}
+ 		byLane := q.laneAck[e.lane] > e.laneIdx+laneReorderSlack
+ 		if !byLane {
+-			wait := rto << min(int(e.tries)-1, 1)
++			wait := rto
++			if e.tries > 1 {
++				wait *= 2
++			}
+ 			if now.Sub(e.at) < wait {
+ 				continue
+ 			}

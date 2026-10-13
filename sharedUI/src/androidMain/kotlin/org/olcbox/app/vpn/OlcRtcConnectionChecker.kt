@@ -12,7 +12,7 @@ internal object OlcRtcConnectionChecker {
     suspend fun check(locationConfig: LocationConfig, deviceId: String): Long? {
         return withContext(Dispatchers.IO) {
             val config = locationConfig.normalized()
-            if (!config.isComplete()) return@withContext null
+            if (!config.isComplete() || config.isVkCalls()) return@withContext null
 
             repeat(CONNECTION_CHECK_ATTEMPTS) {
                 val socksPort = allocateLocalPort()
@@ -43,7 +43,7 @@ internal object OlcRtcConnectionChecker {
     suspend fun ping(locationConfig: LocationConfig, deviceId: String): Long? {
         return withContext(Dispatchers.IO) {
             val config = locationConfig.normalized()
-            if (!config.isComplete()) return@withContext null
+            if (!config.isComplete() || config.isVkCalls()) return@withContext null
 
             repeat(HTTP_PING_ATTEMPTS) {
                 val socksPort = allocateLocalPort()

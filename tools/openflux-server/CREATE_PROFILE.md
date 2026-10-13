@@ -2,6 +2,11 @@
 
 ## English
 
+For the separate administrator wizard with a pinned browser companion,
+automatic subnet selection, and persistent services, see [ADMIN.md](ADMIN.md).
+The four-file procedure below describes the original direct-container helper;
+it does not enable the browser companion or systemd autostart.
+
 `create_profile.py` is a local Linux amd64 helper for an **already installed,
 verified encrypted OpenFlux server**. It wraps the existing `manage.py` named
 instance operations. It does not connect over SSH, download software, create a
@@ -16,10 +21,22 @@ device needs one document, one key, and one server instance. Never give a second
 device the document used by your active OpenFlux connection.
 
 `yandex` is the default transport. For a separate document in the **new Volga
-editor**, explicitly pass `--transport vyandex`. Both endpoints must use matching
-wrapper-5 binaries; the helper refuses older public artifacts. This is not an
-in-place migration, and a prepared profile is not proof of a working connection.
+editor**, explicitly pass `--transport vyandex`. The helper requires wrapper-7
+server artifacts; both endpoints must support the selected transport and codec.
+This is not an in-place migration, and a prepared profile is not proof of a
+working connection.
 There is no automatic editor detection or transport fallback.
+
+The codec defaults to `legacy-lz4-v1`. Only a new classic-editor profile may opt
+into `--wire-codec batch-zstd-v2`; both client and server need matching batch
+support (wrapper 6 or later compatible). There is no codec negotiation or fallback.
+This option is refused for Volga and cannot be passed with `--prepared`. Do not change an active
+document or profile just to test the new codec.
+
+If a browser companion is enabled separately, deploy a matching wrapper-7
+core/helper pair. Old strict cores reject the optional `user_agent` success
+field; wrapper 7 accepts old cookie-only responses, but those do not provide
+User-Agent matching. See [paired rollout](BROWSER_BOOTSTRAP.md#paired-core-and-helper-rollout).
 
 Place these four matching reviewed files in a new root-owned tools directory,
 for example `/root/openflux-profile-tools`: `create_profile.py`, `manage.py`,
@@ -54,8 +71,10 @@ By default, this creates only a new mode-0700 directory:
 All three files are mode 0600. A new cryptographically random 32-byte AES key is
 generated locally. `profile.uri` is directly importable into Unified VPN and
 includes the name `OpenFlux phone2`. It contains only the document, shared key,
-profile version, and transport. It contains no SSH credentials, server login,
-Docker state, or another device's configuration. Base64 encoding is **not**
+profile version, and transport, plus `wire_codec` only for the nondefault codec.
+Explicit `legacy-lz4-v1` retains the original config/URI shapes. It contains no
+SSH credentials, server login, Docker state, or another device's configuration.
+Base64 encoding is **not**
 secret protection: treat the whole URI as a password.
 
 Preparation does not contact Docker or Yandex and starts no process. It refuses
@@ -159,6 +178,11 @@ legacy-editor availability, mobile networks, or end-to-end encrypted traffic.
 
 ## Русский
 
+Отдельный админский мастер с закреплённым браузерным помощником, автоматическим
+выбором подсети и постоянными службами описан в [ADMIN.md](ADMIN.md#русский).
+Ниже описан исходный вариант из четырёх файлов: он запускает контейнер напрямую,
+без браузерного помощника и автозапуска через systemd.
+
 `create_profile.py` упрощает добавление ещё одного устройства к **уже
 установленному и проверенному серверу OpenFlux**. Это локальный помощник для
 Linux amd64 поверх существующего `manage.py`, а не новое серверное приложение.
@@ -173,10 +197,24 @@ Linux amd64 поверх существующего `manage.py`, а не нов�
 использовать на втором устройстве документ активного подключения OpenFlux.
 
 По умолчанию используется транспорт `yandex`. Для отдельного документа в
-**новом редакторе Volga** явно укажите `--transport vyandex`. Обеим сторонам нужны
-соответствующие бинарники wrapper 5; старые публичные артефакты помощник отклонит.
+**новом редакторе Volga** явно укажите `--transport vyandex`. Помощник требует
+серверные артефакты wrapper 7; обе стороны должны поддерживать выбранные транспорт
+и codec. Старые публичные артефакты для новой установки помощник отклонит.
 Рабочая установка не мигрирует, а подготовленный профиль ещё не подтверждает
 соединение. Автоматического определения редактора и подмены транспорта нет.
+
+По умолчанию используется `legacy-lz4-v1`. Для отдельного нового профиля старого
+редактора можно явно указать `--wire-codec batch-zstd-v2`; на обеих сторонах нужна
+поддержка этого codec (wrapper 6 или совместимой более новой версии). Для Volga
+параметр batch запрещён, как и любая подмена codec через `--prepared`.
+Автоматического согласования или перехода на
+legacy нет. Не меняйте работающий документ или профиль ради такого теста.
+
+Если браузерный помощник включается отдельно, устанавливайте соответствующую
+пару ядро wrapper 7/помощник. Старое строгое ядро отклоняет необязательное поле
+`user_agent` успешного ответа; wrapper 7 принимает прежний ответ только с cookies,
+но тогда совпадение User-Agent не обеспечивается. См.
+[согласованное обновление](BROWSER_BOOTSTRAP.md#согласованное-обновление-ядра-и-помощника).
 
 Поместите четыре соответствующих проверенных файла `create_profile.py`,
 `manage.py`, `Dockerfile`, `entrypoint.sh` в новый каталог, например
@@ -199,9 +237,11 @@ sudo python3 -I /root/openflux-profile-tools/create_profile.py
 правами 0700 и тремя файлами 0600: `server.json`, `profile.uri`, `plan.json`.
 Ключ AES генерируется криптографически случайно, отдельно для нового профиля.
 Файл `profile.uri` можно импортировать в Unified VPN; имя будет
-`OpenFlux phone2`. В нём только документ, общий ключ, версия профиля и транспорт,
-без логина сервера, SSH-доступа, состояния Docker и конфигурации другого
-устройства. Вся ссылка секретна: Base64 не является шифрованием.
+`OpenFlux phone2`. В нём только документ, общий ключ, версия профиля и транспорт;
+`wire_codec` добавляется только для нового codec. Явный `legacy-lz4-v1` сохраняет
+старые форматы JSON и ссылки. В профиле нет логина сервера, SSH-доступа,
+состояния Docker и конфигурации другого устройства. Вся ссылка секретна:
+Base64 не является шифрованием.
 
 **На этапе подготовки Docker и Яндекс не вызываются, процессы не запускаются.**
 Публичные артефакты проверяются по закреплённой версии и SHA256. Ссылка сравнивается

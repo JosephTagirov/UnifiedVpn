@@ -1,11 +1,13 @@
 package org.olcbox.app.vpn.service
 
 import android.content.Context
+import android.os.Build
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -29,17 +31,26 @@ internal fun createOpenFluxVpnEngine(
     socksPort: Int,
     username: String,
     password: String,
-    log: (String) -> Unit
-): SocksBackedVpnEngine = OpenFluxVpnEngine(
+    log: (String) -> Unit,
+    verificationContext: OpenFluxVerificationContext? = null
+): SocksBackedVpnEngine {
+    val session = OpenFluxProfileConfig.parse(
+        profile.rawConfig?.takeIf(String::isNotBlank) ?: profile.uri.orEmpty()
+    )?.isSession == true
+    return OpenFluxVpnEngine(
     profile = profile,
     socksPort = socksPort,
     username = username,
     password = password,
     log = log,
-    verifyBrowser = OpenFluxBrowserVerifier(context)::verify,
+    browserPreflightSupported = Build.VERSION.SDK_INT >= 28 && !session,
+    prepareBrowser = { documentUrl ->
+        val requestContext = verificationContext ?: throw OpenFluxBrowserException(OpenFluxBrowserFailure.Required)
+        OpenFluxBrowserVerifier(context, log).prepare(documentUrl, requestContext)
+    },
     prepareRuntime = {
         val nativeDirectory = context.applicationInfo.nativeLibraryDir?.let(::File)
-        val executable = nativeDirectory?.resolve("libopenflux.so")
+        val executable = nativeDirectory?.resolve(if (session) "libopenflux_session.so" else "libopenflux.so")
             ?: throw IllegalStateException("OpenFlux native library directory is unavailable")
         check(executable.isFile && executable.canExecute()) {
             "OpenFlux executable is missing for this Android ABI"
@@ -51,6 +62,7 @@ internal fun createOpenFluxVpnEngine(
         OpenFluxRuntimeFiles(executable, workDirectory, createPrivateOpenFluxConfig(workDirectory))
     }
 )
+}
 
 internal data class OpenFluxRuntimeFiles(
     val executable: File,
@@ -92,10 +104,10 @@ internal class OpenFluxVpnEngine(
     },
     private val startOutputReader: (Process, (String) -> Unit) -> Thread? =
         ::startOpenFluxOutputReader,
-    private val verifyBrowser: suspend (String) -> List<OpenFluxBrowserCookie> = {
-        throw OpenFluxBrowserException(OpenFluxBrowserFailure.Failed)
-    },
-    browserClockMillis: () -> Long = { System.nanoTime() / 1_000_000L }
+    private val browserPreflightSupported: Boolean = true,
+    private val prepareBrowser: suspend (String) -> OpenFluxBrowserLease = {
+        throw OpenFluxBrowserException(OpenFluxBrowserFailure.Required)
+    }
 ) : SocksBackedVpnEngine {
     override val profileType: String = VpnProfileConfig.TYPE_OPENFLUX
     override val socksHost: String = OPENFLUX_SOCKS_HOST
@@ -110,10 +122,10 @@ internal class OpenFluxVpnEngine(
         }
 
     private val lifecycleLock = Any()
-    private val browserLimiter = OpenFluxBrowserRequestLimiter(browserClockMillis)
     private var running: RunningOpenFlux? = null
+    private var starting: StartingOpenFlux? = null
 
-    override suspend fun start() {
+    override suspend fun start(): Unit = coroutineScope {
         stop()
         require(socksPort in 1..65535) { "Invalid OpenFlux SOCKS port" }
         val rawConfig = profile.rawConfig?.takeIf(String::isNotBlank) ?: profile.uri.orEmpty()
@@ -121,40 +133,80 @@ internal class OpenFluxVpnEngine(
             ?.takeIf(OpenFluxProfileConfig::isValid)
             ?: throw IllegalArgumentException("OpenFlux profile is invalid")
         val coroutineContext = currentCoroutineContext()
-        val started = synchronized(lifecycleLock) {
+        val attempt = StartingOpenFlux(checkNotNull(coroutineContext[Job]))
+        synchronized(lifecycleLock) {
             coroutineContext.ensureActive()
-            val files = prepareRuntime()
-            val configFile = files.configFile
-            try {
-                configFile.writeText(
-                    config.toEngineJson(
-                        mode = "client",
-                        socksHost = socksHost,
-                        socksPort = socksPort,
-                        socksUsername = username,
-                        socksPassword = password
-                    )
-                )
+            starting = attempt
+        }
+        var lease: OpenFluxBrowserLease? = null
+        val started = try {
+            val verifiedLease = if (browserPreflightSupported && !config.isSession) {
+                withTimeoutOrNull(OPENFLUX_BROWSER_PREFLIGHT_TIMEOUT_MS) {
+                    prepareBrowser(config.documentUrl)
+                } ?: throw OpenFluxBrowserException(OpenFluxBrowserFailure.Timeout)
+            } else null
+            lease = verifiedLease
+            synchronized(lifecycleLock) {
                 coroutineContext.ensureActive()
-                RunningOpenFlux(
-                    process = startProcess(
-                        listOf(files.executable.absolutePath, "--config", configFile.absolutePath, "--bootstrap-stdio"),
-                        files.workDirectory
-                    ),
-                    configFile = configFile,
-                    browserScope = CoroutineScope(coroutineContext.minusKey(Job) + SupervisorJob())
-                ).also { running = it }
-            } catch (failure: Throwable) {
-                configFile.delete()
-                throw failure
+                if (starting !== attempt) throw CancellationException("OpenFlux verification was stopped")
+                verifiedLease?.requireCurrent()
+                attempt.lease = verifiedLease
+                val files = prepareRuntime()
+                val configFile = files.configFile
+                try {
+                    configFile.writeText(
+                        config.toEngineJson(
+                            mode = "client",
+                            socksHost = socksHost,
+                            socksPort = socksPort,
+                            socksUsername = username,
+                            socksPassword = password
+                        )
+                    )
+                    coroutineContext.ensureActive()
+                    verifiedLease?.requireCurrent()
+                    RunningOpenFlux(
+                        process = startProcess(
+                            listOf(
+                                files.executable.absolutePath, "--config", configFile.absolutePath,
+                                if (config.isSession) "--control-stdio" else "--bootstrap-stdio"
+                            ),
+                            files.workDirectory
+                        ),
+                        configFile = configFile,
+                        sessionControl = config.isSession,
+                        browserLease = verifiedLease,
+                        browserScope = CoroutineScope(coroutineContext.minusKey(Job) + SupervisorJob())
+                    ).also { running = it }
+                } catch (failure: Throwable) {
+                    configFile.delete()
+                    throw failure
+                }
             }
+        } catch (failure: Throwable) {
+            lease?.invalidate()
+            (failure as? OpenFluxBrowserException)?.let { openFluxBrowserFailureLogLines(it).forEach(log) }
+            // Exception text from WebView or IPC must never include a document URL or token.
+            if (failure is CancellationException || failure is OpenFluxBrowserException || lease != null || !browserPreflightSupported || config.isSession) throw failure
+            throw OpenFluxBrowserException(OpenFluxBrowserFailure.Failed)
+        } finally {
+            synchronized(lifecycleLock) { if (starting === attempt) starting = null }
         }
 
         try {
+            started.browserLease?.let { browserLease ->
+                started.browserScope.launch {
+                    repeat((OPENFLUX_BROWSER_LEASE_MS / 250).toInt()) {
+                        delay(250)
+                        if (runCatching { browserLease.requireCurrent() }.isFailure) return@launch
+                    }
+                    browserLease.invalidate()
+                }
+            }
             started.outputThread = startOutputReader(started.process) output@{ line ->
                 if (started.stopping.get()) return@output
                 val browserRequest = openFluxBrowserRequestId(line)
-                if (browserRequest != null) {
+                if (browserRequest != null && !config.isSession) {
                     requestBrowserVerification(started, config, browserRequest)
                 } else if (line.startsWith(OPENFLUX_BROWSER_MARKER)) {
                     log("OpenFlux: Invalid browser verification request omitted")
@@ -194,7 +246,14 @@ internal class OpenFluxVpnEngine(
     }
 
     override fun stop() {
-        val started = synchronized(lifecycleLock) { running } ?: return
+        val started = synchronized(lifecycleLock) {
+            starting?.let {
+                starting = null
+                it.lease?.invalidate()
+                it.job.cancel(CancellationException("OpenFlux verification was stopped"))
+            }
+            running
+        } ?: return
         stopRun(started)
     }
 
@@ -213,9 +272,7 @@ internal class OpenFluxVpnEngine(
     private fun requestBrowserVerification(started: RunningOpenFlux, config: OpenFluxProfileConfig, id: String) {
         if (started.stopping.get() || !started.process.isAlive) return
         val admitted = started.verifying.compareAndSet(false, true)
-        val limited = admitted && !browserLimiter.admit()
-        if (!admitted || limited) {
-            if (admitted) started.verifying.set(false)
+        if (!admitted) {
             started.browserScope.launch {
                 log("OpenFlux: ${OpenFluxBrowserFailure.RateLimited.diagnostic}")
                 writeBrowserResponse(started, id, null)
@@ -224,35 +281,34 @@ internal class OpenFluxVpnEngine(
         }
         started.browserScope.launch {
             try {
-                val cookies = withTimeoutOrNull(OPENFLUX_BROWSER_TIMEOUT_MS) {
-                    verifyBrowser(config.documentUrl)
-                } ?: throw OpenFluxBrowserException(OpenFluxBrowserFailure.Timeout)
+                val lease = started.browserLease ?: throw OpenFluxBrowserException(OpenFluxBrowserFailure.Unsupported)
+                val session = lease.consume(config.documentUrl)
                 currentCoroutineContext().ensureActive()
                 if (started.stopping.get()) return@launch
                 started.browserFailure = null
                 synchronized(started.browserSecrets) {
-                    started.browserSecrets.addAll(cookies.map { it.value }.filter(String::isNotEmpty))
+                    started.browserSecrets.addAll(session.cookies.map { it.value }.filter(String::isNotEmpty))
+                    session.classicDocument?.let { started.browserSecrets.addAll(it.secrets) }
                     while (started.browserSecrets.size > 128) started.browserSecrets.removeAt(0)
                 }
-                writeBrowserResponse(started, id, cookies)
+                writeBrowserResponse(started, id, session)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 val reason = (failure as? OpenFluxBrowserException)?.reason ?: OpenFluxBrowserFailure.Failed
                 started.browserFailure = reason
+                (failure as? OpenFluxBrowserException)?.let { openFluxBrowserFailureLogLines(it).forEach(log) }
                 log("OpenFlux: ${reason.diagnostic}")
                 writeBrowserResponse(started, id, null)
-            } finally {
-                started.verifying.set(false)
             }
         }
     }
 
-    private fun writeBrowserResponse(started: RunningOpenFlux, id: String, cookies: List<OpenFluxBrowserCookie>?) {
+    private fun writeBrowserResponse(started: RunningOpenFlux, id: String, session: OpenFluxBrowserSession?) {
         synchronized(started.browserOutputLock) {
             if (started.stopping.get() || !started.process.isAlive) return
             runCatching {
-                started.process.outputStream.write((openFluxBrowserResponse(id, cookies) + "\n").toByteArray(Charsets.UTF_8))
+                started.process.outputStream.write((openFluxBrowserResponse(id, session?.cookies, session?.userAgent, session?.classicDocument) + "\n").toByteArray(Charsets.UTF_8))
                 started.process.outputStream.flush()
             }.onFailure {
                 if (!started.stopping.get()) log("OpenFlux: Browser verification response could not be delivered")
@@ -262,9 +318,17 @@ internal class OpenFluxVpnEngine(
 
     private fun stopRun(started: RunningOpenFlux) = synchronized(started) {
         started.stopping.set(true)
+        started.browserLease?.invalidate()
         started.browserScope.cancel()
         val process = started.process
         try {
+            if (started.sessionControl && process.isAlive) {
+                runCatching {
+                    process.outputStream.write("STOP\n".toByteArray(Charsets.US_ASCII))
+                    process.outputStream.flush()
+                }
+                process.waitFor(OPENFLUX_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            }
             if (process.isAlive) {
                 process.destroy()
                 if (!process.waitFor(OPENFLUX_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
@@ -294,6 +358,8 @@ internal class OpenFluxVpnEngine(
     private data class RunningOpenFlux(
         val process: Process,
         val configFile: File,
+        val sessionControl: Boolean,
+        val browserLease: OpenFluxBrowserLease?,
         val browserScope: CoroutineScope,
         val ready: AtomicBoolean = AtomicBoolean(false),
         val stopping: AtomicBoolean = AtomicBoolean(false),
@@ -303,6 +369,8 @@ internal class OpenFluxVpnEngine(
         @Volatile var browserFailure: OpenFluxBrowserFailure? = null,
         @Volatile var outputThread: Thread? = null
     )
+
+    private class StartingOpenFlux(val job: Job, var lease: OpenFluxBrowserLease? = null)
 }
 
 internal fun sanitizeOpenFluxEngineOutput(

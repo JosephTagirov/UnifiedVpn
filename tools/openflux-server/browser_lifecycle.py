@@ -197,7 +197,7 @@ class Lifecycle:
         config = (image or {}).get('Config') or {}
         if (not image or image.get('Id') != image_id or image.get('Os') != 'linux' or image.get('Architecture') != 'amd64'
                 or not image.get('RepoTags') or config.get('User') != '10001:10001' or config.get('OnBuild') or config.get('Volumes')
-                or config.get('Labels', {}).get(manage.LABEL + '.browser-contract') != '2'):
+                or config.get('Labels', {}).get(manage.LABEL + '.browser-contract') != '3'):
             manage.fail('The pinned browser image is missing or its isolation contract changed.')
         manage.require_secure_file(seccomp)
         if seccomp.stat().st_size > 262144 or manage.sha256_file(seccomp) != seccomp_hash:

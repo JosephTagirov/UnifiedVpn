@@ -147,6 +147,14 @@ class LocationViewModel(
             "Unsupported OpenFlux transport"
         }
 
+    val openFluxWireCodecError: String?
+        get() = when {
+            editingOpenFluxConfig.normalized().wireCodec !in OpenFluxProfileConfig.supportedWireCodecs ->
+                "Unsupported OpenFlux wire codec"
+            !editingOpenFluxConfig.hasValidWireCodec() -> "Batch codec requires Yandex Docs (classic)"
+            else -> null
+        }
+
     var localSocksPortError by mutableStateOf<String?>(null)
         private set
 
@@ -514,7 +522,20 @@ class LocationViewModel(
     }
 
     fun onOpenFluxTransportChanged(value: String) {
-        editingOpenFluxConfig = editingOpenFluxConfig.copy(transport = value.trim().lowercase())
+        val transport = value.trim().lowercase()
+        val session = transport in OpenFluxProfileConfig.sessionTransports
+        editingOpenFluxConfig = editingOpenFluxConfig.copy(
+            transport = transport,
+            version = if (session) 2 else 1,
+            wireCodec = if (session) OpenFluxProfileConfig.CODEC_SESSION
+                else if (editingOpenFluxConfig.isSession) OpenFluxProfileConfig.CODEC_LEGACY
+                else editingOpenFluxConfig.wireCodec
+        )
+        validateExternalProfile()
+    }
+
+    fun onOpenFluxWireCodecChanged(value: String) {
+        editingOpenFluxConfig = editingOpenFluxConfig.copy(wireCodec = value.trim().lowercase())
         validateExternalProfile()
     }
 
@@ -676,11 +697,13 @@ class LocationViewModel(
             }
             openFluxDocumentUrlError = when {
                 editingOpenFluxConfig.documentUrl.isBlank() -> "Document URL cannot be empty"
-                openFluxTransportError == null && openFluxEncryptionKeyError == null && !editingOpenFluxConfig.isValid() ->
-                    "Use an HTTPS Yandex Docs or Yandex Disk document URL"
+                openFluxTransportError == null && openFluxWireCodecError == null &&
+                    openFluxEncryptionKeyError == null && !editingOpenFluxConfig.isValid() ->
+                    if (editingOpenFluxConfig.isSession) "Use the HTTPS link for the selected OpenFlux transport"
+                    else "Use an HTTPS Yandex Docs or Yandex Disk document URL"
                 else -> null
             }
-            profileError = openFluxTransportError ?: openFluxDocumentUrlError ?: openFluxEncryptionKeyError
+            profileError = openFluxTransportError ?: openFluxWireCodecError ?: openFluxDocumentUrlError ?: openFluxEncryptionKeyError
             return
         }
         val profile = editingExternalProfile()

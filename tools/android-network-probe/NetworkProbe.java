@@ -1,6 +1,7 @@
 import java.io.InputStream;
 import java.net.URI;
 import java.net.URL;
+import java.util.Locale;
 import javax.net.ssl.HttpsURLConnection;
 
 public final class NetworkProbe {
@@ -13,6 +14,10 @@ public final class NetworkProbe {
     }
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 1 && "--download32".equals(args[0])) {
+            download32MiB();
+            return;
+        }
         if (args.length == 0) {
             throw new IllegalArgumentException("At least one HTTPS URL is required");
         }
@@ -81,6 +86,51 @@ public final class NetworkProbe {
 
         if (failed) {
             System.exit(2);
+        }
+    }
+
+    private static void download32MiB() throws Exception {
+        final long expected = 32L * 1024 * 1024;
+        final long started = System.nanoTime();
+        URL url = URI.create("https://speed.cloudflare.com/__down?bytes=" + expected).toURL();
+        HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
+        try {
+            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            connection.setReadTimeout(READ_TIMEOUT_MS);
+            connection.setInstanceFollowRedirects(false);
+            connection.setRequestProperty("Accept-Encoding", "identity");
+            connection.setRequestProperty("Connection", "close");
+            connection.setUseCaches(false);
+            if (connection.getResponseCode() != 200) {
+                throw new IllegalStateException("Download did not return HTTP 200");
+            }
+            String encoding = connection.getContentEncoding();
+            if (encoding != null && !"identity".equalsIgnoreCase(encoding)) {
+                throw new IllegalStateException("Encoded download cannot measure throughput");
+            }
+            long length = connection.getContentLengthLong();
+            if (length != -1 && length != expected) {
+                throw new IllegalStateException("Unexpected download length");
+            }
+            long received = 0;
+            byte[] buffer = new byte[65536];
+            try (InputStream stream = connection.getInputStream()) {
+                int count;
+                while ((count = stream.read(buffer)) != -1) {
+                    received += count;
+                    if (received > expected || System.nanoTime() - started > 80_000_000_000L) {
+                        throw new IllegalStateException("Download exceeded byte or time limit");
+                    }
+                }
+            }
+            if (received != expected) {
+                throw new IllegalStateException("Incomplete download");
+            }
+            double seconds = (System.nanoTime() - started) / 1_000_000_000.0;
+            System.out.printf(Locale.ROOT, "ANDROID_DOWNLOAD_BYTES=%d ANDROID_DOWNLOAD_MBPS=%.4f TLS_VERIFIED=true%n",
+                    received, received * 8.0 / seconds / 1_000_000.0);
+        } finally {
+            connection.disconnect();
         }
     }
 }

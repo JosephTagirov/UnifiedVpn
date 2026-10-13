@@ -17,7 +17,6 @@ import (
 	_ "github.com/wlynxg/anet"
 	"openflux/transport"
 	"openflux/transport/yandex"
-	"openflux/tunnel"
 )
 
 func main() {
@@ -127,12 +126,12 @@ func runWithBootstrap(ctx context.Context, c configuration, provider yandex.Brow
 	if err := base.ConfigureBrowserBootstrap(ctx, provider); err != nil {
 		return err
 	}
-	encrypted, err := transport.NewEncryptedTransport(base, c.EncryptionKey, c.DocumentURL, serverMode)
+	wire, err := newWireTransport(c, base)
 	if err != nil {
-		return errors.New("cannot initialize mandatory AES-256-GCM encryption")
+		return err
 	}
-	session := newPeerSession(transport.NewCompressedTransport(encrypted), serverMode)
-	network, err := tunnel.NewUnifiedTCPTunnel(session, serverMode)
+	session := newPeerSession(wire, serverMode)
+	network, err := newWireNetwork(c, session)
 	if err != nil {
 		return errors.New("cannot initialize OpenFlux network stack")
 	}
@@ -235,12 +234,24 @@ func waitPeerOrBrowserError(ctx context.Context, wait func(context.Context) erro
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { result <- wait(ctx) }()
+	var err error
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-result:
-		return err
-	case err := <-browserErrors:
-		return err
+		err = ctx.Err()
+	case err = <-result:
+	case err = <-browserErrors:
 	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		// A browser failure already queued at the deadline is more specific
+		// than the enclosing peer-readiness timeout.
+		select {
+		case browserErr := <-browserErrors:
+			return browserErr
+		default:
+		}
+	}
+	return peerWaitError(err)
 }

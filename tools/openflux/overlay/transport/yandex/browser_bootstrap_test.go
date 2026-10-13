@@ -17,7 +17,7 @@ import (
 
 const testDocumentURL = "https://docs.yandex.ru/docs/view?url=private-document"
 const verificationHTML = `<html><title>Browser verification</title>Enable JavaScript</html>`
-const editorHTML = `<script id="client-config">{"officeActionData":{"balancer_url":"https://office.yandex.ru","editor_config":{"token":"private-token","document":{"key":"private-key","permissions":{"edit":true}}}}}</script>`
+const editorHTML = `<script id="client-config">{"officeActionData":{"balancer_url":"https://office.yandex.ru","editor_config":{"token":"private-token","document":{"key":"private-key","fileType":"docx","url":"https://download.yandex.net/document?token=private","title":"Synthetic document","permissions":{"edit":true}}}}}</script>`
 
 type bootstrapRoundTripper func(*http.Request) (*http.Response, error)
 
@@ -29,6 +29,66 @@ func bootstrapResponse(req *http.Request, body string) *http.Response {
 
 func anonymousCookies() []BrowserCookie {
 	return []BrowserCookie{{Name: "temporary", Value: "opaque", Domain: ".yandex.ru", Path: "/", Secure: true}}
+}
+
+func TestBrowserSessionIdentityIsBoundToCookies(t *testing.T) {
+	for _, agent := range []string{"", "SyntheticBrowser/1.0"} {
+		t.Run(browserUserAgent(agent), func(t *testing.T) {
+			b := newDocumentBootstrap(context.Background(), func(context.Context) (*BrowserSession, error) {
+				return &BrowserSession{Cookies: anonymousCookies(), UserAgent: agent}, nil
+			})
+			defer b.close()
+			requests := 0
+			b.client.Transport = bootstrapRoundTripper(func(req *http.Request) (*http.Response, error) {
+				requests++
+				if requests == 1 {
+					if req.UserAgent() != legacyBrowserUserAgent {
+						t.Fatal("initial identity changed")
+					}
+					return bootstrapResponse(req, verificationHTML), nil
+				}
+				if req.UserAgent() != browserUserAgent(agent) {
+					t.Fatal("cookie proof used a different browser identity")
+				}
+				if _, err := req.Cookie("temporary"); err != nil {
+					t.Fatal("identity lost its cookie proof")
+				}
+				return bootstrapResponse(req, editorHTML), nil
+			})
+			tp := &YandexDocsTransport{bootstrap: b}
+			for i := 0; i < 2; i++ {
+				info, err := tp.fetchDocInfo(testDocumentURL, "test-user")
+				if err != nil || info.BrowserUserAgent != browserUserAgent(agent) {
+					t.Fatal("document identity was not retained for WebSocket authorization", err)
+				}
+			}
+		})
+	}
+}
+
+func TestInvalidBrowserIdentityDoesNotInstallCookies(t *testing.T) {
+	for _, agent := range []string{"bad\r\nInjected: yes", "bad\tvalue", "bad\x00value", "bad\x7fvalue", "bad\u0080value", " leading", "trailing ", strings.Repeat("a", 1025)} {
+		if ValidBrowserUserAgent(agent) {
+			t.Fatal("invalid identity accepted")
+		}
+		b := newDocumentBootstrap(context.Background(), func(context.Context) (*BrowserSession, error) {
+			return &BrowserSession{Cookies: anonymousCookies(), UserAgent: agent}, nil
+		})
+		b.client.Transport = bootstrapRoundTripper(func(req *http.Request) (*http.Response, error) {
+			return bootstrapResponse(req, verificationHTML), nil
+		})
+		if _, err := b.fetch(testDocumentURL); !errors.Is(err, errBrowserCookies) {
+			t.Fatal("unsafe identity not rejected")
+		}
+		u, _ := url.Parse(testDocumentURL)
+		if len(b.client.Jar.Cookies(u)) != 0 || b.requestUserAgent() != legacyBrowserUserAgent {
+			t.Fatal("rejected proof installed state")
+		}
+		b.close()
+	}
+	if ValidBrowserUserAgent("") || !ValidBrowserUserAgent(strings.Repeat("a", 1024)) {
+		t.Fatal("identity size bound changed")
+	}
 }
 
 func TestBrowserCookiesValidation(t *testing.T) {
@@ -130,7 +190,7 @@ func TestAndroidCookiesSurviveRedirectWithoutBroadeningHosts(t *testing.T) {
 		{Name: "proof", Value: "disk-proof", Domain: "disk.yandex.ru", Path: "/", Secure: true},
 		{Name: "proof", Value: "docs-proof", Domain: "docs.yandex.ru", Path: "/", Secure: true},
 	}
-	b := newDocumentBootstrap(context.Background(), func(context.Context) ([]BrowserCookie, error) { return values, nil })
+	b := newDocumentBootstrap(context.Background(), func(context.Context) (*BrowserSession, error) { return &BrowserSession{Cookies: values}, nil })
 	defer b.close()
 	b.client.Transport = bootstrapRoundTripper(func(req *http.Request) (*http.Response, error) {
 		cookie, _ := req.Cookie("proof")
@@ -151,7 +211,7 @@ func TestAndroidCookiesSurviveRedirectWithoutBroadeningHosts(t *testing.T) {
 		}
 		return bootstrapResponse(req, editorHTML), nil
 	})
-	if body, err := b.fetch("https://disk.yandex.ru/i/synthetic"); err != nil || body != editorHTML {
+	if result, err := b.fetch("https://disk.yandex.ru/i/synthetic"); err != nil || result.html != editorHTML || result.classicDocument != nil {
 		t.Fatal("two-origin anonymous handoff failed")
 	}
 	for _, host := range []string{"yandex.ru", "passport.yandex.ru", "child.docs.yandex.ru", "child.disk.yandex.ru", "office.yandex.ru", "attacker.invalid"} {
@@ -192,9 +252,9 @@ func TestBootstrapVerificationDetection(t *testing.T) {
 func TestBootstrapRecognizesOnlyKnownNonSuccessChallenges(t *testing.T) {
 	for _, status := range []int{http.StatusForbidden, http.StatusTooManyRequests} {
 		calls := 0
-		b := newDocumentBootstrap(context.Background(), func(context.Context) ([]BrowserCookie, error) {
+		b := newDocumentBootstrap(context.Background(), func(context.Context) (*BrowserSession, error) {
 			calls++
-			return anonymousCookies(), nil
+			return &BrowserSession{Cookies: anonymousCookies()}, nil
 		})
 		b.client.Transport = bootstrapRoundTripper(func(req *http.Request) (*http.Response, error) {
 			if _, err := req.Cookie("temporary"); err == nil {
@@ -209,7 +269,7 @@ func TestBootstrapRecognizesOnlyKnownNonSuccessChallenges(t *testing.T) {
 		}
 		b.close()
 	}
-	b := newDocumentBootstrap(context.Background(), func(context.Context) ([]BrowserCookie, error) {
+	b := newDocumentBootstrap(context.Background(), func(context.Context) (*BrowserSession, error) {
 		t.Fatal("ordinary HTTP access denial launched a browser")
 		return nil, ErrBrowserSession
 	})
@@ -226,9 +286,9 @@ func TestBootstrapRecognizesOnlyKnownNonSuccessChallenges(t *testing.T) {
 
 func TestBootstrapUsesAndReusesAnonymousSession(t *testing.T) {
 	calls, requests := 0, 0
-	b := newDocumentBootstrap(context.Background(), func(context.Context) ([]BrowserCookie, error) {
+	b := newDocumentBootstrap(context.Background(), func(context.Context) (*BrowserSession, error) {
 		calls++
-		return anonymousCookies(), nil
+		return &BrowserSession{Cookies: anonymousCookies()}, nil
 	})
 	defer b.close()
 	b.client.Transport = bootstrapRoundTripper(func(req *http.Request) (*http.Response, error) {
@@ -240,7 +300,7 @@ func TestBootstrapUsesAndReusesAnonymousSession(t *testing.T) {
 		return bootstrapResponse(req, body), nil
 	})
 	for i := 0; i < 2; i++ {
-		if body, err := b.fetch(testDocumentURL); err != nil || body != editorHTML {
+		if result, err := b.fetch(testDocumentURL); err != nil || result.html != editorHTML || result.classicDocument != nil {
 			t.Fatal("browser session failed to unlock native HTTP request")
 		}
 	}
@@ -262,7 +322,7 @@ func TestBootstrapUsesAndReusesAnonymousSession(t *testing.T) {
 func TestBootstrapFailureBackoffAndRenewal(t *testing.T) {
 	now := time.Now()
 	calls, requests := 0, 0
-	b := newDocumentBootstrap(context.Background(), func(context.Context) ([]BrowserCookie, error) {
+	b := newDocumentBootstrap(context.Background(), func(context.Context) (*BrowserSession, error) {
 		calls++
 		return nil, errors.New("private-provider-error")
 	})
@@ -309,9 +369,9 @@ func TestBootstrapWithoutProviderAndCancelledProvider(t *testing.T) {
 		t.Fatal("missing browser failure signal")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c := newDocumentBootstrap(ctx, func(context.Context) ([]BrowserCookie, error) {
+	c := newDocumentBootstrap(ctx, func(context.Context) (*BrowserSession, error) {
 		cancel()
-		return anonymousCookies(), nil
+		return &BrowserSession{Cookies: anonymousCookies()}, nil
 	})
 	defer c.close()
 	c.client.Transport = b.client.Transport
@@ -328,16 +388,16 @@ func TestBootstrapFailureStagesDoNotExposePrivateData(t *testing.T) {
 		stage    string
 		requests int
 	}{
-		{"provider", func(context.Context) ([]BrowserCookie, error) {
+		{"provider", func(context.Context) (*BrowserSession, error) {
 			return nil, errors.New("private-provider-error " + testDocumentURL)
 		}, nil, "provider", 1},
-		{"provider timeout", func(context.Context) ([]BrowserCookie, error) {
+		{"provider timeout", func(context.Context) (*BrowserSession, error) {
 			return nil, context.DeadlineExceeded
 		}, nil, "provider_timeout", 1},
-		{"invalid cookies", func(context.Context) ([]BrowserCookie, error) {
+		{"invalid cookies", func(context.Context) (*BrowserSession, error) {
 			cookies := anonymousCookies()
 			cookies[0].Value = "private-cookie\r\n"
-			return cookies, nil
+			return &BrowserSession{Cookies: cookies}, nil
 		}, nil, "cookies", 1},
 		{"retry HTTPS error", nil, func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("private-HTTPS-error " + testDocumentURL)
@@ -354,7 +414,9 @@ func TestBootstrapFailureStagesDoNotExposePrivateData(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			provider := test.provider
 			if provider == nil {
-				provider = func(context.Context) ([]BrowserCookie, error) { return anonymousCookies(), nil }
+				provider = func(context.Context) (*BrowserSession, error) {
+					return &BrowserSession{Cookies: anonymousCookies()}, nil
+				}
 			}
 			b := newDocumentBootstrap(context.Background(), provider)
 			defer b.close()
@@ -419,7 +481,7 @@ func TestProductionDocumentPolicyAndErrorRedaction(t *testing.T) {
 func TestTransportStopCancelsBrowserVerification(t *testing.T) {
 	tpt := NewYandexDocsTransport(testDocumentURL, transport.DefaultConfig())
 	started := make(chan struct{})
-	if err := tpt.ConfigureBrowserBootstrap(context.Background(), func(ctx context.Context) ([]BrowserCookie, error) {
+	if err := tpt.ConfigureBrowserBootstrap(context.Background(), func(ctx context.Context) (*BrowserSession, error) {
 		close(started)
 		<-ctx.Done()
 		return nil, ctx.Err()

@@ -7,7 +7,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.logging.diagnosticOlcRtcRoomReference
 import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.logging.sanitizeOlcRtcDiagnosticOutput
@@ -84,12 +87,14 @@ class DesktopVpnManager private constructor(
     private var processWatchJob: Job? = null
     private var tunProcessWatchJob: Job? = null
     private var process: Process? = null
+    private var sessionControlProcess: Process? = null
     private var tunProcess: Process? = null
     private var olcRtcConfigPath: Path? = null
     private var activeDesktopMode: DesktopMode? = null
     private var activeSocksProxySettings: DesktopSocksProxySettings? = null
     @Volatile
     private var openFluxPingTunnel: OpenFluxConnectedTunnel? = null
+    @Volatile
     private var generation = 0L
     private val linuxTunController = LinuxTunController(::addLog)
     private val windowsTunController = WindowsTunController(::addLog)
@@ -282,12 +287,10 @@ class DesktopVpnManager private constructor(
             } else null
 
             process = when {
-                profile.isOlcRtc() -> startOlcRtcProcessWithFallback(
+                profile.isOlcRtc() -> startOlcRtcWithRetries(
                     location = location,
                     socksSettings = socksSettings,
-                    ready = ready,
-                    startupFailure = startupFailure,
-                    logOutput = true,
+                    requestGeneration = requestGeneration,
                     privileged = desktopMode == DesktopMode.LinuxTun
                 )
                 isVlessProfile -> startXrayProcess(
@@ -314,16 +317,18 @@ class DesktopVpnManager private constructor(
             }
 
             val engineProcess = process ?: error("$engineName process is missing")
-            waitForOlcRtcReady(
-                process = engineProcess,
-                ready = ready,
-                startupFailure = startupFailure,
-                socksPort = socksSettings.port,
-                requestGeneration = requestGeneration,
-                engineName = engineName,
-                requireReadySignal = profile.isOlcRtc() || profile.isOpenFlux(),
-                timeoutMs = if (profile.isOpenFlux()) OPENFLUX_READY_TIMEOUT_MS else OLC_READY_TIMEOUT_MS
-            )
+            if (!profile.isOlcRtc()) {
+                waitForOlcRtcReady(
+                    process = engineProcess,
+                    ready = ready,
+                    startupFailure = startupFailure,
+                    socksPort = socksSettings.port,
+                    requestGeneration = requestGeneration,
+                    engineName = engineName,
+                    requireReadySignal = profile.isOpenFlux(),
+                    timeoutMs = if (profile.isOpenFlux()) OPENFLUX_READY_TIMEOUT_MS else OLC_READY_TIMEOUT_MS
+                )
+            }
 
             if (requestGeneration != generation) {
                 throw CancellationException("Desktop start superseded")
@@ -468,6 +473,50 @@ class DesktopVpnManager private constructor(
         }
     }
 
+    private suspend fun startOlcRtcWithRetries(
+        location: LocationConfig,
+        socksSettings: DesktopSocksProxySettings,
+        requestGeneration: Long,
+        privileged: Boolean
+    ): Process = retryOlcRtcStartup(
+        isCurrent = { requestGeneration == generation },
+        onRetry = { retry, delayMillis ->
+            setStatus(VpnStatus.Reconnecting)
+            addLog("Temporary olcRTC start failure; retry $retry/3 in ${delayMillis / 1_000}s")
+        }
+    ) {
+        // Each attempt owns its readiness signals; a late line from an old core cannot ready the next one.
+        val ready = CompletableDeferred<Unit>()
+        val failure = CompletableDeferred<String>()
+        val started = startOlcRtcProcessWithFallback(
+            location, socksSettings, ready, failure, logOutput = true, privileged = privileged
+        )
+        process = started
+        try {
+            waitForOlcRtcReady(
+                process = started,
+                ready = ready,
+                startupFailure = failure,
+                socksPort = socksSettings.port,
+                requestGeneration = requestGeneration
+            )
+            if (location.isVkCalls()) {
+                check(VkCallsRuntimeConfig.probeSocks(socksSettings.port, socksSettings.username, socksSettings.password)) {
+                    "VK Calls SOCKS authentication failed"
+                }
+            }
+            started
+        } catch (error: Exception) {
+            stopProcess(started)
+            check(!started.isAlive) { "Previous olcRTC process did not stop; refusing a second instance" }
+            logJob?.cancel()
+            logJob = null
+            process = null
+            deleteOlcRtcConfig()
+            throw error
+        }
+    }
+
     private fun startOlcRtcProcessWithFallback(
         location: LocationConfig,
         socksSettings: DesktopSocksProxySettings,
@@ -476,7 +525,8 @@ class DesktopVpnManager private constructor(
         logOutput: Boolean,
         privileged: Boolean
     ): Process {
-        val binaries = DesktopNativeAssets.resolveOlcRtcBinaryCandidates()
+        val binaries = if (location.isVkCalls()) listOf(DesktopNativeAssets.resolveVkCallsBinary())
+            else DesktopNativeAssets.resolveOlcRtcBinaryCandidates()
         val dnsServer = normalizeOlcRtcDnsEndpoint(
             location.dnsServer.ifBlank { DesktopDnsResolver.current() }
         )
@@ -609,7 +659,12 @@ class DesktopVpnManager private constructor(
             dnsServer = dnsServer,
             dataDir = dataDir
         )
-        val configPath = writeOlcRtcClientConfig(olcRtcCommand)
+        val configPath = if (config.isVkCalls()) {
+            require(socksSettings.host == "127.0.0.1") { "VK Calls requires loopback SOCKS" }
+            writeEngineClientConfig("vkcalls", VkCallsRuntimeConfig.build(
+                config, socksSettings.port, socksSettings.username, socksSettings.password, dnsServer
+            ))
+        } else writeOlcRtcClientConfig(olcRtcCommand)
         val command = olcRtcCommand.args(configPath)
 
         addLog(
@@ -627,6 +682,10 @@ class DesktopVpnManager private constructor(
 
         processBuilder.environment()["NO_PROXY"] = "127.0.0.1,localhost"
         processBuilder.environment()["no_proxy"] = "127.0.0.1,localhost"
+        if (config.isVkCalls()) {
+            listOf("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+                .forEach { processBuilder.environment().remove(it) }
+        }
         val startedProcess = try {
             processBuilder.start()
         } catch (e: Exception) {
@@ -643,8 +702,13 @@ class DesktopVpnManager private constructor(
                     for (line in lines) {
                         if (!isActive) break
 
+                        val diagnosticLine = if (config.isVkCalls()) VkCallsRuntimeConfig.sanitizedOutput(
+                            line, config, socksSettings.username, socksSettings.password
+                        ) else line
                         if (logOutput) {
-                            val message = "rtc: ${sanitizeOlcRtcDiagnosticOutput(line, config.id)}"
+                            val safeLine = if (config.isVkCalls()) diagnosticLine
+                                else sanitizeOlcRtcDiagnosticOutput(line, config.id)
+                            val message = "rtc: $safeLine"
                             addLog(message)
                             println(message)
                         }
@@ -653,7 +717,7 @@ class DesktopVpnManager private constructor(
                             ready.complete(Unit)
                         }
 
-                        desktopOlcRtcStartupFailure(line)?.let(startupFailure::complete)
+                        desktopOlcRtcStartupFailure(diagnosticLine)?.let(startupFailure::complete)
                     }
                 }
             } catch (_: IOException) {
@@ -798,10 +862,10 @@ class DesktopVpnManager private constructor(
         ))
         val browser = DesktopOpenFluxBrowserBootstrap(::addLog)
         val browserRequests = OpenFluxBrowserRequestGate()
-        val binary = DesktopNativeAssets.resolveOpenFluxBinary()
+        val binary = DesktopNativeAssets.resolveOpenFluxBinary(session = openFlux.isSession)
         val configPath = writeEngineClientConfig(prefix = "openflux", config = config)
         return startNativeProxyProcess(
-            command = DesktopOpenFluxConfig.args(binary, configPath),
+            command = DesktopOpenFluxConfig.args(binary, configPath, session = openFlux.isSession),
             profile = profile,
             engineName = "OpenFlux",
             configPath = configPath,
@@ -809,7 +873,7 @@ class DesktopVpnManager private constructor(
             logOutput = logOutput,
             onOutput = { line, nativeProcess ->
                 val requestId = OpenFluxBrowserProtocol.requestId(line)
-                if (requestId != null) {
+                if (requestId != null && !openFlux.isSession) {
                     val reply = if (browserRequests.allow(requestId)) {
                         addLog("OpenFlux is verifying anonymous browser access")
                         browser.verify(requestId, openFlux.documentUrl, nativeProcess::isAlive)
@@ -825,7 +889,7 @@ class DesktopVpnManager private constructor(
                 if (isDesktopOpenFluxReady(line)) ready.complete(Unit)
                 line.startsWith("OPENFLUX_BROWSER_VERIFY")
             }
-        )
+        ).also { if (openFlux.isSession) sessionControlProcess = it }
     }
 
     private fun writeOlcRtcClientConfig(command: OlcRtcCommand): Path {
@@ -1011,6 +1075,12 @@ class DesktopVpnManager private constructor(
             }
 
             if (!process.isAlive) {
+                val failure = awaitDesktopStartupFailureAfterExit(startupFailure, logJob) {
+                    requestGeneration == null || requestGeneration == generation
+                }
+                if (failure != null) {
+                    error("$engineName failed before desktop proxy was enabled: $failure")
+                }
                 error("$engineName exited before SOCKS5 was ready")
             }
 
@@ -1037,6 +1107,12 @@ class DesktopVpnManager private constructor(
             }
 
             if (!process.isAlive) {
+                val failure = awaitDesktopStartupFailureAfterExit(startupFailure, logJob) {
+                    requestGeneration == null || requestGeneration == generation
+                }
+                if (failure != null) {
+                    error("$engineName failed before desktop proxy was enabled: $failure")
+                }
                 error("$engineName exited before desktop proxy was enabled")
             }
 
@@ -1057,6 +1133,16 @@ class DesktopVpnManager private constructor(
 
     private fun stopProcess(target: Process?) {
         if (target == null) return
+        if (target === sessionControlProcess) {
+            sessionControlProcess = null
+            if (target.isAlive) {
+                runCatching {
+                    target.outputStream.write("STOP\n".toByteArray(Charsets.US_ASCII))
+                    target.outputStream.flush()
+                    target.waitFor(1_500, TimeUnit.MILLISECONDS)
+                }
+            }
+        }
         if (!target.isAlive) return
 
         target.toHandle().descendants().forEach {
@@ -1099,6 +1185,30 @@ class DesktopVpnManager private constructor(
         const val DEFAULT_LOCATION_PING_PARALLELISM = 4
 
     }
+}
+
+internal suspend fun awaitDesktopStartupFailureAfterExit(
+    startupFailure: CompletableDeferred<String>,
+    logReader: Job?,
+    isCurrent: () -> Boolean
+): String? {
+    suspend fun checkCurrent() {
+        currentCoroutineContext().ensureActive()
+        if (!isCurrent()) throw CancellationException("Desktop start superseded")
+    }
+
+    checkCurrent()
+    // Process exit can precede stderr delivery; a descendant may also keep the pipe open.
+    if (logReader != null && !startupFailure.isCompleted) {
+        withTimeoutOrNull(1_000L) {
+            while (!logReader.isCompleted && !startupFailure.isCompleted) {
+                checkCurrent()
+                withTimeoutOrNull(200L) { logReader.join() }
+            }
+        }
+    }
+    checkCurrent()
+    return if (startupFailure.isCompleted) startupFailure.await() else null
 }
 
 internal fun emitSanitizedDesktopProcessOutput(

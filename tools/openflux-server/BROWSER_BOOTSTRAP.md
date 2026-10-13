@@ -17,16 +17,139 @@ It refuses the existing default, phone2, releasewin and other production names.
 No image is downloaded, built, installed or started by the read-only check.
 Do not migrate a working exit node until the isolated end-to-end test passes.
 
-Wrapper 5 supports explicitly selected `yandex` (classic Docs) and `vyandex`
+### Explicit Manual Bootstrap
+
+For a **new** admin-created profile, a reviewed manifest may explicitly set
+`"bootstrap_mode": "manual-once"`. Omitting this field preserves automatic
+browser verification. The manifest, frozen helper hashes, plan and service
+receipt bind the choice; editing an already prepared manifest invalidates it.
+
+The new service owns a mode-0700 systemd `RuntimeDirectory`. During its first
+native verification request, the supervisor opens a mode-0600 Unix socket there
+and accepts one root peer, not a TCP listener. The response must match the exact
+nonce, random challenge token, document hash, instance owner and native container
+identity. Anonymous cookies remain in RAM; account cookies are rejected. The
+exchange has a 38-second budget, followed by at most 2 seconds for the existing
+bridge to write native stdin. No second process attaches to native stdin.
+
+The operator must obtain a fresh anonymous browser session through the **same
+egress IP** before entering that short window. Collecting cookies, receiving an
+ACK, or seeing an active service does not establish native authentication or
+working traffic. The collector must use pinned SSH and keep cookies out of
+arguments, files and logs. This is not permission to upload an account's cookie
+store or disable TLS verification.
+
+The one manual slot is consumed even by a failed attempt; subsequent native
+requests use the previous automatic browser path. A service restart clears RAM
+and creates a new slot. If the automatic path encounters another challenge,
+operator assistance may be needed again. This option is not unattended CAPTCHA
+recovery. Existing profiles are not migrated or restarted automatically.
+
+### Явная Ручная Проверка
+
+Для нового профиля можно явно выбрать `"bootstrap_mode": "manual-once"` в
+проверенном административном манифесте. Без этого поля остаётся автоматическая
+проверка. Манифест, исходники помощников, план и служба связаны контрольными
+суммами; менять уже подготовленный манифест нельзя.
+
+Новая служба создаёт приватный временный каталог и Unix-сокет, доступный только
+root. Одна анонимная сессия принимается с привязкой к запросу, документу,
+владельцу и конкретному native-контейнеру. Обмен ограничен 38 секундами,
+передача в native ещё 2 секундами. Cookies не сохраняются на диск, вход в
+аккаунт и отключение TLS не используются. Новый сетевой порт не открывается.
+
+Свежую анонимную сессию нужно получить заранее через тот же внешний IP, что
+использует сервер, и передать по SSH с проверенным ключом хоста. ACK означает
+только приём сессии: подключение и HTTPS-трафик проверяются отдельно. После
+использования ручной попытки последующие запросы идут по прежнему
+автоматическому пути. После перезапуска или новой CAPTCHA помощь администратора
+может понадобиться снова. Существующие профили автоматически не меняются.
+
+Wrapper 8 supports explicitly selected `yandex` (classic Docs) and `vyandex`
 (Volga/new editor) transports. Both peers must use the matching transport,
 document and encryption key. Existing `yandex` profiles and documents are not
 converted automatically; an editor or transport change requires a separate
 profile and an isolated test instance. There is no automatic fallback between
 the two document protocols.
 
+## Paired Core And Helper Rollout
+
+Current bundles require wrapper 8 and browser contract 3 in a matching reviewed helper. A
+successful browser reply may include `user_agent`: the actual browser value
+captured before document navigation, alongside the anonymous cookies. The core
+can then use that same User-Agent for the associated document session. The
+encrypted wire protocol and profile codec do not change.
+
+Older strict cores reject this extra JSON field. Do not attach a new helper to
+an old core. Wrapper 8 still accepts old cookie-only replies, but accepting them
+does not provide User-Agent matching. Update and validate each core/helper pair
+in a separate test instance; retain the original paired bundle for rollback.
+For manual bootstrap, retain `user_agent` through the collector and supervisor
+as well. Do not alter frozen helpers or manifests of a running service.
+
+For classic Docs, the new browser also supplies `classic_document`: only the
+selected editor fields, bound to the exact requested URL and nonce, with a
+120-second lifetime. The core validates the snapshot and uses it directly,
+without loading the verified document page again. Redirecting the browser during
+snapshot/cookie capture invalidates the response. Metadata is limited to 24 KiB
+inside the existing 32 KiB reply; it is never logged or stored. Volga continues
+to use cookie/User-Agent bootstrap, not classic metadata. An old wrapper 7
+rejects this additional field, so update the local helper/core pair together;
+the encrypted peer protocol itself remains unchanged.
+
+Classic balancer origins may contain underscores in their bounded ASCII DNS
+labels, but must still be HTTPS origins under `yandex.ru` or `yandex.net` and
+pass normal certificate verification. The editor's `download_url` is a file
+reference carried inside its authenticated `openCmd`, not a client fetch target.
+Besides the allowed HTTPS Yandex references, the exact internal form
+`http://localhost:12701/disk/...` with a valid opaque query is supported without
+rewriting. No network request, browser navigation or cookie request may use that
+internal reference. Other loopback hosts/ports and traversal paths are rejected.
+
+These are compatibility instructions, not proof of a deployed fix or Android
+release validation. Require authenticated readiness and real tunneled traffic
+after the paired update; a successful browser check alone is insufficient.
+
+## Согласованное Обновление Ядра И Помощника
+
+Текущий набор требует wrapper 8, браузерный контракт 3 и соответствующий проверенный браузерный
+помощник. Успешный ответ может содержать `user_agent`: фактическое значение
+браузера, полученное до открытия документа, вместе с анонимными cookies.
+Ядро использует тот же User-Agent для соответствующей сессии документа.
+Шифрованный wire-протокол и codec профиля от этого не меняются.
+
+Старое строгое ядро отклоняет дополнительное поле JSON. Не подключайте новый
+помощник к старому ядру. Wrapper 8 принимает прежний ответ только с cookies,
+но это не обеспечивает совпадение User-Agent. Обновляйте и проверяйте пару
+ядро/помощник на отдельном экземпляре; сохраняйте исходную пару для отката.
+При ручной проверке сборщик и supervisor также должны сохранять `user_agent`.
+Закреплённые помощники и манифесты работающей службы не заменяйте.
+
+Для старого редактора браузер также передаёт `classic_document`: только выбранные
+поля редактора, с привязкой к точному исходному URL и nonce, сроком 120 секунд.
+Ядро проверяет снимок и использует его без повторной загрузки страницы документа.
+Навигация во время получения снимка или cookies аннулирует ответ. Размер снимка
+ограничен 24 КиБ внутри прежнего лимита ответа 32 КиБ; он не сохраняется и не
+попадает в журналы. Volga использует прежний обмен cookies/User-Agent, без снимка
+старого редактора. Wrapper 7 отклоняет новое поле, поэтому локальные ядро и
+помощник обновляются вместе; зашифрованный протокол между узлами не меняется.
+
+Имена балансировщиков старого редактора могут содержать подчёркивания в
+ограниченных ASCII-метках, но остаются HTTPS-адресами внутри `yandex.ru` или
+`yandex.net` с обычной проверкой сертификата. Поле `download_url` является ссылкой
+для аутентифицированной команды `openCmd` редактора, а не адресом загрузки клиента.
+Помимо допустимых HTTPS-ссылок Яндекса поддерживается точная внутренняя форма
+`http://localhost:12701/disk/...` с корректной строкой запроса, без преобразования.
+Она не используется в сетевых запросах, переходах браузера или запросах cookies.
+Другие локальные адреса, порты и пути с обходом каталогов отклоняются.
+
+Это правила совместимости, а не подтверждение установки исправления или
+проверки релизного Android-приложения. После обновления нужны аутентифицированное
+подключение и настоящий трафик через туннель, а не только успешная проверка браузера.
+
 ## Boundaries
 
-The wrapper-5 native L4 exit remains in its manager-created bridge/network
+The wrapper-8 native L4 exit remains in its manager-created bridge/network
 namespace, without raw-socket capabilities or namespace-local RST rules. The
 browser runs in a **different** container as UID/GID 10001, dropping every
 capability, with no key/config mount, Docker socket, published port, host PID,
@@ -65,8 +188,9 @@ Native requests have the stdout format:
 
     OPENFLUX_BROWSER_VERIFY <32-lowercase-hex-id>
 
-The supervisor replies privately on stdin with the matching ID and cookie array
-or the fixed verification_failed error. JSON payloads are at most 32 KiB;
+The supervisor replies privately on stdin with the matching ID and cookie array,
+optionally including the validated `user_agent` on success, or the fixed
+verification_failed error. JSON payloads are at most 32 KiB;
 1 through 64 cookies with names at most 128 bytes, values at most 4096 bytes
 and aggregate native field size at most 24576 bytes are accepted. Exact
 document-host domains without a leading dot remain host-only; duplicate
@@ -137,9 +261,9 @@ Official references:
 
 ## New Test Instance
 
-1. Build and hash wrapper-5 native artifacts with their matching source archive.
-   Updated server helpers require exact wrapper-5 provenance and do not accept
-   wrapper-1/2/3/4 artifacts under a fallback. Keep the corresponding old helper
+1. Build and hash wrapper-7 native artifacts with their matching source archive.
+   Updated server helpers require exact wrapper-7 provenance and do not accept
+   wrapper-1/2/3/4/5/6 artifacts under a fallback. Keep the corresponding old helper
    with an old package when operating it. Mandatory encrypted records and the
    version-1 private configuration envelope are retained; `transport` explicitly
    selects `yandex` or `vyandex` and is not inferred from a replacement URL.
@@ -197,7 +321,7 @@ network infrastructure as documented in the main README.
 рабочие имена отклоняются. Команда `check` ничего не скачивает, не устанавливает
 и не запускает. Рабочий сервер нельзя переносить до успешного отдельного теста.
 
-Wrapper 5 поддерживает явно выбранные транспорты `yandex` (старый редактор Docs)
+Wrapper 8 поддерживает явно выбранные транспорты `yandex` (старый редактор Docs)
 и `vyandex` (Volga, новый редактор). На клиенте и сервере должны совпадать
 транспорт, документ и ключ шифрования. Существующие профили `yandex` и документы
 автоматически не переводятся на новый редактор. Для смены редактора или
@@ -244,13 +368,13 @@ native-контейнер бесконечно.
 Это не полноценное сканирование образа на уязвимости. Обычная команда `check`
 ничего не собирает и не скачивает автоматически.
 
-Новые серверные помощники требуют точные сведения о сборке wrapper 5 и не
-принимают wrapper 1/2/3/4 как запасной вариант. Старый пакет следует запускать
+Новые серверные помощники требуют точные сведения о сборке wrapper 8 и не
+принимают wrapper 1/2/3/4/5/6/7 как запасной вариант. Старый пакет следует запускать
 только с соответствующим ему помощником. Обязательное шифрование и версия 1
 формата приватного конфига сохраняются; поле `transport` явно выбирает `yandex`
 или `vyandex`. Замена одной ссылки не переключает транспорт.
 
-Порядок проверки: собрать wrapper 5, подготовить новый документ и ключ,
+Порядок проверки: собрать wrapper 8, подготовить новый документ и ключ,
 установить отдельный тестовый экземпляр без запуска, проверить владельца и
 права файлов помощника, затем выполнить `check`. Только после подготовки
 выполняется `run --apply` с теми же параметрами. Автозапуск/systemd этим

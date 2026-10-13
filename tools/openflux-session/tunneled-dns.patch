@@ -1,0 +1,90 @@
+diff --git a/tunnel/tunnel.go b/tunnel/tunnel.go
+index 82c624f..f4231cc 100644
+--- a/tunnel/tunnel.go
++++ b/tunnel/tunnel.go
+@@ -318,6 +318,12 @@ func (t *TCPTunnel) setupClient(tunnelNIC tcpip.NICID) {
+ var dialTimeout = 10 * time.Second
+ 
+ func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {
++	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
++	defer cancel()
++	return t.dialTCPContext(ctx, address)
++}
++
++func (t *TCPTunnel) dialTCPContext(ctx context.Context, address string) (net.Conn, error) {
+ 	host, portStr, err := net.SplitHostPort(address)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("split address: %w", err)
+@@ -327,7 +333,7 @@ func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {
+ 		return nil, fmt.Errorf("bad port in %q", address)
+ 	}
+ 
+-	ip, err := t.resolveIPv4(host)
++	ip, err := sessionResolveIPv4(ctx, host, t.dialTCPContext)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -338,8 +344,6 @@ func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {
+ 		nic = tcpip.NICID(2)
+ 	}
+ 
+-	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+-	defer cancel()
+ 	conn, err := gonet.DialContextTCP(ctx, t.gvisorStack, tcpip.FullAddress{
+ 		NIC:  nic,
+ 		Addr: tcpip.AddrFrom4([4]byte{ip[0], ip[1], ip[2], ip[3]}),
+@@ -351,40 +355,30 @@ func (t *TCPTunnel) DialTCP(address string) (net.Conn, error) {
+ 	return conn, nil
+ }
+ 
+-// resolveIPv4 resolves host to an IPv4 address using the local system
+-// resolver (for a literal IP this is just a parse, no lookup).
++// resolveIPv4 never resolves application destinations outside the tunnel.
+ func (t *TCPTunnel) resolveIPv4(host string) (net.IP, error) {
+-	if literal := net.ParseIP(host); literal != nil {
+-		if ip4 := literal.To4(); ip4 != nil {
+-			return ip4, nil
+-		}
+-		return nil, fmt.Errorf("IPv6 not supported")
+-	}
+-
+-	tcpAddr, err := net.ResolveTCPAddr("tcp", net.JoinHostPort(host, "0"))
+-	if err != nil {
+-		return nil, fmt.Errorf("resolve: %w", err)
+-	}
+-	ip4 := tcpAddr.IP.To4()
+-	if ip4 == nil {
+-		return nil, fmt.Errorf("IPv6 not supported")
+-	}
+-	return ip4, nil
++	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
++	defer cancel()
++	return sessionResolveIPv4(ctx, host, t.dialTCPContext)
+ }
+ 
+ func (t *TCPTunnel) DialUDP(address string) (net.Conn, error) {
+-	udpAddr, err := net.ResolveUDPAddr("udp", address)
++	host, portText, err := net.SplitHostPort(address)
+ 	if err != nil {
+-		return nil, fmt.Errorf("resolve UDP: %w", err)
++		return nil, fmt.Errorf("split UDP address: %w", err)
+ 	}
+-	ip := udpAddr.IP.To4()
+-	if ip == nil {
+-		return nil, fmt.Errorf("IPv6 not supported")
++	port, err := strconv.Atoi(portText)
++	if err != nil || port < 1 || port > 65535 {
++		return nil, fmt.Errorf("invalid UDP port")
++	}
++	ip, err := t.resolveIPv4(host)
++	if err != nil {
++		return nil, err
+ 	}
+ 	remote := &tcpip.FullAddress{
+ 		NIC:  1,
+ 		Addr: tcpip.AddrFrom4([4]byte{ip[0], ip[1], ip[2], ip[3]}),
+-		Port: uint16(udpAddr.Port),
++		Port: uint16(port),
+ 	}
+ 	return gonet.DialUDP(t.gvisorStack, nil, remote, ipv4.ProtocolNumber)
+ }

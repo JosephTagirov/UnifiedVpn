@@ -1,7 +1,6 @@
 package yandex
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -23,28 +22,29 @@ import (
 
 var (
 	cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
-	clientConfigRe  = regexp.MustCompile(`(?s)<script[^>]*id="client-config"[^>]*>(.*?)</script>`)
 )
 
 type YandexDocsInfo struct {
-	CookieStr   string
-	Token       string
-	DocID       string
-	CallbackURL string
-	UserID      string
-	Origin      string
-	Host        string
-	WsURL       string
-	Permissions map[string]interface{}
-	OpenCmd     map[string]interface{}
+	CookieStr        string
+	BrowserUserAgent string
+	Token            string
+	DocID            string
+	CallbackURL      string
+	UserID           string
+	Origin           string
+	Host             string
+	WsURL            string
+	Permissions      map[string]interface{}
+	OpenCmd          map[string]interface{}
 }
 
 type DocSession struct {
-	Info       YandexDocsInfo
-	Conn       *websocket.Conn
-	WriteQueue chan []byte
-	UserID     string
-	writeMu    sync.Mutex
+	Info        YandexDocsInfo
+	Conn        *websocket.Conn
+	WriteQueue  chan []byte
+	UserID      string
+	writeMu     sync.Mutex
+	diagnostics *classicAttemptDiagnostics
 }
 
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
@@ -131,6 +131,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 	utils.Debugf("[YDOCS] connectToDoc attempt ...")
 
 	go func() {
+		diagnostics := &classicAttemptDiagnostics{}
 		defer func() {
 			if r := recover(); r != nil {
 				utils.Debugf("[PANIC] recovered in yandex.connect: %v", r)
@@ -150,10 +151,12 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 
 		info, err := t.fetchDocInfo(t.url, userID)
 		if err != nil {
+			diagnostics.record(classicDocumentFailed)
 			utils.Debugf("[YDOCS] fetchDocInfo failed: %v", err)
 			t.scheduleReconnect(attempt)
 			return
 		}
+		diagnostics.record(classicDocumentResolved)
 
 		// Hard TCP dial timeout so a stuck connect/DNS to the balancer host
 		// can't hang the whole transport (HandshakeTimeout alone proved
@@ -165,24 +168,16 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 		}
-		headers := http.Header{}
-		headers.Set("User-Agent", "Mozilla/5.0")
-		headers.Set("Origin", info.Origin)
-		headers.Set("Cookie", info.CookieStr)
-		headers.Set("Host", info.Host)
-
 		utils.Debugf("[YDOCS] WebSocket dial")
 		ctx := t.bootstrap.ctx
-		conn, resp, err := dialer.DialContext(ctx, info.WsURL, headers)
+		conn, err := engineIODial(ctx, info, t.bootstrap.client, &dialer, engineIOHandshakeTimeout)
 		if err != nil {
-			status := 0
-			if resp != nil {
-				status = resp.StatusCode
-			}
-			utils.Debugf("[YDOCS] WebSocket dial failed (http %d)", status)
+			diagnostics.record(classicWebSocketFailed)
+			utils.Debugf("[YDOCS] Engine.IO handshake failed: %v", err)
 			t.scheduleReconnect(attempt)
 			return
 		}
+		diagnostics.record(classicWebSocketConnected)
 		utils.Debugf("[YDOCS] WebSocket connected to %s", info.Host)
 
 		writeQueue := make(chan []byte, t.GetConfig().MaxQueueSize)
@@ -191,13 +186,15 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		}
 
 		session := &DocSession{
-			Info:       info,
-			Conn:       conn,
-			WriteQueue: writeQueue,
-			UserID:     userID,
+			Info:        info,
+			Conn:        conn,
+			WriteQueue:  writeQueue,
+			UserID:      userID,
+			diagnostics: diagnostics,
 		}
 
 		if err := t.activateSession(session); err != nil {
+			diagnostics.authenticationFailed(err)
 			utils.Debugf("[YDOCS] Session authentication cancelled or failed")
 			t.scheduleReconnect(attempt)
 			return
@@ -211,6 +208,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		for t.IsRunning() {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
+				diagnostics.closed(err)
 				utils.Debugf("[YDOCS] Read error: %v", err)
 				t.disconnectSession(session)
 				// If the session was healthy for a while, treat the next
@@ -229,41 +227,31 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 }
 
 func (t *YandexDocsTransport) activateSession(session *DocSession) error {
-	failure := fmt.Errorf("Yandex session authentication failed")
 	if !t.IsRunning() || t.bootstrap.ctx.Err() != nil {
 		_ = session.Conn.Close()
-		return failure
+		return errClassicAuthClosed
 	}
-	stopCancel := context.AfterFunc(t.bootstrap.ctx, func() { _ = session.Conn.Close() })
-	defer stopCancel()
-	if err := session.Conn.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
-		_ = session.Conn.Close()
-		return failure
+	pending, err := authenticateClassicSession(t.bootstrap.ctx, session, classicAuthTimeout)
+	if err != nil {
+		return err
 	}
-	authToken, _ := json.Marshal(map[string]string{"token": session.Info.Token})
-	authData := map[string]interface{}{
-		"type": "auth", "docid": session.Info.DocID, "token": "fghhfgsjdgfjs",
-		"user": map[string]interface{}{"id": session.UserID}, "editorType": 0,
-		"lastOtherSaveTime": -1, "permissions": session.Info.Permissions,
-		"openCmd": session.Info.OpenCmd, "coEditingMode": "fast", "jwtOpen": session.Info.Token,
-	}
-	messagePart, err := json.Marshal([]interface{}{"message", authData})
-	if err != nil || session.safeWrite(websocket.TextMessage, append([]byte("40"), authToken...)) != nil ||
-		session.safeWrite(websocket.TextMessage, append([]byte("42"), messagePart...)) != nil ||
-		session.Conn.SetWriteDeadline(time.Time{}) != nil {
-		_ = session.Conn.Close()
-		return failure
-	}
-	// Only expose the socket after both auth frames, so the persistent writer
-	// and keepalive cannot send a cursor frame ahead of authentication.
 	t.Mu.Lock()
-	defer t.Mu.Unlock()
 	if !t.IsRunning() || t.bootstrap.ctx.Err() != nil {
+		t.Mu.Unlock()
 		_ = session.Conn.Close()
-		return failure
+		return errClassicAuthClosed
 	}
+	// The persistent writer and keepalive see only a fully authenticated
+	// document session, not merely successfully written authentication frames.
 	t.session = session
 	t.SetConnected(true)
+	t.Mu.Unlock()
+	for _, message := range pending {
+		if !t.IsRunning() {
+			break
+		}
+		t.handleMessage(session, message)
+	}
 	return nil
 }
 
@@ -456,16 +444,27 @@ func reconnectBackoff(n int) time.Duration {
 
 func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, error) {
 	if t.bootstrap != nil {
-		html, err := t.bootstrap.fetch(url)
+		result, err := t.bootstrap.fetch(url)
 		if err != nil {
 			return YandexDocsInfo{}, err
 		}
-		info, err := parseDocumentInfo(html, userID)
-		if err != nil || !allowedBalancer(info.Origin) || info.Permissions["edit"] != true {
+		var info YandexDocsInfo
+		if result.classicDocument != nil {
+			info = classicDocumentInfo(result.classicDocument, userID)
+		} else {
+			info, err = parseDocumentInfo(result.html, userID)
+		}
+		fileType, _ := info.OpenCmd["format"].(string)
+		downloadURL, _ := info.OpenCmd["url"].(string)
+		title, _ := info.OpenCmd["title"].(string)
+		metadata := ClassicDocument{BalancerURL: info.Origin, Token: info.Token, DocumentKey: info.DocID,
+			FileType: fileType, DownloadURL: downloadURL, Title: title, Edit: info.Permissions["edit"] == true}
+		if err != nil || !validClassicDocumentFields(&metadata) {
 			t.bootstrap.publish(ErrDocumentAccess)
 			return YandexDocsInfo{}, ErrDocumentAccess
 		}
 		info.CookieStr = t.bootstrap.cookiesFor(info.Origin)
+		info.BrowserUserAgent = t.bootstrap.requestUserAgent()
 		return info, nil
 	}
 	// Retain the upstream parser's standalone test path; production constructors
@@ -508,75 +507,52 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	return info, nil
 }
 
-func parseDocumentInfo(html, userID string) (YandexDocsInfo, error) {
-	matches := clientConfigRe.FindStringSubmatch(html)
-	if len(matches) < 2 {
-		// Help diagnose: is this a login page, a new-editor page, etc.?
-		hint := "no client-config script"
-		if strings.Contains(html, "passport") || strings.Contains(strings.ToLower(html), "login") {
-			hint = "looks like a login page (doc not public?)"
-		}
-		return YandexDocsInfo{}, fmt.Errorf("config not found: %s", hint)
+func parseDocumentInfo(body, userID string) (YandexDocsInfo, error) {
+	script, _, err := clientConfigScript(body)
+	if err != nil {
+		return YandexDocsInfo{}, ErrDocumentAccess
 	}
-
-	var config map[string]interface{}
-	if err := json.Unmarshal([]byte(matches[1]), &config); err != nil {
-		return YandexDocsInfo{}, fmt.Errorf("client-config is not valid JSON: %w", err)
+	var config struct {
+		OfficeAction struct {
+			EditorType  string `json:"office_online_editor_type"`
+			BalancerURL string `json:"balancer_url"`
+			Editor      struct {
+				Token    string `json:"token"`
+				Document struct {
+					Key         string                 `json:"key"`
+					FileType    string                 `json:"fileType"`
+					URL         string                 `json:"url"`
+					Title       *string                `json:"title"`
+					Permissions map[string]interface{} `json:"permissions"`
+				} `json:"document"`
+			} `json:"editor_config"`
+		} `json:"officeActionData"`
 	}
-
-	officeAction, ok := config["officeActionData"].(map[string]interface{})
-	if !ok || officeAction == nil {
-		return YandexDocsInfo{}, fmt.Errorf("officeActionData missing - will reconnect")
+	if json.Unmarshal([]byte(script), &config) != nil || config.OfficeAction.EditorType == "volga" {
+		return YandexDocsInfo{}, ErrDocumentAccess
 	}
-
-	editorConfigRaw, ok := officeAction["editor_config"].(map[string]interface{})
-	if !ok || editorConfigRaw == nil {
-		return YandexDocsInfo{}, fmt.Errorf("editor_config nil - will reconnect")
+	action := config.OfficeAction
+	document := action.Editor.Document
+	if action.BalancerURL == "" {
+		return YandexDocsInfo{}, fmt.Errorf("client-config balancer_url is missing")
 	}
-
-	balancerURL, ok := officeAction["balancer_url"].(string)
-	if !ok || balancerURL == "" {
-		return YandexDocsInfo{}, fmt.Errorf("officeActionData.balancer_url missing - will reconnect")
+	if _, ok := checkedBalancerOrigin(action.BalancerURL); !ok || !visibleASCII(action.Editor.Token, 16384) ||
+		!visibleASCII(document.Key, 512) || document.Key == "." || document.Key == ".." {
+		return YandexDocsInfo{}, ErrDocumentAccess
 	}
-	host := strings.TrimPrefix(balancerURL, "https://")
-
-	document, ok := editorConfigRaw["document"].(map[string]interface{})
-	if !ok || document == nil {
-		return YandexDocsInfo{}, fmt.Errorf("editor_config.document missing - will reconnect")
+	title := ""
+	if document.Title != nil {
+		title = *document.Title
 	}
-
-	token, ok := editorConfigRaw["token"].(string)
-	if !ok || token == "" {
-		return YandexDocsInfo{}, fmt.Errorf("editor_config.token missing - will reconnect")
+	metadata := ClassicDocument{BalancerURL: action.BalancerURL, Token: action.Editor.Token,
+		DocumentKey: document.Key, FileType: document.FileType, DownloadURL: document.URL,
+		Title: title, Edit: document.Permissions["edit"] == true}
+	info := classicDocumentInfo(&metadata, userID)
+	info.Permissions = document.Permissions
+	if info.Permissions == nil {
+		info.Permissions = make(map[string]interface{})
 	}
-
-	docKey, ok := document["key"].(string)
-	if !ok || docKey == "" {
-		return YandexDocsInfo{}, fmt.Errorf("editor_config.document.key missing - will reconnect")
-	}
-
-	perms, _ := document["permissions"].(map[string]interface{})
-	if perms == nil {
-		perms = make(map[string]interface{})
-	}
-
-	return YandexDocsInfo{
-		Token:       token,
-		DocID:       docKey,
-		Origin:      balancerURL,
-		Host:        host,
-		WsURL:       fmt.Sprintf("wss://%s/2024.1.1-375/doc/%s/c/?EIO=4&transport=websocket", host, docKey),
-		Permissions: perms,
-		OpenCmd: map[string]interface{}{
-			"c":      "open",
-			"id":     docKey,
-			"userid": userID,
-			"format": document["fileType"],
-			"url":    document["url"],
-			"title":  document["title"],
-			"lcid":   25,
-		},
-	}, nil
+	return info, nil
 }
 
 func randUserID() string {

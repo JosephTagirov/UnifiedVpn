@@ -19,7 +19,7 @@ import sys
 SCHEMA = "unifiedvpn-openflux-deploy-v1"
 UPSTREAM = "d34dc8caa70ca059cd80d8f5753499361052dabc"
 PROTOCOL = "unified-openflux-aesgcm-v1"
-VERSION = f"unified-openflux 5 upstream={UPSTREAM} protocol={PROTOCOL}"
+VERSION = f"unified-openflux 8 upstream={UPSTREAM} protocol={PROTOCOL}"
 STAGING_ROOT = Path("/root")
 INSTALL_ROOT = Path("/opt/unifiedvpn-openflux")
 MAX_METADATA = 65536

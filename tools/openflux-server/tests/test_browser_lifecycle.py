@@ -98,7 +98,7 @@ class LifecycleTests(unittest.TestCase):
             self.life.unit('-recovery.service'):'test recovery\n',self.life.unit('-recovery.timer'):'test timer\n'}
         self.image = 'sha256:' + '8'*64
         self.fixture.fake.images[self.image] = {'Id':self.image,'Os':'linux','Architecture':'amd64','RepoTags':['browser:test'],
-            'Config':{'User':'10001:10001','Labels':{'org.unifiedvpn.openflux.browser-contract':'2'}}}
+            'Config':{'User':'10001:10001','Labels':{'org.unifiedvpn.openflux.browser-contract':'3'}}}
         self.fixture.fake.tags['browser:test'] = self.image
         self.seccomp = self.fixture.directory / 'seccomp.json'
         self.seccomp.write_text(json.dumps({'defaultAction':'SCMP_ACT_ERRNO','syscalls':[{'names':['read'],'action':'SCMP_ACT_ALLOW'}]}))

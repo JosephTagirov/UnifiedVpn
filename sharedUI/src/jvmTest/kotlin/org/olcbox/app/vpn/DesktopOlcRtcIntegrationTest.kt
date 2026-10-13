@@ -1,10 +1,8 @@
 package org.olcbox.app.vpn
 
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.datasource.JvmLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.model.VpnProfileConfig
@@ -69,7 +67,7 @@ class DesktopOlcRtcIntegrationTest {
         )
 
         try {
-            val terminalStatus = connectWithRetries(manager)
+            val terminalStatus = connect(manager)
             assertTrue(
                 terminalStatus is VpnStatus.Connected,
                 manager.logs.value.joinToString(separator = "\n")
@@ -113,53 +111,12 @@ class DesktopOlcRtcIntegrationTest {
         }
     }
 
-    private suspend fun connectWithRetries(manager: DesktopVpnManager): VpnStatus {
-        var terminalStatus: VpnStatus = VpnStatus.Error("Connection was not attempted")
-        repeat(CONNECTION_ATTEMPTS) { attempt ->
-            manager.startVpn()
-            val transitionStatus = withTimeoutOrNull(START_TRANSITION_TIMEOUT_MS) {
-                manager.status.first { status ->
-                    status is VpnStatus.Connecting ||
-                        status is VpnStatus.Reconnecting ||
-                        status is VpnStatus.Connected ||
-                        status is VpnStatus.Error
-                }
-            }
-            terminalStatus = when (transitionStatus) {
-                is VpnStatus.Connected,
-                is VpnStatus.Error -> transitionStatus
-                null -> VpnStatus.Error("Connection attempt ${attempt + 1} did not start in time")
-                else -> withTimeoutOrNull(CONNECTION_ATTEMPT_TIMEOUT_MS) {
-                    manager.status.first { status ->
-                        status is VpnStatus.Connected || status is VpnStatus.Error
-                    }
-                } ?: VpnStatus.Error("Connection attempt ${attempt + 1} timed out")
-            }
-            if (terminalStatus is VpnStatus.Connected) {
-                println("olcRTC connected on attempt ${attempt + 1} of $CONNECTION_ATTEMPTS")
-                return terminalStatus
-            }
-
-            println("olcRTC attempt ${attempt + 1} of $CONNECTION_ATTEMPTS did not connect")
-            manager.stopVpn()
-            val stopped = withTimeoutOrNull(STOP_TIMEOUT_MS) {
-                manager.status.first { status -> status is VpnStatus.Disconnected }
-            }
-            if (stopped == null) {
-                error(
-                    buildString {
-                        append("olcRTC did not stop after failed attempt ")
-                        append(attempt + 1)
-                        append('\n')
-                        append(manager.logs.value.joinToString(separator = "\n"))
-                    }
-                )
-            }
-            if (attempt + 1 < CONNECTION_ATTEMPTS) {
-                delay(RETRY_DELAY_MS)
-            }
+    private suspend fun connect(manager: DesktopVpnManager): VpnStatus {
+        // Exercise the application's bounded retries, not retries hidden in the test harness.
+        manager.startVpn()
+        return withTimeout(CONNECTION_ATTEMPT_TIMEOUT_MS) {
+            manager.status.first { it is VpnStatus.Connected || it is VpnStatus.Error }
         }
-        return terminalStatus
     }
 
     private fun assertSocks5TcpConnect(
@@ -298,10 +255,6 @@ class DesktopOlcRtcIntegrationTest {
     private companion object {
         const val TEST_DATA_DIR_ENV = "UNIFIEDVPN_OLCRTC_TEST_DATA_DIR"
         const val TEST_PROFILE_ENV = "UNIFIEDVPN_OLCRTC_TEST_PROFILE"
-        const val CONNECTION_ATTEMPTS = 6
-        const val START_TRANSITION_TIMEOUT_MS = 10_000L
-        const val CONNECTION_ATTEMPT_TIMEOUT_MS = 45_000L
-        const val STOP_TIMEOUT_MS = 15_000L
-        const val RETRY_DELAY_MS = 2_000L
+        const val CONNECTION_ATTEMPT_TIMEOUT_MS = 150_000L
     }
 }

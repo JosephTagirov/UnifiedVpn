@@ -329,3 +329,5 @@ honnef.co/go/tools v0.0.0-20190102054323-c2f93a96b099/go.mod h1:rf3lG4BRIbNafJWh
 honnef.co/go/tools v0.0.0-20190523083050-ea95bdfd59fc/go.mod h1:rf3lG4BRIbNafJWhAfAdb/ePZxsR/4RtNHQocxwk9r4=
 rsc.io/qr v0.2.0 h1:6vBLea5/NRMVTz8V66gipeLycZMl/+UlFmk8DvqQ6WY=
 rsc.io/qr v0.2.0/go.mod h1:IF+uZjkb9fqyeF/4tlBoynqmQxUoPfWEKh921coOuXs=
+unified-vpn.local/olcrtc-tls v0.0.1 h1:Xm4m6HHAoZt7U2UcePX8Xbo9I2NV6lfkPIinRjqDBkM=
+unified-vpn.local/olcrtc-tls v0.0.1/go.mod h1:EMEFDA3dE6LAHao/iKYSF+l5hLXTRNhGcMSjUDvgMm4=

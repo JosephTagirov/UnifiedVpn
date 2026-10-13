@@ -8,6 +8,10 @@ import org.olcbox.app.data.model.OpenFluxProfileConfig
 object ConfigShareService {
     fun openFluxUri(config: OpenFluxProfileConfig, name: String): String? {
         if (!config.isValid()) return null
+        if (config.isSession) {
+            val session = config.toSessionConfig(name.trim().ifBlank { "OpenFlux" })
+            return session.takeIf { it.isValid() }?.toUri()
+        }
         val encodedName = name.trim().ifBlank { "OpenFlux" }.encodeURLParameter()
         return (config.toUri() + "#" + encodedName).takeIf { it.length <= 32768 }
     }

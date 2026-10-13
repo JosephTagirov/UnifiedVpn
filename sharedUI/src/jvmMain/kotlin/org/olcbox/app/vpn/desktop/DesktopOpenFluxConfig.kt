@@ -32,9 +32,9 @@ internal object DesktopOpenFluxConfig {
         )
     }
 
-    fun args(binary: Path, configPath: Path): List<String> = listOf(
+    fun args(binary: Path, configPath: Path, session: Boolean = false): List<String> = listOf(
         binary.toAbsolutePath().toString(),
-        "--bootstrap-stdio",
+        if (session) "--control-stdio" else "--bootstrap-stdio",
         "--config",
         configPath.toAbsolutePath().toString()
     )

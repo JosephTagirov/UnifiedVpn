@@ -7,6 +7,8 @@ import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
 import org.olcbox.app.data.model.VpnProfileConfig
+import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.vpn.VkCallsRuntimeConfig
 import org.olcbox.app.vpn.WireGuardConfigValues
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -35,6 +37,7 @@ internal fun profileRequiresTunSocksBridge(profileType: String): Boolean = when 
     VpnProfileConfig.TYPE_OLCRTC,
     VpnProfileConfig.TYPE_VLESS,
     VpnProfileConfig.TYPE_OPENFLUX -> true
+    VkCallsRuntimeConfig.ENGINE_TYPE -> true
     else -> false
 }
 
@@ -44,9 +47,14 @@ internal fun createSocksBackedVpnEngine(
     defaultSocksPort: Int,
     username: String,
     password: String,
-    log: (String) -> Unit
+    log: (String) -> Unit,
+    verificationContext: OpenFluxVerificationContext? = null,
+    location: LocationConfig? = null
 ): SocksBackedVpnEngine {
     val normalized = profile.normalized()
+    if (normalized.isOlcRtc() && location?.isVkCalls() == true) {
+        return createVkCallsVpnEngine(context, location, defaultSocksPort, username, password, log)
+    }
     val localSocksPort = existingProfileSocksPort(normalized)
     if (localSocksPort != null) {
         return ExistingSocksEngine(
@@ -64,7 +72,8 @@ internal fun createSocksBackedVpnEngine(
             socksPort = defaultSocksPort,
             username = username,
             password = password,
-            log = log
+            log = log,
+            verificationContext = verificationContext
         )
 
         VpnProfileConfig.TYPE_VLESS -> SingBoxVlessEngine(

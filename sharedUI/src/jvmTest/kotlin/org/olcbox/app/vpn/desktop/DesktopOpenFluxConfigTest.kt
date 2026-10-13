@@ -15,6 +15,24 @@ import kotlin.test.assertFalse
 
 class DesktopOpenFluxConfigTest {
     @Test
+    fun sessionUsesVersionTwoAndGracefulControlWithoutBrowserBootstrap() {
+        val session = config().copy(
+            documentUrl = "https://telemost.yandex.ru/j/12345678901234", version = 2,
+            encryptionKey = "Ab12".repeat(16), transport = OpenFluxProfileConfig.TRANSPORT_TELEMOST,
+            wireCodec = OpenFluxProfileConfig.CODEC_SESSION
+        )
+        val generated = Json.parseToJsonElement(
+            DesktopOpenFluxConfig.build(profile(session.toUri()), DesktopSocksProxySettings(port = 11982))
+        ).jsonObject
+        assertEquals("2", generated.getValue("version").jsonPrimitive.content)
+        assertEquals(session.encryptionKey, generated.getValue("encryption_key").jsonPrimitive.content)
+        assertEquals(OpenFluxProfileConfig.CODEC_SESSION, generated.getValue("wire_codec").jsonPrimitive.content)
+        val command = DesktopOpenFluxConfig.args(Path.of("core.exe"), Path.of("client.json"), session = true)
+        assertEquals("--control-stdio", command[1])
+        assertFalse(command.contains("--bootstrap-stdio"))
+    }
+
+    @Test
     fun buildsEncryptedClientWithSelectedLocalSocksSettings() {
         val imported = config().toJson()
         val generated = Json.parseToJsonElement(

@@ -229,6 +229,7 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
             "Lmobile/Mobile;",
             "Lmobile/Runtime;",
             "Lmobile/SocketProtector;",
+            "Ltlsbootstrap/Tlsbootstrap;",
         )
         private val EXPECTED_NATIVE_LIBRARIES = listOf(
             "libandroidx.graphics.path.so",
@@ -238,9 +239,11 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
             "libimage_processing_util_jni.so",
             "libolcbox_tun2socks.so",
             "libopenflux.so",
+            "libopenflux_session.so",
             "libsing-box.so",
             "libsurface_util_jni.so",
             "libxray.so",
+            "libvkcalls.so",
         )
 
         private const val UINT_SIZE = 4
@@ -292,13 +295,49 @@ val androidAbiFilters = providers.gradleProperty("olcbox.android.abiFilters")
 val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
     providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts")
 )
+val vkCallsArtifactDirectory = rootProject.layout.projectDirectory.dir(
+    providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts")
+)
+val vkCallsRevision = "403edd409011dd371796260196ecd17630df0fdd"
+val stageVkCallsAndroidLibraries = tasks.register<StageOpenFluxAndroidLibrariesTask>("stageVkCallsAndroidLibraries") {
+    val manifestFile = vkCallsArtifactDirectory.file("manifest.json")
+    inputs.file(manifestFile)
+    inputs.property("revision", vkCallsRevision)
+    androidAbiFilters.forEach { abi -> inputs.file(vkCallsArtifactDirectory.file("android/$abi/libvkcalls.so")) }
+    from(vkCallsArtifactDirectory.dir("android")) { include(androidAbiFilters.map { "$it/libvkcalls.so" }) }
+    outputDirectory.set(layout.buildDirectory.dir("generated/vkCallsJniLibs"))
+    into(outputDirectory)
+    doFirst {
+        val manifest = JsonSlurper().parse(manifestFile.asFile) as Map<*, *>
+        check(manifest["revision"] == vkCallsRevision) { "VK Calls source revision mismatch" }
+        val hashes = manifest["files"] as Map<*, *>
+        androidAbiFilters.forEach { abi ->
+            val name = "android/$abi/libvkcalls.so"
+            val bytes = vkCallsArtifactDirectory.file(name).asFile.readBytes()
+            val sha = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+            check(sha == hashes[name]) { "VK Calls Android artifact mismatch: $abi" }
+        }
+    }
+}
+val stageVkCallsNotices = tasks.register<StageOpenFluxAndroidLibrariesTask>("stageVkCallsNotices") {
+    from(vkCallsArtifactDirectory) { include("LICENSE", "NOTICE"); into("vkcalls") }
+    outputDirectory.set(layout.buildDirectory.dir("generated/vkCallsAssets"))
+    into(outputDirectory)
+}
 val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
 val generatedOpenFluxJniLibs = layout.buildDirectory.dir("generated/openfluxJniLibs")
 val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
-val expectedOpenFluxWrapper = 5
+val expectedOpenFluxWrapper = 8
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
+val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
+    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026101102")
+)
+val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
+val expectedOpenFluxSessionUpstream = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
+val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 1 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 
-fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFile: File, abi: String) {
+fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFile: File, abi: String, session: Boolean = false) {
     check(binary.isFile && binary.length() > 0L && !Files.isSymbolicLink(binary.toPath())) {
         "OpenFlux Android artifact is missing or invalid: $artifactName. Run tools/openflux/build.ps1 first."
     }
@@ -306,9 +345,9 @@ fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFi
         ?: error("Invalid OpenFlux artifact manifest")
     check(
         manifest["schema"] == 1 &&
-            manifest["upstream"] == expectedOpenFluxUpstream &&
-            manifest["protocol"] == expectedOpenFluxProtocol &&
-            manifest["version_text"] == "unified-openflux $expectedOpenFluxWrapper upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol"
+            manifest["upstream"] == (if (session) expectedOpenFluxSessionUpstream else expectedOpenFluxUpstream) &&
+            manifest["protocol"] == (if (session) expectedOpenFluxSessionProtocol else expectedOpenFluxProtocol) &&
+            manifest["version_text"] == (if (session) expectedOpenFluxSessionVersion else "unified-openflux $expectedOpenFluxWrapper upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol")
     ) { "OpenFlux artifact manifest does not match the pinned encrypted engine" }
     val expectedSha = ((manifest["files"] as? Map<*, *>)?.get(artifactName) as? String)?.lowercase()
     check(expectedSha?.matches(Regex("[0-9a-f]{64}")) == true) {
@@ -368,6 +407,30 @@ val stageOpenFluxAndroidLibraries = tasks.register<StageOpenFluxAndroidLibraries
                 artifactName,
                 openFluxManifest.asFile,
                 abi
+            )
+        }
+    }
+}
+val stageOpenFluxSessionAndroidLibraries = tasks.register<StageOpenFluxAndroidLibrariesTask>("stageOpenFluxSessionAndroidLibraries") {
+    group = "build"
+    description = "Stages the separate, manifest-verified OpenFlux Session engine."
+    inputs.file(openFluxSessionManifest)
+    inputs.property("sessionVersion", expectedOpenFluxSessionVersion)
+    inputs.property("abis", androidAbiFilters)
+    androidAbiFilters.forEach { abi ->
+        inputs.file(openFluxSessionDirectory.file("android/$abi/libopenflux_session.so"))
+    }
+    from(openFluxSessionDirectory.dir("android")) {
+        include(androidAbiFilters.map { "$it/libopenflux_session.so" })
+    }
+    outputDirectory.set(layout.buildDirectory.dir("generated/openfluxSessionJniLibs"))
+    into(outputDirectory)
+    doFirst {
+        androidAbiFilters.forEach { abi ->
+            val artifact = "android/$abi/libopenflux_session.so"
+            verifyOpenFluxAndroidArtifact(
+                openFluxSessionDirectory.file(artifact).asFile, artifact,
+                openFluxSessionManifest.asFile, abi, session = true
             )
         }
     }
@@ -471,6 +534,10 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // Go already strips this executable; retain its manifest-verified bytes.
+            keepDebugSymbols += "**/libopenflux.so"
+            keepDebugSymbols += "**/libopenflux_session.so"
+            keepDebugSymbols += "**/libvkcalls.so"
         }
     }
 }
@@ -496,9 +563,22 @@ dependencies {
 tasks.matching { task -> task.name == "preBuild" }.configureEach {
     dependsOn(":sharedUI:buildOlcrtcAndroidAar")
     dependsOn(":verifyAwgAndroidBinaries")
+    dependsOn(stageVkCallsNotices)
 }
 
 androidComponents.onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(
+        stageVkCallsNotices,
+        StageOpenFluxAndroidLibrariesTask::outputDirectory
+    )
+    variant.sources.jniLibs?.addGeneratedSourceDirectory(
+        stageVkCallsAndroidLibraries,
+        StageOpenFluxAndroidLibrariesTask::outputDirectory
+    )
+    variant.sources.jniLibs?.addGeneratedSourceDirectory(
+        stageOpenFluxSessionAndroidLibraries,
+        StageOpenFluxAndroidLibrariesTask::outputDirectory
+    )
     variant.sources.jniLibs?.addGeneratedSourceDirectory(
         stageOpenFluxAndroidLibraries,
         StageOpenFluxAndroidLibrariesTask::outputDirectory

@@ -50,6 +50,8 @@ data class LocationConfig(
 
     fun hasValidCryptoKey(): Boolean = isValidCryptoKey(key)
 
+    fun isVkCalls(): Boolean = normalizeProvider(bypassProvider) == PROVIDER_VK_CALLS
+
     fun displayName(): String = name.ifBlank { id }
 
     fun providerName(): String = providerDisplayName(bypassProvider)
@@ -61,6 +63,7 @@ data class LocationConfig(
         const val PROVIDER_TELEMOST = "telemost"
         const val PROVIDER_WB_STREAM = "wbstream"
         const val PROVIDER_JITSI = "jitsi"
+        const val PROVIDER_VK_CALLS = "vkcalls"
         const val DEFAULT_BYPASS_PROVIDER = PROVIDER_WB_STREAM
 
         const val TRANSPORT_DATACHANNEL = "datachannel"
@@ -77,7 +80,8 @@ data class LocationConfig(
             PROVIDER_JAZZ,
             PROVIDER_TELEMOST,
             PROVIDER_WB_STREAM,
-            PROVIDER_JITSI
+            PROVIDER_JITSI,
+            PROVIDER_VK_CALLS
         )
 
         val supportedTransports = listOf(
@@ -90,6 +94,7 @@ data class LocationConfig(
             val providerTransports = when (normalizeProvider(provider)) {
                 PROVIDER_TELEMOST -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
                 PROVIDER_JITSI -> listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL)
+                PROVIDER_VK_CALLS -> listOf(TRANSPORT_VP8CHANNEL)
                 else -> supportedTransports
             }
             return providerTransports.filter(::isTransportSupportedOnCurrentPlatform)
@@ -101,6 +106,7 @@ data class LocationConfig(
                 PROVIDER_TELEMOST, "yandex", "yandex_telemost" -> PROVIDER_TELEMOST
                 PROVIDER_WB_STREAM, "wbstream", "wb-stream", "wildberries" -> PROVIDER_WB_STREAM
                 PROVIDER_JITSI, "jitsi-meet", "jitsi_meet", "meet" -> PROVIDER_JITSI
+                PROVIDER_VK_CALLS, "vk", "vk_calls", "vk-calls" -> PROVIDER_VK_CALLS
                 else -> DEFAULT_BYPASS_PROVIDER
             }
         }
@@ -140,6 +146,7 @@ data class LocationConfig(
                 PROVIDER_TELEMOST -> "Telemost"
                 PROVIDER_WB_STREAM -> "WB Stream"
                 PROVIDER_JITSI -> "Jitsi"
+                PROVIDER_VK_CALLS -> "VK Calls"
                 else -> "WB Stream"
             }
         }

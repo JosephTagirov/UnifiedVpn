@@ -30,6 +30,8 @@ PUBLIC_LIMITS = {"openflux": 256 * 1024 * 1024, "source.tar.gz": 512 * 1024 * 10
                  "provenance.json": 65536}
 PLAN_FIELDS = {"schema", "instance", "owner", "source_instance", "binary_sha256", "source_sha256",
                "runtime_image", "licenses_sha256", "subnet", "server_sha256", "profile_sha256"}
+ADMIN_PLAN_FIELDS = PLAN_FIELDS | {"display_name", "admin_manifest_sha256"}
+_browser_backend = None
 
 
 class PreparationError(Exception):
@@ -111,7 +113,15 @@ def document_identity(value):
     if any(char.isspace() for char in value) or "#" in value:
         fail("The private document URL must not contain whitespace or fragments.")
     parts = urlsplit(value)
-    parameters = [(key, item) for key, item in parse_qsl(parts.query, keep_blank_values=True)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    authoritative = [item for key, item in query if key.lower() == "url"]
+    if authoritative:
+        if len(authoritative) != 1 or not authoritative[0]:
+            fail("The document URL contains an ambiguous document identifier.")
+        return ("yandex-document", authoritative[0])
+    if re.fullmatch(r"/(?:i|d)/[A-Za-z0-9_-]+/?", parts.path):
+        return ("yandex-share", parts.path.rstrip("/"))
+    parameters = [(key, item) for key, item in query
                   if not key.lower().startswith("utm_") and key.lower() not in ("gclid", "fbclid", "yclid")]
     return parts.hostname, parts.path, tuple(sorted(parameters))
 
@@ -211,12 +221,84 @@ def read_document(args):
 
 def profile_uri(config, name):
     profile = {field: config[field] for field in ("document_url", "encryption_key", "version", "transport")}
+    codec = manage.validate_wire_codec(config.get("wire_codec", manage.DEFAULT_WIRE_CODEC), config["transport"])
+    if codec != manage.DEFAULT_WIRE_CODEC:
+        profile["wire_codec"] = codec
     encoded = base64.urlsafe_b64encode(json.dumps(profile, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
     return b"openflux://" + encoded.rstrip(b"=") + b"#" + quote(name, safe="").encode("ascii") + b"\n"
 
 
+def browser_backend():
+    global _browser_backend
+    if _browser_backend is None:
+        for name in ("browser_service.py", "browser_supervisor.py", "browser_worker.py", "manage.py", "create_profile.py", "Dockerfile", "entrypoint.sh"):
+            manage.require_secure_file(SCRIPT_DIR / name)
+        spec = importlib.util.spec_from_file_location("openflux_profile_browser_service", SCRIPT_DIR / "browser_service.py")
+        module = importlib.util.module_from_spec(spec)
+        source = read_bounded(SCRIPT_DIR / "browser_service.py", 262144)
+        exec(compile(source, str(SCRIPT_DIR / "browser_service.py"), "exec", dont_inherit=True), module.__dict__)
+        module.manage = manage
+        module.browser.manage = manage
+        _browser_backend = module
+    return _browser_backend
+
+
+def prepare_admin(args):
+    backend = browser_backend()
+    if args.reuse_instance is not None or args.subnet is not None:
+        fail("Browser administration uses only the reviewed manifest's artifact source and subnet pool.")
+    manifest_path = args.admin_manifest or SCRIPT_DIR / "admin-runtime.json"
+    manifest = backend.read_manifest(manifest_path)
+    name = args.instance
+    if name is None and sys.stdin.isatty():
+        name = input("New profile name (1..9 lowercase letters/digits, for example phone3): ").strip()
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9]{0,8}", name):
+        fail("Use a new name of 1..9 lowercase letters/digits, starting with a letter.")
+    instance = "browser" + name
+    target = manage.Manager(instance=instance).root
+    if target.exists() or target.is_symlink():
+        fail("That browser profile already exists; it will not be replaced.")
+    if args.transport is None:
+        if not sys.stdin.isatty():
+            fail("Browser administration requires an explicit --transport yandex or vyandex.")
+        args.transport = input("Editor: yandex (classic) or vyandex (Volga): ").strip()
+    manage.validate_transport(args.transport)
+    codec = manage.validate_wire_codec(manage.DEFAULT_WIRE_CODEC if args.wire_codec is None else args.wire_codec, args.transport)
+    if manifest["source_instance"] == instance:
+        fail("The new instance cannot be its own artifact source.")
+    artifacts = public_artifacts(manifest["source_instance"])
+    if any(artifacts[field] != value for field, value in manifest["artifacts"].items()):
+        fail("Installed public artifacts differ from the reviewed admin manifest.")
+    output = args.output or PROFILE_PARENT / ("unifiedvpn-openflux-profile-" + instance)
+    backend.canonical_path(output)
+    validate_output_path(output)
+    manage.secure_directory(output.parent)
+    if output.exists() or output.is_symlink():
+        fail("The prepared directory already exists; no profile or key was overwritten.")
+    document = read_document(args)
+    require_new_document(document)
+    output.mkdir(mode=0o700)
+    manifest_hash = backend.freeze_runtime(output, manifest)
+    config = {"version": 1, "mode": "server", "transport": args.transport, "document_url": document,
+              "encryption_key": secrets.token_hex(32), "handshake_timeout_seconds": 60}
+    if codec != manage.DEFAULT_WIRE_CODEC:
+        config["wire_codec"] = codec
+    server = json_bytes(manage.validate_config(config))
+    uri = profile_uri(config, "OpenFlux " + name)
+    plan = dict(artifacts, schema=backend.PLAN_SCHEMA, instance=instance, owner=secrets.token_hex(32), subnet=None,
+                display_name=name, admin_manifest_sha256=manifest_hash,
+                server_sha256=hashlib.sha256(server).hexdigest(), profile_sha256=hashlib.sha256(uri).hexdigest())
+    write_private(output / "server.json", server)
+    write_private(output / "profile.uri", uri)
+    write_private(output / "plan.json", json_bytes(plan))
+    return output
+
+
 def prepare(args):
+    if args.browser_companion:
+        return prepare_admin(args)
     transport = manage.validate_transport("yandex" if args.transport is None else args.transport)
+    codec = manage.validate_wire_codec(manage.DEFAULT_WIRE_CODEC if args.wire_codec is None else args.wire_codec, transport)
     instance = args.instance
     if instance is None:
         if not sys.stdin.isatty():
@@ -250,6 +332,8 @@ def prepare(args):
     output.mkdir(mode=0o700)
     config = {"version": 1, "mode": "server", "transport": transport, "document_url": document,
               "encryption_key": secrets.token_hex(32), "handshake_timeout_seconds": 60}
+    if codec != manage.DEFAULT_WIRE_CODEC:
+        config["wire_codec"] = codec
     manage.validate_config(config)
     server = json_bytes(config)
     uri = profile_uri(config, "OpenFlux " + instance)
@@ -265,7 +349,8 @@ def read_plan(directory, with_inputs=True):
     validate_output_path(directory)
     private_directory(directory)
     plan = manage.decode_json(read_bounded(directory / "plan.json", 65536, private=True))
-    if not isinstance(plan, dict) or set(plan) != PLAN_FIELDS or plan["schema"] != SCHEMA:
+    admin = isinstance(plan, dict) and plan.get("schema") == "unifiedvpn-openflux-admin-profile-v1"
+    if not isinstance(plan, dict) or set(plan) != (ADMIN_PLAN_FIELDS if admin else PLAN_FIELDS) or not admin and plan["schema"] != SCHEMA:
         fail("The prepared plan has an unsupported schema.")
     named_instance(plan["instance"])
     manage.instance_name(plan["source_instance"])
@@ -281,14 +366,17 @@ def read_plan(directory, with_inputs=True):
         not isinstance(value, str) or not manage.HASH_RE.fullmatch(value) for value in licenses.values()
     ):
         fail("The prepared license checksums are invalid.")
-    manage.validate_subnet(plan["subnet"])
+    if admin:
+        browser_backend().validate_snapshot(directory, plan)
+    else:
+        manage.validate_subnet(plan["subnet"])
     if with_inputs:
         server = read_bounded(directory / "server.json", 16384, private=True)
         uri = read_bounded(directory / "profile.uri", 32768, private=True)
         if hashlib.sha256(server).hexdigest() != plan["server_sha256"] or hashlib.sha256(uri).hexdigest() != plan["profile_sha256"]:
             fail("Prepared private files changed; refusing to use a modified plan.")
         config = manage.validate_config(manage.decode_json(server))
-        if uri != profile_uri(config, "OpenFlux " + plan["instance"]):
+        if uri != profile_uri(config, "OpenFlux " + (plan["display_name"] if admin else plan["instance"])):
             fail("The private client profile does not match the server configuration.")
     return plan
 
@@ -307,6 +395,10 @@ def apply_prepared(directory):
     args = SimpleNamespace(binary=source / "openflux", binary_sha256=plan["binary_sha256"],
                            source_archive=source / "source.tar.gz", source_sha256=plan["source_sha256"],
                            licenses_dir=source, runtime_image=plan["runtime_image"], config=directory / "server.json", subnet=plan["subnet"])
+    if plan["schema"] != SCHEMA:
+        browser_backend().AdminService(directory).install(args)
+        print("New browser service enabled. A client handshake and real traffic are still required; Connected is not asserted.")
+        return
     manager.check(args)
     manager.install(args, owner=plan["owner"])
     if manager.load_state()["owner"] != plan["owner"]:
@@ -318,6 +410,16 @@ def apply_prepared(directory):
 
 def rollback_prepared(directory):
     plan = read_plan(directory, with_inputs=False)
+    if plan["schema"] != SCHEMA:
+        backend = browser_backend()
+        if not (directory / "browser-service.json").exists():
+            if manage.Manager(instance=plan["instance"]).root.exists():
+                fail("An installation without the prepared service receipt requires inspection; nothing was removed.")
+            print("No service installation was begun. Private preparation files were retained.")
+            return
+        backend.AdminService(directory).rollback()
+        print("Only the new owned browser service and instance were removed. Private preparation files were retained.")
+        return
     manager = manage.Manager(instance=plan["instance"])
     if not manager.root.exists() and not manager.root.is_symlink():
         print("No installation exists for this prepared instance. Private input files were retained.")
@@ -339,11 +441,16 @@ def parser():
     result.add_argument("--document-file", type=Path, help="Private mode-0600 URL file instead of hidden terminal input")
     result.add_argument("--transport", choices=("yandex", "vyandex"),
                         help="yandex: legacy editor (default); vyandex: new Volga editor; no automatic fallback")
+    result.add_argument("--wire-codec", choices=("legacy-lz4-v1", "batch-zstd-v2"),
+                        help="legacy-lz4-v1 (default), or explicit yandex-only batch-zstd-v2; both peers must match")
     result.add_argument("--confirm-legacy-document", action="store_true", help="Confirm a separate unused editable legacy document")
     result.add_argument("--confirm-volga-document", action="store_true", help="Confirm a separate unused editable new Volga document")
     result.add_argument("--reuse-instance", help="Installed verified public artifact source (default: default)")
     result.add_argument("--subnet", help="Unused RFC1918 /24../29; checked against host routes/Docker only with --apply")
     result.add_argument("--output", type=Path, help="New private directory; never overwrites existing files")
+    result.add_argument("--browser-companion", action="store_true", help="Prepare a fresh browser-backed profile using the reviewed admin manifest")
+    result.add_argument("--admin-manifest", type=Path, help="Root-owned admin manifest (default: adjacent admin-runtime.json)")
+    result.add_argument("--confirm-start", action="store_true", help="Explicitly confirm new browser service startup for noninteractive --apply")
     result.add_argument("--prepared", type=Path, help="Previously prepared private directory")
     result.add_argument("--apply", action="store_true", help="Explicitly permit local Docker installation/start or rollback")
     result.add_argument("--rollback", action="store_true", help="Remove only the new plan-owned instance; requires --prepared --apply")
@@ -351,7 +458,9 @@ def parser():
 
 
 def prepared_command(directory):
-    return "sudo python3 -I " + shlex.quote(str(SCRIPT_DIR / "create_profile.py")) + " --prepared " + shlex.quote(str(directory))
+    frozen = directory / "runtime/create_profile.py"
+    script = frozen if frozen.exists() else SCRIPT_DIR / "create_profile.py"
+    return "sudo python3 -I " + shlex.quote(str(script)) + " --prepared " + shlex.quote(str(directory))
 
 
 def main(argv=None):
@@ -362,16 +471,21 @@ def main(argv=None):
         require_host()
         if args.rollback and (args.prepared is None or not args.apply):
             fail("Rollback requires --prepared and explicit --apply; nothing was changed.")
-        if args.prepared is not None and any((args.instance, args.document_file, args.transport,
+        if args.admin_manifest is not None and not args.browser_companion:
+            fail("An admin manifest applies only to a new browser-backed profile.")
+        if args.prepared is not None and any((args.instance, args.document_file, args.transport, args.wire_codec,
                                              args.confirm_legacy_document, args.confirm_volga_document,
-                                             args.reuse_instance, args.subnet, args.output)):
+                                             args.reuse_instance, args.subnet, args.output, args.browser_companion, args.admin_manifest)):
             fail("Do not combine --prepared with new-profile options.")
         directory = args.prepared if args.prepared is not None else prepare(args)
         if args.rollback:
             rollback_prepared(directory)
             return 0
-        read_plan(directory)
+        plan = read_plan(directory)
         if args.apply:
+            if plan["schema"] != SCHEMA and not args.confirm_start:
+                if not sys.stdin.isatty() or input("Create and enable only this new browser service? Type yes: ").strip().lower() != "yes":
+                    fail("New service startup was not confirmed. Prepared files remain; use --confirm-start for explicit noninteractive apply.")
             apply_prepared(directory)
         else:
             print("Prepared private files only. Docker was not contacted; no network or server process was changed.")

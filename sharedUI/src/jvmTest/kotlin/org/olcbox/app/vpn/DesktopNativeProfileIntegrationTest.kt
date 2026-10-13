@@ -11,6 +11,7 @@ import java.io.InputStream
 import java.net.ConnectException
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
@@ -155,11 +156,28 @@ class DesktopNativeProfileIntegrationTest {
                 withTimeout(STOP_TIMEOUT_MS) {
                     while (ownedOpenFlux!!.isAlive) delay(100L)
                 }
-                val listenerClosed = Socket().use { socket ->
-                    runCatching { socket.connect(InetSocketAddress(proxy.host, proxy.port), 1_000) }
-                        .exceptionOrNull() is ConnectException
+                var listenerClosed = false
+                var lastProbe = "not attempted"
+                var probeCount = 0
+                val stopDeadline = System.nanoTime() + STOP_TIMEOUT_MS * 1_000_000
+                while (System.nanoTime() < stopDeadline) {
+                    val closeFailure = Socket(Proxy.NO_PROXY).use { socket ->
+                        runCatching { socket.connect(InetSocketAddress(proxy.host, proxy.port), 3_000) }
+                            .exceptionOrNull()
+                    }
+                    probeCount++
+                    lastProbe = closeFailure?.javaClass?.simpleName ?: "connection succeeded"
+                    if (closeFailure is ConnectException) {
+                        listenerClosed = true
+                        break
+                    }
+                    delay(100L)
                 }
-                assertTrue(listenerClosed, "OpenFlux SOCKS listener remains open after stop")
+                assertTrue(
+                    listenerClosed,
+                    "OpenFlux SOCKS closure was not confirmed: $lastProbe (probes=$probeCount)"
+                )
+                println("OpenFlux direct SOCKS closure confirmed; probes=$probeCount")
                 val runtimeDir = protectedDataRoot!!.resolve("Roaming/Olcbox/runtime")
                 if (Files.exists(runtimeDir)) {
                     Files.list(runtimeDir).use { files ->
@@ -198,11 +216,12 @@ class DesktopNativeProfileIntegrationTest {
     }
 
     private fun ownedOpenFluxProcess(protectedRoot: Path): ProcessHandle? {
-        val expectedBinary = protectedRoot.resolve("Roaming/Olcbox/bin/openflux-windows-amd64.exe")
+        val expectedBinaries = setOf("openflux-windows-amd64.exe", "openflux-session-windows-amd64.exe")
+            .map { protectedRoot.resolve("Roaming/Olcbox/bin/$it") }.toSet()
         return ProcessHandle.current().children().use { children ->
             children.iterator().asSequence().singleOrNull { child ->
                 child.isAlive && child.info().command().orElse(null)
-                    ?.let(Path::of)?.toAbsolutePath()?.normalize() == expectedBinary
+                    ?.let(Path::of)?.toAbsolutePath()?.normalize() in expectedBinaries
             }
         }
     }
@@ -247,7 +266,7 @@ class DesktopNativeProfileIntegrationTest {
         val target = targetHost.toByteArray(StandardCharsets.US_ASCII)
         require(target.size <= 255)
 
-        Socket().use { socket ->
+        Socket(Proxy.NO_PROXY).use { socket ->
             socket.connect(InetSocketAddress(proxy.host, proxy.port), 10_000)
             socket.soTimeout = 30_000
             val input = socket.getInputStream()

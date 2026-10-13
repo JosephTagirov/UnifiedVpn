@@ -22,8 +22,10 @@ from urllib.parse import urlsplit
 
 UPSTREAM = "d34dc8caa70ca059cd80d8f5753499361052dabc"
 PROTOCOL = "unified-openflux-aesgcm-v1"
-VERSION = f"unified-openflux 5 upstream={UPSTREAM} protocol={PROTOCOL}"
+VERSION = f"unified-openflux 8 upstream={UPSTREAM} protocol={PROTOCOL}"
 TRANSPORTS = ("yandex", "vyandex")
+DEFAULT_WIRE_CODEC = "legacy-lz4-v1"
+WIRE_CODECS = (DEFAULT_WIRE_CODEC, "batch-zstd-v2")
 INSTALL_DIR = Path("/opt/unifiedvpn-openflux")
 NAME = "unifiedvpn-openflux"
 NETWORK = NAME + "-net"
@@ -116,15 +118,25 @@ def validate_transport(value):
     return value
 
 
+def validate_wire_codec(value, transport):
+    validate_transport(transport)
+    if not isinstance(value, str) or value not in WIRE_CODECS:
+        fail("Select legacy-lz4-v1 or batch-zstd-v2; no automatic codec fallback is supported.")
+    if value == "batch-zstd-v2" and transport != "yandex":
+        fail("batch-zstd-v2 requires the explicitly selected yandex classic-editor transport.")
+    return value
+
+
 def validate_config(config):
     fields = {"version", "mode", "transport", "document_url", "encryption_key", "handshake_timeout_seconds"}
-    if not isinstance(config, dict) or set(config) != fields:
-        fail("Server JSON must contain exactly the documented server fields.")
+    if not isinstance(config, dict) or set(config) not in (fields, fields | {"wire_codec"}):
+        fail("Server JSON must contain the documented server fields and optional wire_codec only.")
     if type(config["version"]) is not int or config["version"] != 1:
         fail("Only server configuration version 1 is supported.")
     if config["mode"] != "server":
         fail("This deployment supports only encrypted Yandex server mode.")
     validate_transport(config["transport"])
+    validate_wire_codec(config.get("wire_codec", DEFAULT_WIRE_CODEC), config["transport"])
     validate_document_url(config["document_url"])
     key = config["encryption_key"]
     if not isinstance(key, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", key):
@@ -267,7 +279,15 @@ class Manager:
     def inspect(self, kind, name):
         result = self.docker(kind, "inspect", name, allow_failure=True)
         if result.returncode:
-            return None
+            missing = {f"{prefix}No such {label}: {name}"
+                       for prefix in ("Error: ", "Error response from daemon: ")
+                       for label in (kind, "object")}
+            if kind == "network":
+                missing |= {f"{prefix}network {name} not found"
+                            for prefix in ("Error: ", "Error response from daemon: ")}
+            if result.returncode == 1 and result.stdout.strip() in ("", "[]") and result.stderr.strip() in missing:
+                return None
+            fail("Docker could not confirm resource absence; nothing was adopted or removed.")
         entries = decode_json(result.stdout)
         if not isinstance(entries, list) or len(entries) != 1:
             fail("Docker returned an unexpected resource description.")
@@ -553,8 +573,8 @@ class Manager:
         print("Owned installation and its private config copy removed. Original input files and runtime image retained.")
 
 
-def configure(path, transport="yandex"):
-    validate_transport(transport)
+def configure(path, transport="yandex", wire_codec=DEFAULT_WIRE_CODEC):
+    validate_wire_codec(wire_codec, transport)
     if platform.system() != "Linux" or os.geteuid() != 0:
         fail("Create the server secret file as root on Linux.")
     path = Path(path)
@@ -570,6 +590,8 @@ def configure(path, transport="yandex"):
     validate_document_url(document_url)
     config = {"version": 1, "mode": "server", "transport": transport, "document_url": document_url,
               "encryption_key": secrets.token_hex(32), "handshake_timeout_seconds": 60}
+    if wire_codec != DEFAULT_WIRE_CODEC:
+        config["wire_codec"] = wire_codec
     with path.open("x", encoding="utf-8") as stream:
         os.chmod(path, 0o600)
         json.dump(config, stream, indent=2)
@@ -593,6 +615,8 @@ def parser():
     result.add_argument("--output", type=Path, help="New private file for configure; existing files are never overwritten")
     result.add_argument("--transport", choices=TRANSPORTS,
                         help="configure only: yandex legacy editor (default) or vyandex new Volga editor; no fallback")
+    result.add_argument("--wire-codec", choices=WIRE_CODECS,
+                        help="configure only: legacy-lz4-v1 (default), or explicit yandex-only batch-zstd-v2; both peers must match")
     return result
 
 
@@ -602,6 +626,8 @@ def main(argv=None):
     try:
         if args.transport is not None and args.command != "configure":
             fail("--transport is only for configure; existing commands use the transport in the private config.")
+        if args.wire_codec is not None and args.command != "configure":
+            fail("--wire-codec is only for configure; existing commands use the codec in the private config.")
         if SCRIPT_DIR.parent == INSTALL_DIR.parent and SCRIPT_DIR.name.startswith(NAME + "-"):
             if instance_name(args.instance) != SCRIPT_DIR.name:
                 fail("This installed manager requires its matching --instance; nothing was changed.")
@@ -610,7 +636,10 @@ def main(argv=None):
         if args.command == "configure":
             if args.output is None:
                 fail("configure requires --output with a path in a root-owned directory.")
-            configure(args.output, args.transport or "yandex")
+            if args.wire_codec is None:
+                configure(args.output, args.transport or "yandex")
+            else:
+                configure(args.output, args.transport or "yandex", wire_codec=args.wire_codec)
         elif args.command in ("check", "install"):
             getattr(Manager(instance=args.instance), args.command)(args)
         else:

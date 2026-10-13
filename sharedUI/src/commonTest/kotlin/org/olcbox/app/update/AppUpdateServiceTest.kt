@@ -89,6 +89,45 @@ class AppUpdateServiceTest {
     }
 
     @Test
+    fun release2026101301SelectsNewMsiAndUniversalApkOverHistoricAssets() {
+        val assets = listOf(
+            "UnifiedVPN-0.0.14-build.2026092406-windows-amd64-installer.exe",
+            "UnifiedVPN-0.0.14-build.2026092406-android-universal.apk",
+            "UnifiedVPN-0.0.14-build.2026101301-windows-amd64.msi",
+            "UnifiedVPN-0.0.14-build.2026101301-android.apk",
+            "UnifiedVPN-0.0.14-build.2026101301-portable-manual.zip",
+            "openflux-session-build.2026101301-source.tar.gz",
+            "THIRD-PARTY-NOTICES-build.2026101301.zip"
+        ).map { GithubReleaseAsset(it, "https://example/$it") }
+
+        assertEquals(
+            "UnifiedVPN-0.0.14-build.2026101301-windows-amd64.msi",
+            AppUpdateService.selectAsset(assets, UpdatePlatform("windows", "amd64"))?.name
+        )
+        for (arch in listOf("arm64-v8a", "armeabi-v7a", "x86_64")) {
+            assertEquals(
+                "UnifiedVPN-0.0.14-build.2026101301-android.apk",
+                AppUpdateService.selectAsset(assets, UpdatePlatform("android", arch))?.name
+            )
+        }
+    }
+
+    @Test
+    fun release2026101301UpdatesOlderBuildButNotItselfOrNewerVersions() {
+        for (build in listOf(2026092406L, 2026100702L, 2026101102L)) {
+            assertTrue(AppUpdateService.isUpdateAvailable(
+                ReleaseChannel.Stable, "v0.0.14", "0.0.14", 2026101301L, build
+            ))
+        }
+        assertFalse(AppUpdateService.isUpdateAvailable(
+            ReleaseChannel.Stable, "v0.0.14", "0.0.14", 2026101301L, 2026101301L
+        ))
+        assertFalse(AppUpdateService.isUpdateAvailable(
+            ReleaseChannel.Stable, "v0.0.14", "0.0.15", 2026101301L, 1L
+        ))
+    }
+
+    @Test
     fun windowsInstallerMustMatchTheSelectedBuild() {
         val assets = listOf(
             GithubReleaseAsset(

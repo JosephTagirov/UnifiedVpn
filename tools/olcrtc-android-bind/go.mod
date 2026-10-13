@@ -4,6 +4,8 @@ go 1.26.3
 
 require github.com/openlibrecommunity/olcrtc v0.0.2-0.20260827214920-d7a00da5242f
 
+require unified-vpn.local/olcrtc-tls v0.0.1
+
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.11-20260415201107-50325440f8f2.1 // indirect
 	buf.build/go/protovalidate v1.2.0 // indirect

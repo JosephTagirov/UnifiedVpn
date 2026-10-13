@@ -132,6 +132,69 @@ function Read-MsiRows([object]$Database, [string]$Query, [int]$Columns) {
     }
 }
 
+function Assert-WindowsReplacementPolicy(
+    [object[]]$SequenceRows,
+    [object[]]$CustomActionRows,
+    [object[]]$CloseApplicationRows,
+    [string]$ApplicationName
+) {
+    $sequence = @{}
+    $conditions = @{}
+    foreach ($row in $SequenceRows) {
+        if ($sequence.ContainsKey($row[0])) { throw 'Duplicate MSI sequence action' }
+        $sequence[$row[0]] = [int]$row[2]
+        $conditions[$row[0]] = $row[1]
+    }
+    $ordered = @('CostInitialize', 'WixCloseApplications', 'UnifiedVpnRequireClosed',
+        'UnifiedVpnRequireReboot', 'InstallValidate', 'InstallInitialize', 'RemoveExistingProducts', 'ProcessComponents')
+    $previous = 0
+    foreach ($action in $ordered) {
+        if (-not $sequence.ContainsKey($action) -or $sequence[$action] -le $previous) {
+            throw "MSI replacement/preflight sequence is unsafe at $action"
+        }
+        $previous = $sequence[$action]
+    }
+    $installOrRepair = 'NOT REMOVE~="ALL"'
+    $expectedConditions = @{
+        WixCloseApplications = $installOrRepair
+        UnifiedVpnRequireClosed = "$installOrRepair AND UNIFIEDVPN_APP_RUNNING"
+        UnifiedVpnRequireReboot = "$installOrRepair AND MsiSystemRebootPending"
+    }
+    foreach ($action in $expectedConditions.Keys) {
+        if ($conditions[$action] -cne $expectedConditions[$action]) {
+            throw "MSI preflight condition changed for $action"
+        }
+    }
+    $customActions = @{}
+    foreach ($row in $CustomActionRows) {
+        if ($customActions.ContainsKey($row[0])) { throw 'Duplicate MSI custom action' }
+        $customActions[$row[0]] = $row
+    }
+    foreach ($action in @('UnifiedVpnRequireClosed', 'UnifiedVpnRequireReboot')) {
+        $row = $customActions[$action]
+        if ($null -eq $row -or [int]$row[1] -ne 19 -or $row[2] -ne '' -or [string]::IsNullOrWhiteSpace($row[3])) {
+            throw "MSI preflight must stop with an actionable error: $action"
+        }
+    }
+    if ($customActions['UnifiedVpnRequireClosed'][3] -notlike '*Close UnifiedVPN*' -or
+        $customActions['UnifiedVpnRequireReboot'][3] -notlike '*Restart Windows*') {
+        throw 'MSI preflight messages must explain how to retry safely'
+    }
+    $detectAction = $customActions['WixCloseApplications']
+    if ($null -eq $detectAction -or [int]$detectAction[1] -ne 1 -or
+        [string]::IsNullOrWhiteSpace($detectAction[2]) -or $detectAction[3] -cne 'WixCloseApplications') {
+        throw 'MSI running-application detection must be immediate and checked'
+    }
+    if ($CloseApplicationRows.Count -ne 1) { throw 'Expected one non-destructive MSI application detector' }
+    $detector = $CloseApplicationRows[0]
+    if ($detector[0] -cne 'UnifiedVpnDetectRunningApp' -or $detector[1] -cne "$ApplicationName.exe" -or
+        $detector[2] -cne $installOrRepair -or [int]$detector[3] -ne 0 -or
+        $detector[4] -cne 'UNIFIEDVPN_APP_RUNNING' -or $detector[5] -ne '' -or
+        ($detector[6] -ne '' -and [int]$detector[6] -ne 0)) {
+        throw 'MSI application guard must only detect: no close, terminate, prompt-to-ignore, or reboot actions'
+    }
+}
+
 $identity = @('UnifiedVPN.WindowsInstaller.ProductCode.v1', $ExpectedVendor, $ExpectedName,
     $ExpectedVersion, $ExpectedBuild.ToString([Globalization.CultureInfo]::InvariantCulture))
 foreach ($part in $identity) {
@@ -196,14 +259,10 @@ try {
             default { throw 'Unexpected MSI upgrade action' }
         }
     }
-    $sequence = @{}
-    foreach ($row in (Read-MsiRows $database 'SELECT `Action`, `Sequence` FROM `InstallExecuteSequence`' 2)) {
-        $sequence[$row[0]] = [int]$row[1]
-    }
-    if (-not $sequence.ContainsKey('RemoveExistingProducts') -or -not $sequence.ContainsKey('CostInitialize') -or
-        $sequence['RemoveExistingProducts'] -ge $sequence['CostInitialize']) {
-        throw 'MSI replacement sequence changed'
-    }
+    $sequenceRows = Read-MsiRows $database 'SELECT `Action`, `Condition`, `Sequence` FROM `InstallExecuteSequence`' 3
+    $customActionRows = Read-MsiRows $database 'SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`' 4
+    $closeApplicationRows = Read-MsiRows $database 'SELECT `WixCloseApplication`, `Target`, `Condition`, `Attributes`, `Property`, `Timeout`, `TerminateExitCode` FROM `WixCloseApplication`' 7
+    Assert-WindowsReplacementPolicy $sequenceRows $customActionRows $closeApplicationRows $ExpectedName
     [pscustomobject]@{
         Status = 'PASS'
         Version = $ExpectedVersion
@@ -211,6 +270,9 @@ try {
         ProductCode = $productCode.ToString('B').ToUpperInvariant()
         UpgradeCode = $ExpectedUpgradeCode.ToString('B').ToUpperInvariant()
         SameVersionUpgrade = $true
+        SafeReplacementSequence = $true
+        RunningApplicationGuard = 'detect-only'
+        PendingFileRebootGuard = $true
         InstallerSha256 = Get-Sha256 $source
         MsiSha256 = Get-Sha256 $msi
     } | ConvertTo-Json -Compress

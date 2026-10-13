@@ -13,18 +13,36 @@ reusing a bridge is not a zero-impact guarantee. Keep the
 provider console available. Do not run a trial while an affected OpenFlux
 profile is in use, and do not interrupt the user's working Jitsi/VPN path.
 
-The target is wrapper 4 at upstream
+The target is wrapper 7 at upstream
 `d34dc8caa70ca059cd80d8f5753499361052dabc`, with L4 TCP forwarding, bounded
 native buffers, mandatory directional AES-GCM, authenticated peer control and
 legacy LZ4. The server JSON schema and exact document/key bytes remain unchanged.
 No batching, key rotation, profile re-export, or automatic protocol fallback is
 part of this upgrade.
 
+For a browser-assisted deployment, update the core and helper as a matched pair.
+An old strict core rejects the optional `user_agent` field in new successful
+browser replies. Wrapper 7 accepts old cookie-only replies, but they do not
+provide User-Agent matching. Retain the original pair for rollback and follow
+the [paired rollout warning](BROWSER_BOOTSTRAP.md#paired-core-and-helper-rollout).
+This compatibility requirement is not a live deployment or Android release test.
+
+При использовании браузерной проверки обновляйте ядро и помощник согласованно.
+Старое строгое ядро отклоняет новое необязательное поле `user_agent` успешного
+ответа. Wrapper 7 принимает прежний ответ только с cookies, но совпадение
+User-Agent тогда не обеспечивается. Сохраняйте исходную пару для отката; см.
+[предупреждение об обновлении](BROWSER_BOOTSTRAP.md#согласованное-обновление-ядра-и-помощника).
+Это требование совместимости, а не подтверждение установки или проверки релиза Android.
+
 ## Preservation And Scope
 
 `upgrade.py` requires an explicit `--instance`, including `--instance default`.
-It accepts only root-owned legacy installations at the original fixed `/opt`
-paths, pinned to `4f1bdb554c262f3ae9adbfe317a092c6b929ba7d` and wrapper 1, 2 or 3.
+It accepts only root-owned installations at the original fixed `/opt` paths:
+wrappers 1, 2 and 3 must be pinned to `4f1bdb554c262f3ae9adbfe317a092c6b929ba7d`,
+and wrappers 4, 5 and 6 to `d34dc8caa70ca059cd80d8f5753499361052dabc`.
+The version, upstream, image label and artifact hashes must agree. Existing
+`wire_codec` must be absent or `legacy-lz4-v1`; this helper does not migrate a
+profile to `batch-zstd-v2`. Test the new codec with a separate new profile instead.
 Original source, binary, provenance, helper, private configuration and state are
 hashed. Container ID, image ID, ownership labels, private bind mount, bridge ID,
 subnet and attached endpoints must match. Names alone never authorize mutation.

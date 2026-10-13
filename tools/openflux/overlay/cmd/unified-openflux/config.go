@@ -14,19 +14,25 @@ import (
 	"unicode"
 )
 
-const versionText = "unified-openflux 5 upstream=d34dc8caa70ca059cd80d8f5753499361052dabc protocol=unified-openflux-aesgcm-v1"
+const versionText = "unified-openflux 8 upstream=d34dc8caa70ca059cd80d8f5753499361052dabc protocol=unified-openflux-aesgcm-v1"
+
+const (
+	legacyWireCodec = "legacy-lz4-v1"
+	batchWireCodec  = "batch-zstd-v2"
+)
 
 type configuration struct {
-	Version                 int    `json:"version"`
-	Mode                    string `json:"mode"`
-	Transport               string `json:"transport"`
-	DocumentURL             string `json:"document_url"`
-	EncryptionKey           string `json:"encryption_key"`
-	SOCKS5                  string `json:"socks5,omitempty"`
-	SOCKSUsername           string `json:"socks_username,omitempty"`
-	SOCKSPassword           string `json:"socks_password,omitempty"`
-	DNSServer               string `json:"dns_server,omitempty"`
-	HandshakeTimeoutSeconds int    `json:"handshake_timeout_seconds"`
+	Version                 int     `json:"version"`
+	Mode                    string  `json:"mode"`
+	Transport               string  `json:"transport"`
+	WireCodec               *string `json:"wire_codec,omitempty"`
+	DocumentURL             string  `json:"document_url"`
+	EncryptionKey           string  `json:"encryption_key"`
+	SOCKS5                  string  `json:"socks5,omitempty"`
+	SOCKSUsername           string  `json:"socks_username,omitempty"`
+	SOCKSPassword           string  `json:"socks_password,omitempty"`
+	DNSServer               string  `json:"dns_server,omitempty"`
+	HandshakeTimeoutSeconds int     `json:"handshake_timeout_seconds"`
 }
 
 func readConfiguration(path string) (configuration, error) {
@@ -57,6 +63,9 @@ func readConfiguration(path string) (configuration, error) {
 func (c *configuration) validate() error {
 	if c.Version != 1 || (c.Transport != "yandex" && c.Transport != "vyandex") || (c.Mode != "client" && c.Mode != "server") {
 		return errors.New("unsupported OpenFlux version, mode, or transport")
+	}
+	if err := c.validateWireCodec(); err != nil {
+		return err
 	}
 	c.DocumentURL = strings.TrimSpace(c.DocumentURL)
 	u, err := url.Parse(c.DocumentURL)
@@ -98,4 +107,25 @@ func (c *configuration) validate() error {
 		return errors.New("client-only options are not allowed in server configuration")
 	}
 	return nil
+}
+
+func (c configuration) effectiveWireCodec() string {
+	if c.WireCodec == nil {
+		return legacyWireCodec
+	}
+	return *c.WireCodec
+}
+
+func (c configuration) validateWireCodec() error {
+	switch c.effectiveWireCodec() {
+	case legacyWireCodec:
+		return nil
+	case batchWireCodec:
+		if c.Transport == "yandex" {
+			return nil
+		}
+		return errors.New("batch-zstd-v2 requires the classic yandex transport")
+	default:
+		return errors.New("unsupported OpenFlux wire codec")
+	}
 }

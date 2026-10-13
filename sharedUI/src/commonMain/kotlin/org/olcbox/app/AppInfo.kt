@@ -1,5 +1,6 @@
 package org.olcbox.app
 
+import org.olcbox.app.data.model.OpenFluxSessionProfileConfig
 data class AppInfo(
     val name: String,
     val version: String,
@@ -29,5 +30,7 @@ object CurrentAppInfo {
     val diagnosticVersion: String =
         "${value.name}/${value.version} build/${value.build} olcrtc/${value.olcrtcSha.take(12)} " +
             "awg/${value.awgCoreSha.take(12)} xray/${value.xrayVersion}/${value.xraySha.take(12)} " +
-            "openflux/${value.openFluxSha.take(12)}"
+            "openflux/${value.openFluxSha.take(12)} " +
+            "openflux-session/${OpenFluxSessionProfileConfig.CORE_REVISION.take(12)} " +
+            "vkcalls/403edd409011"
 }

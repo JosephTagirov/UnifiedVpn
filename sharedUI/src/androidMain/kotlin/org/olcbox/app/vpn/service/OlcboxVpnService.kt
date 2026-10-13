@@ -63,6 +63,7 @@ import org.olcbox.app.vpn.UpstreamCandidate
 import org.olcbox.app.vpn.UpstreamNetworkSelector
 import org.olcbox.app.vpn.UpstreamTransport
 import org.olcbox.app.vpn.VpnStatus
+import org.olcbox.app.vpn.VkCallsRuntimeConfig
 import org.olcbox.app.vpn.OlcRtcStartRetryPolicy
 import org.olcbox.app.vpn.awaitRuntimeReady
 import org.olcbox.app.vpn.friendlyOlcRtcFailure
@@ -187,6 +188,7 @@ class OlcboxVpnService : VpnService() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private lateinit var connectivityManager: ConnectivityManager
+    @Volatile
     private var currentNetwork: Network? = null
     private var currentNetworkTransport: UpstreamTransport? = null
     private var isCallbackRegistered = false
@@ -620,6 +622,7 @@ class OlcboxVpnService : VpnService() {
                 resetRecoveryState()
             }
             val claimedGeneration = ++generation
+            OlcboxVpnState.setOpenFluxVerification(null)
             onGenerationClaimed?.invoke(claimedGeneration)
             refreshWakeLock(force = true)
 
@@ -698,12 +701,13 @@ class OlcboxVpnService : VpnService() {
                             splitTunnelProfiles[AndroidSplitTunnelProfile.fromProfileType(profile.normalizedType)]
                         )
                     }
-                    if (!profile.isOlcRtc()) {
+                    if (!profile.isOlcRtc() || active.location.isVkCalls()) {
                         startExternalProfile(
                             profile = profile,
                             requestedGeneration = requestedGeneration,
                             isRestart = isRestart,
-                            profileStorageId = active.storageId
+                            profileStorageId = active.storageId,
+                            location = active.location.takeIf { profile.isOlcRtc() }
                         )
                         return@withLock
                     }
@@ -1310,7 +1314,8 @@ class OlcboxVpnService : VpnService() {
         profile: VpnProfileConfig,
         requestedGeneration: Long,
         isRestart: Boolean,
-        profileStorageId: String
+        profileStorageId: String,
+        location: LocationConfig? = null
     ) {
         setStatus(if (isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
         updateNotification("Starting ${profile.typeLabel()}...")
@@ -1340,7 +1345,7 @@ class OlcboxVpnService : VpnService() {
             upstream,
             "Bound ${profile.typeLabel()} transport to ${getNetName(upstream)}"
         )
-        activeProfileType = profile.normalizedType
+        activeProfileType = if (location?.isVkCalls() == true) VkCallsRuntimeConfig.ENGINE_TYPE else profile.normalizedType
 
         val existingSocksPort = existingProfileSocksPort(profile)
         val targetSocksPort = existingSocksPort ?: allocateLocalSocksPort()
@@ -1355,7 +1360,26 @@ class OlcboxVpnService : VpnService() {
             defaultSocksPort = targetSocksPort,
             username = socksUsername,
             password = socksPassword,
-            log = ::addLog
+            log = ::addLog,
+            verificationContext = if (profile.isOpenFlux()) OpenFluxVerificationContext(
+                profileStorageId = profileStorageId,
+                generation = requestedGeneration,
+                isCurrent = {
+                    generation == requestedGeneration && !lifecycleStopping &&
+                        activeProfileStorageId == profileStorageId && currentNetwork == upstream
+                },
+                onPrompt = { prompt ->
+                    synchronized(lifecycleTransitionLock) {
+                        if (generation == requestedGeneration && !lifecycleStopping &&
+                            activeProfileStorageId == profileStorageId && (prompt == null || currentNetwork == upstream)
+                        ) {
+                            OlcboxVpnState.setOpenFluxVerification(prompt)
+                            updateNotification(if (prompt != null) "OpenFlux verification required" else "Connecting...")
+                        }
+                    }
+                }
+            ) else null,
+            location = location
         )
         externalEngine = engine
         socksListenHost = engine.socksHost
@@ -1835,6 +1859,7 @@ class OlcboxVpnService : VpnService() {
 
             lifecycleStopping = true
             val cleanupGeneration = ++generation
+            OlcboxVpnState.setOpenFluxVerification(null)
             cleanupTargetGeneration = cleanupGeneration
             cleanupShouldStopService = stopService
             cleanupStopStartId = latestServiceStartId
@@ -2543,6 +2568,9 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun buildNotification(status: String): Notification {
+        val verification = OlcboxVpnState.openFluxVerification.value?.takeIf {
+            it.generation == generation && it.profileStorageId == activeProfileStorageId && !lifecycleStopping
+        }
         val smallIcon = notificationSmallIcon()
         val largeIcon = runCatching {
             BitmapFactory.decodeResource(resources, applicationInfo.icon)
@@ -2578,7 +2606,15 @@ class OlcboxVpnService : VpnService() {
             .setPublicVersion(publicNotification)
             .setContentIntent(getProfileChooserPendingIntent())
 
-        if (notificationProfileCount > 1) {
+        if (verification != null) {
+            builder.addAction(
+                authenticatedNotificationAction(
+                    icon = android.R.drawable.ic_menu_view,
+                    label = "Verify OpenFlux",
+                    pendingIntent = verification.pendingIntent
+                )
+            )
+        } else if (notificationProfileCount > 1) {
             builder.addAction(
                 authenticatedNotificationAction(
                     icon = android.R.drawable.ic_media_previous,
@@ -2603,7 +2639,7 @@ class OlcboxVpnService : VpnService() {
                 )
             )
 
-        if (notificationProfileCount > 1) {
+        if (verification == null && notificationProfileCount > 1) {
             builder.addAction(
                 authenticatedNotificationAction(
                     icon = android.R.drawable.ic_media_next,
@@ -2699,6 +2735,9 @@ class OlcboxVpnService : VpnService() {
             null
         }
         OlcboxVpnState.setStatus(status, connectedProxy, activePingProfile)
+        if (status !is VpnStatus.Connecting && status !is VpnStatus.Reconnecting) {
+            OlcboxVpnState.setOpenFluxVerification(null)
+        }
         when (status) {
             VpnStatus.Connected -> {
                 if (sessionConnectedAtElapsedRealtimeMs == null) {
@@ -2779,6 +2818,7 @@ class OlcboxVpnService : VpnService() {
                 VpnProfileConfig.TYPE_VLESS -> "VLESS"
                 VpnProfileConfig.TYPE_AMNEZIA_WG -> "AmneziaWG"
                 VpnProfileConfig.TYPE_AMNEZIA_VPN -> "AmneziaVPN"
+                VkCallsRuntimeConfig.ENGINE_TYPE -> "VK Calls"
                 else -> "VPN"
             }
         }
@@ -3008,7 +3048,8 @@ class OlcboxVpnService : VpnService() {
         private const val MAX_OLCRTC_START_RETRIES = 5
         private const val NOTIFICATION_PROFILE_DEBOUNCE_MS = 250L
         private const val NOTIFICATION_PROFILE_SWITCH_POLL_MS = 100L
-        private const val NOTIFICATION_PROFILE_SWITCH_TIMEOUT_MS = 4 * 60 * 1_000L
+        // Allow a bounded browser check followed by the native OpenFlux handshake.
+        private const val NOTIFICATION_PROFILE_SWITCH_TIMEOUT_MS = 5 * 60 * 1_000L
         private const val SOCKS_RELEASE_TIMEOUT_MS = 2_500L
         private const val SOCKS_RELEASE_QUICK_TIMEOUT_MS = 500L
         private const val SOCKS_RELEASE_POLL_MS = 100L

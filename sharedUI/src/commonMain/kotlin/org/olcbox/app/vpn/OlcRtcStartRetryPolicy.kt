@@ -59,6 +59,10 @@ private val NON_RETRYABLE_OLCRTC_FAILURES = listOf(
     "unauthorized",
     "forbidden",
     "permission denied",
+    "unknown authority",
+    "certificate has expired",
+    "certificate is not valid",
+    "certificate is valid for",
     "malformed"
 )
 
@@ -67,6 +71,9 @@ private val RETRYABLE_OLCRTC_FAILURES = listOf(
     "runtime stopped before becoming ready",
     "runtime is already active",
     "runtime is still stopping",
+    "server did not answer the authenticated handshake",
+    "olcrtc start timed out",
+    "olcrtc exited before socks5 was ready",
     "use of closed network connection",
     "network is unreachable",
     "unreachable network",

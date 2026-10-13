@@ -1,17 +1,21 @@
 package org.olcbox.app.vpn.service
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import java.io.ByteArrayInputStream
@@ -30,6 +34,46 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class OpenFluxVpnEngineTest {
+    @Test
+    fun sessionSkipsBrowserUsesItsOwnContractAndRequestsGracefulStop() = runTest {
+        val session = TEST_CONFIG.copy(
+            documentUrl = "https://telemost.yandex.ru/j/12345678901234",
+            encryptionKey = "Ab12".repeat(16), version = 2,
+            transport = OpenFluxProfileConfig.TRANSPORT_TELEMOST,
+            wireCodec = OpenFluxProfileConfig.CODEC_SESSION
+        )
+        Fixture(config = session).use { fixture ->
+            fixture.engine.start()
+            assertEquals(0, fixture.browserCalls)
+            assertEquals("--control-stdio", fixture.command[3])
+            val runtime = Json.parseToJsonElement(File(fixture.command[2]).readText()).jsonObject
+            assertEquals("2", runtime.getValue("version").jsonPrimitive.content)
+            assertEquals(session.encryptionKey, runtime.getValue("encryption_key").jsonPrimitive.content)
+            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
+            runCurrent()
+            assertEquals(0, fixture.browserCalls)
+            assertEquals("", fixture.process.stdinText())
+            fixture.engine.stop()
+            assertEquals("STOP\n", fixture.process.stdinText())
+            assertFalse(fixture.engine.isRunning)
+            assertTrue(fixture.configFiles().isEmpty())
+        }
+    }
+
+    @Test
+    fun sessionLaunchFailureIsNotMisreportedAsBrowserVerification() = runTest {
+        Fixture(config = TEST_CONFIG.copy(
+            documentUrl = "https://telemost.yandex.ru/j/12345678901234", version = 2,
+            transport = OpenFluxProfileConfig.TRANSPORT_TELEMOST,
+            wireCodec = OpenFluxProfileConfig.CODEC_SESSION
+        )).use { fixture ->
+            fixture.startFailure = IOException("Synthetic launch failure")
+            assertIs<IOException>(runCatching { fixture.engine.start() }.exceptionOrNull())
+            assertEquals(0, fixture.browserCalls)
+            assertTrue(fixture.configFiles().isEmpty())
+        }
+    }
+
     @Test
     fun keepsSecretsOutOfArgumentsAndDeletesConfigurationOnStop() = runTest {
         Fixture().use { fixture ->
@@ -282,6 +326,7 @@ class OpenFluxVpnEngineTest {
             val lines = fixture.process.stdinText().lineSequence().filter(String::isNotBlank).toList()
             assertEquals(1, lines.size)
             assertEquals(TEST_REQUEST_ID, Json.parseToJsonElement(lines.single()).jsonObject.getValue("id").jsonPrimitive.content)
+            assertEquals("SyntheticBrowser/1.0", Json.parseToJsonElement(lines.single()).jsonObject.getValue("user_agent").jsonPrimitive.content)
             assertContains(lines.single(), TEST_COOKIE)
             assertFalse(startup.isCompleted)
             assertFalse(fixture.engine.isRunning)
@@ -298,71 +343,178 @@ class OpenFluxVpnEngineTest {
     }
 
     @Test
-    fun browserFailureDoesNotLogExceptionSecrets() = runTest {
+    fun preflightFailureDoesNotStartNativeOrExposeExceptionSecrets() = runTest {
         Fixture().use { fixture ->
             fixture.browserVerify = { throw IOException("$TEST_DOCUMENT_URL $TEST_COOKIE") }
-            fixture.engine.start()
-            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
-            runCurrent()
-
-            assertEquals(openFluxBrowserResponse(TEST_REQUEST_ID, null) + "\n", fixture.process.stdinText())
+            val failure = assertIs<OpenFluxBrowserException>(runCatching { fixture.engine.start() }.exceptionOrNull())
+            assertEquals(OpenFluxBrowserFailure.Failed, failure.reason)
+            assertEquals(0, fixture.processStartCount)
+            assertTrue(fixture.configFiles().isEmpty())
+            assertFalse(failure.message.orEmpty().contains(TEST_COOKIE))
             assertFalse(fixture.logs.any { TEST_COOKIE in it || TEST_DOCUMENT_URL in it })
-            assertTrue(fixture.process.isAlive)
         }
     }
 
     @Test
-    fun stoppingCancelsPendingBrowserAndPreventsLateStdinReply() = runTest {
+    fun preflightMetadataFailureLogsOnlyTheFixedValidationStage() = runTest {
+        Fixture().use { fixture ->
+            fixture.browserVerify = {
+                throw OpenFluxBrowserException(OpenFluxBrowserFailure.Failed, OpenFluxBrowserValidationStage.ClassicDownload)
+            }
+            assertIs<OpenFluxBrowserException>(runCatching { fixture.engine.start() }.exceptionOrNull())
+            assertEquals(listOf("OpenFlux: Browser metadata validation failed (stage=classic_download)"), fixture.logs)
+            assertEquals(0, fixture.processStartCount)
+        }
+    }
+
+    @Test
+    fun releasePreflightDiagnosticsReachAppLogWithoutStartingNative() = runTest {
+        Fixture().use { fixture ->
+            fixture.browserVerify = {
+                throw openFluxBrowserReplyFailure("Failed", null, "tls_untrusted", "forbidden", null, "hdrc")
+            }
+            val failure = assertIs<OpenFluxBrowserException>(runCatching { fixture.engine.start() }.exceptionOrNull())
+            assertEquals(OpenFluxBrowserDiagnosticStage.TlsUntrusted, failure.diagnosticStage)
+            assertEquals(OpenFluxBrowserTlsResource.Hdrc, failure.tlsResource)
+            assertEquals(listOf("OpenFlux: Browser verification diagnostic (reason=Failed, stage=tls_untrusted, resource=hdrc, http=forbidden)"), fixture.logs)
+            assertEquals(0, fixture.processStartCount)
+            assertTrue(fixture.configFiles().isEmpty())
+        }
+    }
+
+    @Test
+    fun stoppingCancelsPendingPreflightBeforeAnyNativeFilesOrProcess() = runTest {
         Fixture().use { fixture ->
             var cancelled = false
             fixture.browserVerify = {
                 try { awaitCancellation() } finally { cancelled = true }
             }
-            fixture.engine.start()
-            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
+            val startup = launch { fixture.engine.start() }
             runCurrent()
+            assertEquals(0, fixture.processStartCount)
+            assertTrue(fixture.configFiles().isEmpty())
             fixture.engine.stop()
             runCurrent()
 
             assertTrue(cancelled)
+            assertTrue(startup.isCancelled)
             assertEquals("", fixture.process.stdinText())
-            assertFalse(fixture.process.isAlive)
-            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
-            runCurrent()
+            assertEquals(0, fixture.processStartCount)
             assertEquals(1, fixture.browserCalls)
         }
     }
 
     @Test
-    fun browserTimeoutProducesBoundedFailureResponse() = runTest {
+    fun preflightTimeoutIsBoundedIndependentlyOfNativeStartup() = runTest {
         Fixture().use { fixture ->
             fixture.browserVerify = { awaitCancellation() }
-            fixture.engine.start()
-            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
+            val startup = async { runCatching { fixture.engine.start() } }
             runCurrent()
-            advanceTimeBy(45_000)
+            advanceTimeBy(119_999)
             runCurrent()
-
-            assertEquals(openFluxBrowserResponse(TEST_REQUEST_ID, null) + "\n", fixture.process.stdinText())
-            assertTrue(fixture.logs.any { "timed out" in it })
+            assertFalse(startup.isCompleted)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(OpenFluxBrowserFailure.Timeout, assertIs<OpenFluxBrowserException>(startup.await().exceptionOrNull()).reason)
+            assertEquals(0, fixture.processStartCount)
+            assertTrue(fixture.configFiles().isEmpty())
         }
     }
 
     @Test
-    fun browserRequestsAreRateLimitedWithoutDisablingLaterRefresh() = runTest {
+    fun blockedOptionalTlsResourceDoesNotTurnAStalledPreflightIntoSuccess() = runTest {
+        Fixture().use { fixture ->
+            val diagnostic = assertNotNull(openFluxBrowserBlockedTlsLogLine("tls_untrusted", "hdrc"))
+            fixture.browserVerify = {
+                fixture.logs += diagnostic
+                awaitCancellation()
+            }
+            val startup = async { runCatching { fixture.engine.start() } }
+            runCurrent()
+            assertEquals(listOf(diagnostic), fixture.logs)
+            assertEquals(0, fixture.processStartCount)
+            advanceTimeBy(OPENFLUX_BROWSER_PREFLIGHT_TIMEOUT_MS)
+            runCurrent()
+
+            assertEquals(OpenFluxBrowserFailure.Timeout,
+                assertIs<OpenFluxBrowserException>(startup.await().exceptionOrNull()).reason)
+            assertEquals(0, fixture.processStartCount)
+            assertTrue(fixture.configFiles().isEmpty())
+            assertEquals("", fixture.process.stdinText())
+        }
+    }
+
+    @Test
+    fun blockedOptionalTlsResourceDoesNotInterfereWithUserCancellation() = runTest {
+        Fixture().use { fixture ->
+            val diagnostic = assertNotNull(openFluxBrowserBlockedTlsLogLine("tls_expired", "mdd"))
+            var cancelled = false
+            fixture.browserVerify = {
+                fixture.logs += diagnostic
+                try { awaitCancellation() } finally { cancelled = true }
+            }
+            val startup = launch { fixture.engine.start() }
+            runCurrent()
+            fixture.engine.stop()
+            runCurrent()
+
+            assertTrue(cancelled)
+            assertTrue(startup.isCancelled)
+            assertEquals(listOf(diagnostic), fixture.logs)
+            assertEquals(0, fixture.processStartCount)
+            assertTrue(fixture.configFiles().isEmpty())
+        }
+    }
+
+    @Test
+    fun blockedOptionalTlsResourceStillRequiresCompletedPreflightAndEncryptedReadiness() = runTest {
+        Fixture(autoReady = false).use { fixture ->
+            val approved = CompletableDeferred<Unit>()
+            val session = fixture.browserVerify
+            fixture.browserVerify = { documentUrl ->
+                fixture.logs += assertNotNull(openFluxBrowserBlockedTlsLogLine("tls_untrusted", "hdrc"))
+                approved.await()
+                session(documentUrl)
+            }
+            val startup = async { fixture.engine.start() }
+            runCurrent()
+            assertEquals(0, fixture.processStartCount)
+            assertFalse(fixture.engine.isRunning)
+            approved.complete(Unit)
+            runCurrent()
+            assertEquals(1, fixture.processStartCount)
+            assertFalse(startup.isCompleted)
+            assertFalse(fixture.engine.isRunning)
+
+            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
+            runCurrent()
+            assertContains(fixture.process.stdinText(), TEST_COOKIE)
+            assertFalse(startup.isCompleted)
+            fixture.onOutput("OPENFLUX_READY")
+            advanceTimeBy(150)
+            runCurrent()
+            startup.await()
+            assertTrue(fixture.engine.isRunning)
+            assertFalse(fixture.logs.any { TEST_COOKIE in it || TEST_DOCUMENT_URL in it })
+        }
+    }
+
+    @Test
+    fun nativeRequestsConsumeExactlyOnePreflightWithoutLaterRefresh() = runTest {
         Fixture().use { fixture ->
             fixture.engine.start()
             repeat(3) {
                 fixture.onOutput("OPENFLUX_BROWSER_VERIFY ${it.toString().repeat(32)}")
                 runCurrent()
             }
-            assertEquals(2, fixture.browserCalls)
+            assertEquals(1, fixture.browserCalls)
+            assertContains(fixture.process.stdinText().lineSequence().first(), TEST_COOKIE)
             assertContains(fixture.process.stdinText().trim().lineSequence().last(), "verification_failed")
 
             fixture.browserClock = 300_000
             fixture.onOutput("OPENFLUX_BROWSER_VERIFY ${"3".repeat(32)}")
             runCurrent()
-            assertEquals(3, fixture.browserCalls)
+            assertEquals(1, fixture.browserCalls)
         }
     }
 
@@ -373,7 +525,7 @@ class OpenFluxVpnEngineTest {
             fixture.onOutput("OPENFLUX_BROWSER_VERIFY invalid-$TEST_COOKIE")
             runCurrent()
 
-            assertEquals(0, fixture.browserCalls)
+            assertEquals(1, fixture.browserCalls)
             assertEquals("", fixture.process.stdinText())
             assertFalse(fixture.logs.any { TEST_COOKIE in it })
         }
@@ -382,49 +534,157 @@ class OpenFluxVpnEngineTest {
     @Test
     fun concurrentRequestsCannotCreateTwoBrowserSessions() = runTest {
         Fixture().use { fixture ->
-            fixture.browserVerify = { awaitCancellation() }
             fixture.engine.start()
             fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
             fixture.onOutput("OPENFLUX_BROWSER_VERIFY ${"f".repeat(32)}")
             runCurrent()
 
             assertEquals(1, fixture.browserCalls)
-            assertEquals(openFluxBrowserResponse("f".repeat(32), null) + "\n", fixture.process.stdinText())
+            val lines = fixture.process.stdinText().trim().lines()
+            assertEquals(2, lines.size)
+            assertContains(lines.first(), TEST_COOKIE)
+            assertEquals(openFluxBrowserResponse("f".repeat(32), null), lines.last())
         }
     }
 
     @Test
-    fun unsupportedWebViewDoesNotAffectNativePathWithoutVerificationRequest() = runTest {
+    fun unsupportedVerificationFailsClearlyBeforeNativeStartup() = runTest {
         Fixture().use { fixture ->
             fixture.browserVerify = { throw OpenFluxBrowserException(OpenFluxBrowserFailure.Unsupported) }
+            assertEquals(OpenFluxBrowserFailure.Unsupported.diagnostic, runCatching { fixture.engine.start() }.exceptionOrNull()?.message)
+            assertEquals(1, fixture.browserCalls)
+            assertEquals(0, fixture.processStartCount)
+            assertTrue(fixture.configFiles().isEmpty())
+        }
+    }
+
+    @Test
+    fun legacyNativeOnlyModeNeverCallsPreflightAndFailsBrowserChallengesClearly() = runTest {
+        Fixture(browserPreflightSupported = false).use { fixture ->
+            fixture.browserVerify = { error("Legacy mode must not instantiate WebView") }
             fixture.engine.start()
             assertEquals(0, fixture.browserCalls)
+            assertEquals(1, fixture.processStartCount)
             assertTrue(fixture.engine.isRunning)
-
             fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
             runCurrent()
             assertEquals(openFluxBrowserResponse(TEST_REQUEST_ID, null) + "\n", fixture.process.stdinText())
-            assertTrue(fixture.logs.any { "Android 9" in it })
+            assertEquals(0, fixture.browserCalls)
+            assertTrue(fixture.logs.any { OpenFluxBrowserFailure.Unsupported.diagnostic in it })
         }
     }
 
     @Test
-    fun unsupportedVerificationKeepsItsClearReasonWhenNativeStartupExits() = runTest {
-        Fixture(autoReady = false).use { fixture ->
-            fixture.browserVerify = { throw OpenFluxBrowserException(OpenFluxBrowserFailure.Unsupported) }
+    fun legacyBrowserChallengeReasonSurvivesNativeStartupExit() = runTest {
+        Fixture(autoReady = false, browserPreflightSupported = false).use { fixture ->
             val startup = async { runCatching { fixture.engine.start() } }
             runCurrent()
             fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
             runCurrent()
             fixture.process.alive = false
             advanceUntilIdle()
-
             assertEquals(OpenFluxBrowserFailure.Unsupported.diagnostic, startup.await().exceptionOrNull()?.message)
+            assertEquals(0, fixture.browserCalls)
             assertTrue(fixture.configFiles().isEmpty())
         }
     }
 
-    private class Fixture(autoReady: Boolean = true) : AutoCloseable {
+    @Test
+    fun nativeStartupGetsItsOwnDeadlineAfterVisiblePreflight() = runTest {
+        Fixture(autoReady = false).use { fixture ->
+            val session = fixture.browserVerify
+            fixture.browserVerify = { url -> delay(90_000); session(url) }
+            val startup = async { fixture.engine.start() }
+            runCurrent()
+            assertEquals(0, fixture.processStartCount)
+            advanceTimeBy(90_000)
+            runCurrent()
+            assertEquals(1, fixture.processStartCount)
+            advanceTimeBy(45_000)
+            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
+            runCurrent()
+            assertContains(fixture.process.stdinText(), TEST_COOKIE)
+            fixture.onOutput("OPENFLUX_READY")
+            advanceTimeBy(150)
+            runCurrent()
+            startup.await()
+            assertTrue(fixture.engine.isRunning)
+        }
+    }
+
+    @Test
+    fun networkOrProfileChangeInvalidatesTheCachedResultBeforeNativeConsumption() = runTest {
+        Fixture().use { fixture ->
+            fixture.engine.start()
+            fixture.logs.clear()
+            fixture.browserCurrent = false
+            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
+            runCurrent()
+            assertEquals(openFluxBrowserResponse(TEST_REQUEST_ID, null) + "\n", fixture.process.stdinText())
+            assertEquals(listOf("OpenFlux: ${OpenFluxBrowserFailure.Expired.diagnostic}"), fixture.logs)
+            assertFalse(fixture.logs.any { TEST_COOKIE in it })
+        }
+    }
+
+    @Test
+    fun metadataRevalidationFailureLogsItsFixedStageWithoutDeliveringSecretsToNative() = runTest {
+        Fixture().use { fixture ->
+            fixture.browserVerify = { documentUrl ->
+                val classicDocument = OpenFluxClassicDocument.parse(buildJsonObject {
+                    put("source_url", documentUrl)
+                    put("captured_at", 0)
+                    put("balancer_url", "https://editor.yandex.ru")
+                    put("token", "synthetic-private-editor-token")
+                    put("document_key", "synthetic-private-document-key")
+                    put("file_type", "docx")
+                    put("download_url", "https://download.yandex.net/synthetic-private-document")
+                    put("title", "synthetic-private-title")
+                    put("edit", true)
+                }.toString(), documentUrl, nowSeconds = 0)
+                OpenFluxBrowserSession(parseOpenFluxBrowserCookies("spravka=$TEST_COOKIE", documentUrl),
+                    "SyntheticBrowser/1.0", classicDocument)
+            }
+            fixture.engine.start()
+            fixture.logs.clear()
+            fixture.onOutput("OPENFLUX_BROWSER_VERIFY $TEST_REQUEST_ID")
+            runCurrent()
+
+            assertEquals(listOf(
+                "OpenFlux: Browser metadata validation failed (stage=classic_timestamp)",
+                "OpenFlux: ${OpenFluxBrowserFailure.Failed.diagnostic}"
+            ), fixture.logs)
+            assertEquals(openFluxBrowserResponse(TEST_REQUEST_ID, null) + "\n", fixture.process.stdinText())
+            listOf(TEST_DOCUMENT_URL, TEST_COOKIE, "synthetic-private-", TEST_REQUEST_ID).forEach { secret ->
+                assertFalse(fixture.logs.any { secret in it })
+            }
+            assertFalse(fixture.process.stdinText().contains(TEST_COOKIE))
+            assertFalse(fixture.process.stdinText().contains("synthetic-private-"))
+        }
+    }
+
+    @Test
+    fun nativeDoesNotStartUntilVisiblePreflightCompletes() = runTest {
+        Fixture().use { fixture ->
+            val approved = CompletableDeferred<Unit>()
+            val session = fixture.browserVerify
+            fixture.browserVerify = { url -> approved.await(); session(url) }
+            val startup = async { fixture.engine.start() }
+            runCurrent()
+            assertEquals(0, fixture.processStartCount)
+            assertTrue(fixture.configFiles().isEmpty())
+            assertFalse(fixture.engine.isRunning)
+            approved.complete(Unit)
+            runCurrent()
+            startup.await()
+            assertEquals(1, fixture.processStartCount)
+        }
+    }
+
+    private class Fixture(
+        autoReady: Boolean = true,
+        browserPreflightSupported: Boolean = true,
+        config: OpenFluxProfileConfig = TEST_CONFIG
+    ) : AutoCloseable {
         val directory: File = Files.createTempDirectory("openflux-android-test-").toFile()
         val process = FakeProcess()
         var command: List<String> = emptyList()
@@ -436,13 +696,14 @@ class OpenFluxVpnEngineTest {
         val logs = mutableListOf<String>()
         var browserCalls = 0
         var browserClock = 0L
-        var browserVerify: suspend (String) -> List<OpenFluxBrowserCookie> = {
-            parseOpenFluxBrowserCookies("spravka=$TEST_COOKIE", it)
+        var browserCurrent = true
+        var browserVerify: suspend (String) -> OpenFluxBrowserSession = {
+            OpenFluxBrowserSession(parseOpenFluxBrowserCookies("spravka=$TEST_COOKIE", it), "SyntheticBrowser/1.0")
         }
         val engine = OpenFluxVpnEngine(
             profile = VpnProfileConfig(
                 type = VpnProfileConfig.TYPE_OPENFLUX,
-                rawConfig = TEST_CONFIG.toJson()
+                rawConfig = config.toJson()
             ),
             socksPort = 23841,
             username = TEST_USERNAME,
@@ -471,12 +732,12 @@ class OpenFluxVpnEngineTest {
                 if (autoReady) consume("OPENFLUX_READY")
                 null
             },
-            verifyBrowser = { documentUrl ->
+            browserPreflightSupported = browserPreflightSupported,
+            prepareBrowser = { documentUrl ->
                 assertEquals(TEST_DOCUMENT_URL, documentUrl)
                 browserCalls += 1
-                browserVerify(documentUrl)
-            },
-            browserClockMillis = { browserClock }
+                OpenFluxBrowserLease(browserVerify(documentUrl), documentUrl, { browserCurrent }, { browserClock })
+            }
         )
 
         fun configFiles(): List<File> = directory.listFiles().orEmpty().filter { it.extension == "json" }

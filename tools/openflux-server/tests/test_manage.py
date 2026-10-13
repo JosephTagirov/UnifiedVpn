@@ -66,8 +66,8 @@ class FakeDocker:
         return match
 
     @staticmethod
-    def result(stdout="", returncode=0):
-        return subprocess.CompletedProcess([], returncode, stdout, "")
+    def result(stdout="", returncode=0, stderr=""):
+        return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
     @staticmethod
     def labels(args):
@@ -103,7 +103,7 @@ class FakeDocker:
                     collection = self.containers if kind == "container" else self.networks
                     resource = collection.get(name) or next((value for value in collection.values() if value["Id"] == name), None)
                 if resource is None:
-                    return self.result(returncode=1)
+                    return self.result("[]", returncode=1, stderr=f"Error: No such {kind}: {name}")
                 result.append(resource)
             return self.result(json.dumps(result))
         if (kind, operation) == ("network", "ls"):
@@ -254,6 +254,60 @@ class ValidationTests(unittest.TestCase):
         del incomplete["transport"]
         with self.assertRaises(manage.DeploymentError):
             manage.validate_config(incomplete)
+
+    def test_optional_codec_preserves_legacy_config_and_validates_explicit_batch(self):
+        for transport in manage.TRANSPORTS:
+            legacy = dict(config(), transport=transport)
+            original = copy.deepcopy(legacy)
+            self.assertIs(manage.validate_config(legacy), legacy)
+            self.assertEqual(legacy, original)
+            explicit = dict(legacy, wire_codec="legacy-lz4-v1")
+            self.assertEqual(manage.validate_config(explicit), explicit)
+        batched = dict(config(), wire_codec="batch-zstd-v2")
+        self.assertEqual(manage.validate_config(batched), batched)
+        with self.assertRaises(manage.DeploymentError):
+            manage.validate_config(dict(batched, transport="vyandex"))
+
+    def test_invalid_codec_is_not_defaulted_or_echoed(self):
+        for codec in (None, True, False, 1, [], {}, "", "auto", "legacy", "batched", "BATCH-ZSTD-V2", "SECRET"):
+            with self.subTest(codec=codec), self.assertRaises(manage.DeploymentError) as error:
+                manage.validate_config(dict(config(), wire_codec=codec))
+            self.assertNotIn("SECRET", str(error.exception))
+
+    def test_codec_cli_is_explicit_and_cannot_override_existing_config(self):
+        with patch.object(manage, "configure") as configure:
+            self.assertEqual(manage.main(["configure", "--output", "test.json", "--apply", "--wire-codec", "batch-zstd-v2"]), 0)
+            configure.assert_called_once_with(Path("test.json"), "yandex", wire_codec="batch-zstd-v2")
+        with patch.object(manage, "Manager") as factory, contextlib.redirect_stderr(io.StringIO()):
+            for command in ("check", "install", "run", "stop", "remove"):
+                for codec in manage.WIRE_CODECS:
+                    with self.subTest(command=command, codec=codec):
+                        self.assertEqual(manage.main([command, "--wire-codec", codec, "--apply"]), 1)
+            factory.assert_not_called()
+
+    def test_configure_codec_opt_in_keeps_default_shape_and_secret_redaction(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(manage.platform, "system", return_value="Linux"), \
+                patch.object(manage.os, "geteuid", return_value=0, create=True), \
+                patch.object(manage.Manager, "secure_directory"), \
+                patch.object(manage.sys.stdin, "isatty", return_value=True), \
+                patch.object(manage.getpass, "getpass", return_value=config()["document_url"]), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            for codec in manage.WIRE_CODECS:
+                path = Path(directory) / (codec + ".json")
+                manage.configure(path, wire_codec=codec)
+                value = manage.validate_config(json.loads(path.read_text()))
+                self.assertEqual(value.get("wire_codec", manage.DEFAULT_WIRE_CODEC), codec)
+                self.assertEqual("wire_codec" in value, codec != manage.DEFAULT_WIRE_CODEC)
+                self.assertNotIn(value["encryption_key"], output.getvalue())
+                self.assertNotIn(value["document_url"], output.getvalue())
+            with patch.object(manage.getpass, "getpass") as prompt, patch.object(manage.secrets, "token_hex") as random:
+                invalid = Path(directory) / "invalid.json"
+                with self.assertRaises(manage.DeploymentError):
+                    manage.configure(invalid, "vyandex", "batch-zstd-v2")
+                self.assertFalse(invalid.exists())
+                prompt.assert_not_called()
+                random.assert_not_called()
 
     def test_configure_cli_passes_selected_transport_or_legacy_default(self):
         for extra, expected in (([], "yandex"), (["--transport", "yandex"], "yandex"),

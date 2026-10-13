@@ -29,6 +29,15 @@ type UnifiedTCPTunnel struct {
 // Keep the established memory limits per stack instead of inheriting the
 // upstream 64-fold buffer increase. Configure before starting the transport.
 func NewUnifiedTCPTunnel(trans transport.Transport, server bool) (*UnifiedTCPTunnel, error) {
+	return newUnifiedTCPTunnel(trans, server, false)
+}
+
+// Batch tuning is opt-in and must not change existing legacy profiles.
+func NewUnifiedBatchTCPTunnel(trans transport.Transport, server bool) (*UnifiedTCPTunnel, error) {
+	return newUnifiedTCPTunnel(trans, server, true)
+}
+
+func newUnifiedTCPTunnel(trans transport.Transport, server, batch bool) (*UnifiedTCPTunnel, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &UnifiedTCPTunnel{TCPTunnel: NewTCPTunnelMode(trans, server, ExitModeL4), ctx: ctx, cancel: cancel}
 	if err := t.UnifiedReady(); err != nil {
@@ -37,10 +46,21 @@ func NewUnifiedTCPTunnel(trans transport.Transport, server bool) (*UnifiedTCPTun
 	}
 	rcv := tcpip.TCPReceiveBufferSizeRangeOption{Min: 65536, Default: 262144, Max: 1048576}
 	snd := tcpip.TCPSendBufferSizeRangeOption{Min: 65536, Default: 262144, Max: 1048576}
+	if batch {
+		rcv.Default, snd.Default = 1048576, 1048576
+	}
 	if t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber, &rcv) != nil ||
 		t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber, &snd) != nil {
 		t.UnifiedClose()
 		return nil, errors.New("OpenFlux TCP memory limits could not initialize")
+	}
+	if batch {
+		// Preserve SACK/RTO without RACK/TLP on the ordered batched relay.
+		recovery := tcpip.TCPRecovery(0)
+		if t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber, &recovery) != nil {
+			t.UnifiedClose()
+			return nil, errors.New("OpenFlux TCP recovery could not initialize")
+		}
 	}
 	if server {
 		t.unifiedExitForwarder(func(ctx context.Context, address string) (net.Conn, error) {

@@ -61,6 +61,7 @@ fun AndroidMainScreen(
     appearanceSettings: AppAppearanceSettings = AppAppearanceSettings(),
     onAppearanceSettingsChanged: (AppAppearanceSettings) -> Unit = {}
 ) {
+    OpenFluxVerificationDialog()
 
     var currentScreenRoute by rememberSaveable { mutableStateOf("home") }
     var currentLocationId by rememberSaveable { mutableStateOf<String?>(null) }

@@ -43,6 +43,13 @@ object OlcboxVpnState {
     private val _session = MutableStateFlow(VpnSessionSnapshot())
     internal val session = _session.asStateFlow()
 
+    private val _openFluxVerification = MutableStateFlow<OpenFluxVerificationPrompt?>(null)
+    internal val openFluxVerification = _openFluxVerification.asStateFlow()
+
+    internal fun setOpenFluxVerification(prompt: OpenFluxVerificationPrompt?) {
+        _openFluxVerification.value = prompt
+    }
+
     fun setStatus(
         status: VpnStatus,
         proxy: SubscriptionFetchProxy? = null,

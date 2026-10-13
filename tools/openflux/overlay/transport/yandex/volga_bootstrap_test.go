@@ -63,9 +63,13 @@ func TestVolgaAuthorizationUsesBootstrapJarAndBoundedOrigins(t *testing.T) {
 		t.Run(map[bool]string{false: "accepted", true: "foreign redirect blocked"}[foreign], func(t *testing.T) {
 			tp := NewYandexVolgaTransport(testDocumentURL, transport.DefaultConfig())
 			defer tp.Stop()
+			tp.bootstrap.userAgent = "SyntheticBrowser/1.0"
 			requests := 0
 			tp.bootstrap.client.Transport = bootstrapRoundTripper(func(req *http.Request) (*http.Response, error) {
 				requests++
+				if req.UserAgent() != "SyntheticBrowser/1.0" {
+					t.Fatal("Volga authorization changed browser identity")
+				}
 				switch requests {
 				case 1:
 					return bootstrapResponse(req, volgaPage(nil)), nil
@@ -96,7 +100,7 @@ func TestVolgaAuthorizationUsesBootstrapJarAndBoundedOrigins(t *testing.T) {
 				if err == nil || requests != 2 || strings.Contains(err.Error(), "secret") {
 					t.Fatal("redirect safety failed")
 				}
-			} else if err != nil || requests != 3 || auth.UserID != 12 || auth.RequestPath != "test-path" {
+			} else if err != nil || requests != 3 || auth.UserID != 12 || auth.RequestPath != "test-path" || auth.BrowserUserAgent != "SyntheticBrowser/1.0" {
 				t.Fatal("authorization failed", err)
 			}
 		})
@@ -106,7 +110,7 @@ func TestVolgaAuthorizationUsesBootstrapJarAndBoundedOrigins(t *testing.T) {
 func TestVolgaStopCancelsBootstrapAndPreventsRestart(t *testing.T) {
 	tp := NewYandexVolgaTransport(testDocumentURL, transport.DefaultConfig())
 	entered := make(chan struct{})
-	tp.ConfigureBrowserBootstrap(context.Background(), func(ctx context.Context) ([]BrowserCookie, error) {
+	tp.ConfigureBrowserBootstrap(context.Background(), func(ctx context.Context) (*BrowserSession, error) {
 		close(entered)
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -225,7 +229,7 @@ func TestVolgaServerRetryCancelsWithoutResettingBrowserBudget(t *testing.T) {
 	tp := NewYandexVolgaTransport(testDocumentURL, transport.DefaultConfig())
 	tp.EnableServerRetries()
 	entered := make(chan struct{})
-	tp.ConfigureBrowserBootstrap(context.Background(), func(context.Context) ([]BrowserCookie, error) { close(entered); return nil, ErrBrowserSession })
+	tp.ConfigureBrowserBootstrap(context.Background(), func(context.Context) (*BrowserSession, error) { close(entered); return nil, ErrBrowserSession })
 	tp.bootstrap.client.Transport = bootstrapRoundTripper(func(req *http.Request) (*http.Response, error) { return bootstrapResponse(req, verificationHTML), nil })
 	started, stopped := make(chan error, 1), make(chan error, 1)
 	go func() { started <- tp.Start() }()

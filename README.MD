@@ -20,27 +20,19 @@ Linux packages are built as portable AppImage files.
 
 Release history is maintained in [CHANGELOG.md](CHANGELOG.md).
 
-See the [0.0.12 release notes](docs/releases/0.0.12.md) before updating:
-Windows TUN is temporarily unavailable, and Android VLESS showed intermittent
-DNS/TLS failures during startup validation.
+Current [0.0.14 release, build `2026101301`](docs/releases/0.0.14-build.2026101301.md),
+adds experimental VK Calls with a separate VP8/Chrome-DTLS engine. The exact
+packaged Windows manager and signed Android APK on API 35 passed Connected,
+verified HTTPS and Stop. See the [build-specific test report](docs/testing/vk-calls-2026101301.md).
+Physical Android 13, direct whitelist operation and sustained speed are not
+verified. Jitsi keeps its separate `d7a00da` core; OpenFlux Session and classic
+profiles remain separate. Windows VK TUN is not implemented, and live Windows
+VLESS/AWG TUN recovery remains unverified.
 
-The [0.0.13 preview](docs/releases/0.0.13.md) adds encrypted OpenFlux through
-Yandex Documents. Windows SOCKS/HTTPS and Android emulator TUN/HTTPS passed
-[connection tests](docs/testing/openflux-2026091401.md). This experimental preview
-is installed manually; existing stable clients stay on 0.0.12.
-
-The [0.0.14 preview](docs/releases/0.0.14-build.2026092406.md), build `2026092406`, fixes Android
-notification profile synchronization, adds connected-tunnel OpenFlux latency
-checks, and includes the [Windows routing changes](docs/testing/windows-tun-2026092102.md).
-OpenFlux/olcRTC share proxy settings; VLESS/AWG have separate settings and an
-experimental UAC TUN helper. Real Windows TUN traffic and recovery remain
-unverified. [Download the preview](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.0.14)
-manually; stable updates remain on 0.0.12. This preview provides Android and
-Windows files, not a newly validated Linux package.
-
-This `0.0.14 / 2026092406` preview adds explicit OpenFlux
-`vyandex` support for the new Volga text editor, alongside classic `yandex`.
-Existing profiles stay unchanged. See the [exact build and real-traffic checks](docs/testing/openflux-volga-2026092406.md).
+[Download APK/MSI](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.0.14).
+Choose `build.2026101301`; historical assets and tags are retained. These Android
+and Windows files have a separate source snapshot, `build-2026101301`, and no
+newly validated Linux package. Earlier build notes remain in [release history](CHANGELOG.md).
 
 ## Legal Notice
 This software is intended for development, testing and research purposes only.
@@ -63,7 +55,7 @@ The author does not support or encourage such use.
 - Self-hosted Amnezia WireGuard runtime through the packaged `sing-box` path; AmneziaWG obfuscation requires an AWG-capable core.
 - One-tap tunnel start/stop with live relay status.
 - Saved connection profiles with active location selection.
-- Providers: Jazz, Telemost, WB Stream, Jitsi.
+- Providers: Jazz, Telemost, WB Stream, Jitsi; experimental VK Calls (VP8).
 - Transports: DataChannel, VP8, SEI.
 - VP8 tuning: FPS and batch size.
 - Connectivity checks for individual locations.
@@ -84,7 +76,7 @@ Application identity uses both `olcbox.version` and the monotonic
 `olcbox.build` from `gradle.properties`. A higher semantic version is always an
 update. When semantic versions are equal, an asset is offered only when its
 `build.<number>` is greater than the installed build. Release APK, EXE, and ZIP
-asset names must therefore contain that build token.
+asset names must therefore contain that build token; MSI names use it as well.
 
 The machine-wide Windows installer keeps the `0.0.11` upgrade family and uses
 a different ProductCode for each build. Its compiled MSI policy includes older
@@ -95,7 +87,8 @@ owner's working Windows copy was not performed by the automated tests.
 Android and Windows download updates inside the application, with progress and
 mandatory HTTPS, size and SHA-256 verification, then open the local installer.
 System installation confirmation is still required. This release supplies an
-APK and Windows EXE; the manual portable ZIP is not an auto-update asset.
+APK and Windows MSI; the manual portable ZIP is not an auto-update asset. Older
+clients without MSI support must update manually.
 
 Checks for updates of the original [olcbox](https://github.com/alananisimov/olcbox)
 and [Amnezia VPN](https://github.com/amnezia-vpn/amnezia-client) are not run by
@@ -254,32 +247,19 @@ Linux поставляется как переносимый файл AppImage.
 
 История выпусков ведётся в [CHANGELOG.md](CHANGELOG.md).
 
-Перед обновлением прочитайте [описание 0.0.12](docs/releases/0.0.12.md):
-Windows TUN временно недоступен, а при проверке Android VLESS наблюдались
-периодические ошибки DNS/TLS при запуске.
+Текущая [0.0.14, сборка `2026101301`](docs/releases/0.0.14-build.2026101301.md),
+добавляет экспериментальный VK Calls через отдельное ядро VP8/Chrome-DTLS.
+Итоговый manager Windows и подписанный Android APK на API 35 прошли Connected,
+HTTPS с проверкой сертификатов и Stop. Есть [отчёт именно этой сборки](docs/testing/vk-calls-2026101301.md).
+Физический Android 13, прямое подключение при белых списках и длительная скорость
+не проверены. Jitsi сохраняет отдельное ядро `d7a00da`; OpenFlux Session и старые
+профили не смешиваются. Windows TUN для VK не реализован, а восстановление
+Windows VLESS/AWG TUN при реальном трафике пока не проверено.
 
-[Предварительная 0.0.13](docs/releases/0.0.13.md) добавляет зашифрованный
-OpenFlux через Яндекс Документы. Windows SOCKS/HTTPS и Android TUN/HTTPS на
-эмуляторе прошли [проверки соединения](docs/testing/openflux-2026091401.md).
-Экспериментальная версия устанавливается вручную; стабильный канал остаётся на 0.0.12.
-
-[Предварительная 0.0.14](docs/releases/0.0.14-build.2026092406.md), сборка `2026092406`, исправляет
-синхронизацию профилей Android из шторки, добавляет пинг OpenFlux через активный
-туннель и включает [доработки Windows](docs/testing/windows-tun-2026092102.md).
-В редакторе OpenFlux доступна отправка QR/ссылки с предупреждением о секретном
-ключе. Для второго одновременного устройства нужен отдельный документ;
-[серверный помощник](tools/openflux-server/CREATE_PROFILE.md) упрощает создание
-нового профиля, по умолчанию только подготавливая файлы без изменения служб.
-OpenFlux/olcRTC используют общие настройки прокси; VLESS/AWG имеют отдельные
-настройки и экспериментальный компонент TUN с UAC. Реальный Windows TUN-трафик
-и восстановление ещё не проверены.
-[Скачать предварительную версию](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.0.14)
-можно вручную; стабильный канал остаётся на 0.0.12. В этом выпуске есть файлы
-Android и Windows, но нет заново проверенного Linux-пакета.
-
-Этот предварительный выпуск `0.0.14 / 2026092406` добавляет OpenFlux
-`vyandex` для нового текстового редактора Volga наряду с прежним `yandex`.
-Старые профили не меняются. См. [точные сборки и проверки трафика](docs/testing/openflux-volga-2026092406.md).
+[Скачать APK/MSI](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.0.14).
+Выбирайте `build.2026101301`: прежние файлы и теги сохранены. Для этих APK/MSI
+есть отдельный снимок исходников `build-2026101301`; нового проверенного
+Linux-пакета нет. Прежние описания сохранены в [истории выпусков](CHANGELOG.md).
 
 ## Юридическое уведомление
 
@@ -312,7 +292,7 @@ Android и Windows, но нет заново проверенного Linux-па
   обфускация AmneziaWG требует AWG-совместимый core.
 - Запуск и остановка туннеля одним нажатием с отображением текущего состояния.
 - Сохранённые профили и выбор активного подключения.
-- Сервисы: Jazz, Telemost, WB Stream и Jitsi.
+- Сервисы: Jazz, Telemost, WB Stream и Jitsi; экспериментальный VK Calls (VP8).
 - Транспорты: DataChannel, VP8 и SEI.
 - Настройка VP8: FPS и размер пакета.
 - Проверка доступности отдельных профилей.
@@ -340,7 +320,7 @@ https://github.com/JosephTagirov/UnifiedVpn/releases.
 из `gradle.properties`. Более высокая семантическая версия всегда считается
 обновлением. При одинаковой версии файл предлагается только тогда, когда его
 `build.<number>` больше установленного build. Поэтому имена релизных APK, EXE и
-ZIP обязаны содержать этот build-токен.
+ZIP обязаны содержать этот build-токен; для MSI действует то же правило.
 
 Системный Windows-установщик сохраняет семейство обновлений версии `0.0.11` и
 получает отдельный ProductCode для каждого build. Правила скомпилированного MSI
@@ -351,7 +331,8 @@ ZIP обязаны содержать этот build-токен.
 Android и Windows скачивают обновление внутри приложения с прогрессом и
 обязательной проверкой HTTPS, размера и SHA-256, затем открывают локальный
 установщик. Системное подтверждение установки остаётся обязательным. Выпуск
-содержит APK и Windows EXE; ручной portable ZIP не является файлом автообновления.
+содержит APK и Windows MSI; ручной portable ZIP не является файлом автообновления.
+Старые клиенты без поддержки MSI нужно обновить вручную.
 
 Само приложение не проверяет обновления оригинальных
 [olcbox](https://github.com/alananisimov/olcbox) и

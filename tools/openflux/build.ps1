@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $upstream = 'd34dc8caa70ca059cd80d8f5753499361052dabc'
 $protocol = 'unified-openflux-aesgcm-v1'
-$versionText = "unified-openflux 5 upstream=$upstream protocol=$protocol"
+$versionText = "unified-openflux 8 upstream=$upstream protocol=$protocol"
 if (-not $SourcePath) { $SourcePath = Join-Path $repo ('.downloads\openflux\source-' + $upstream.Substring(0, 12)) }
 $SourcePath = [IO.Path]::GetFullPath($SourcePath)
 if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $repo '.downloads\openflux\artifacts' }
@@ -103,6 +103,8 @@ try {
     $manifest = [ordered]@{
         schema = 1; upstream = $upstream; protocol = $protocol; version_text = $versionText
         server_backend = 'l4'; default_codec = 'legacy'; tcp_buffers = @(65536, 262144, 1048576)
+        wire_codecs = @('legacy-lz4-v1', 'batch-zstd-v2'); batch_transport = 'yandex'
+        batch_tcp_buffers = @(65536, 1048576, 1048576)
         go_version = 'go1.26.4'; socks5_module = 'github.com/things-go/go-socks5@v0.1.3'; files = $manifestFiles
     }
     $utf8 = New-Object Text.UTF8Encoding($false)

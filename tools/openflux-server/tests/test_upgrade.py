@@ -158,6 +158,58 @@ class UpgradeTests(unittest.TestCase):
         with self.assertRaises(manage.DeploymentError):
             candidate.run()
 
+    def assert_legacy_wrapper_upgrade_preserves_profile(self, version):
+        self.up = upgrade.Upgrade(f"old{version}", self.directory / f"receipt-{version}", self.fake, self.parent, self.clock.sleep, self.clock)
+        self.args.subnet = "172.30.252.0/28"
+        with patch.object(manage, "VERSION", f"unified-openflux {version} upstream={manage.UPSTREAM} protocol={manage.PROTOCOL}"):
+            self.up.original.install(self.args)
+            self.up.original.run()
+        original_files = upgrade.file_hashes(self.up.original.root, upgrade.SNAPSHOT_FILES)
+        original_id = self.fake.containers[self.up.original.name]["Id"]
+        self.fake.commands.clear()
+        record = self.prepare()
+        candidate = self.up.candidate(record)
+        provenance = json.loads((candidate.root / "provenance.json").read_bytes())
+        self.assertEqual(provenance["wrapper_version"], manage.VERSION)
+        self.assertTrue(provenance["wrapper_version"].startswith("unified-openflux 8 "))
+        original_config = (self.up.original.root / "server.json").read_bytes()
+        self.assertEqual((candidate.root / "server.json").read_bytes(), original_config)
+        self.assertNotIn("wire_codec", json.loads(original_config))
+        self.assertEqual(upgrade.file_hashes(self.up.original.root, upgrade.SNAPSHOT_FILES), original_files)
+        self.assertFalse(any(original_id in args for args in self.mutation_commands()))
+        self.assertEqual(self.old_mutations(), [])
+        self.assertTrue(self.old["State"]["Running"])
+
+    def test_wrapper_five_upgrade_keeps_old_config_bytes_and_builds_only_wrapper_seven(self):
+        self.assert_legacy_wrapper_upgrade_preserves_profile(5)
+
+    def test_wrapper_six_upgrade_keeps_old_config_bytes_and_builds_only_wrapper_seven(self):
+        self.assert_legacy_wrapper_upgrade_preserves_profile(6)
+
+    def test_old_version_acceptance_binds_each_version_to_its_exact_upstream(self):
+        self.assertEqual(len(upgrade.LEGACY_VERSIONS), 6)
+        for version in range(1, 7):
+            expected = upgrade.LEGACY_UPSTREAM if version <= 3 else manage.UPSTREAM
+            text = f"unified-openflux {version} upstream={expected} protocol={manage.PROTOCOL}"
+            self.assertEqual(upgrade.LEGACY_VERSIONS[text], expected)
+        provenance_path = self.up.original.root / "provenance.json"
+        provenance = json.loads(provenance_path.read_bytes())
+        for version, upstream in ((5, upgrade.LEGACY_UPSTREAM), (6, upgrade.LEGACY_UPSTREAM), (1, manage.UPSTREAM), (7, manage.UPSTREAM)):
+            provenance["wrapper_version"] = f"unified-openflux {version} upstream={upstream} protocol={manage.PROTOCOL}"
+            provenance_path.write_text(json.dumps(provenance))
+            with self.subTest(version=version, upstream=upstream), self.assertRaises(manage.DeploymentError):
+                self.up.snapshot_original()
+        self.assertEqual(self.mutation_commands(), [])
+
+    def test_upgrade_does_not_opt_into_new_codec(self):
+        path = self.up.original.root / "server.json"
+        value = json.loads(path.read_bytes())
+        value["wire_codec"] = "batch-zstd-v2"
+        path.write_text(json.dumps(value))
+        with self.assertRaisesRegex(manage.DeploymentError, "preserve the legacy codec"):
+            self.up.snapshot_original()
+        self.assertEqual(self.mutation_commands(), [])
+
     def test_explicit_named_instance_keeps_other_instance_untouched(self):
         original = self.up.original
         self.up = upgrade.Upgrade("phone2", self.directory / "phone-receipt", self.fake, self.parent, self.clock.sleep, self.clock)

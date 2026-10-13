@@ -34,6 +34,7 @@ import org.olcbox.app.data.model.LocationMetadata
 import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.model.OpenFluxProfileConfig
+import org.olcbox.app.data.model.OpenFluxSessionProfileConfig
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.data.repository.LocationImportFailureKind
 import org.olcbox.app.data.repository.LocationImportResult
@@ -1036,7 +1037,10 @@ class LocationsRepositoryImpl(
         }
         val profiles = sources.mapNotNull { source ->
             OpenFluxProfileConfig.parse(source)?.takeIf { it.isValid() }?.let { config ->
-                val name = if (source.startsWith("openflux://", ignoreCase = true)) {
+                val name = if (config.isSession) {
+                    OpenFluxSessionProfileConfig.parseLink(source)?.name?.takeIf(String::isNotBlank)
+                        ?: "OpenFlux ${config.transport}"
+                } else if (source.startsWith("openflux://", ignoreCase = true)) {
                     parseUriFragment(source).ifBlank { "OpenFlux" }
                 } else {
                     "OpenFlux"

@@ -31,6 +31,58 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class LocationOpenFluxEditorTest {
     @Test
+    fun creatingTelemostSelectsSessionAndPreservesCaseSensitiveKey() = runTest {
+        withEditor { editor, source ->
+            editor.startCreating(VpnProfileConfig.TYPE_OPENFLUX)
+            editor.onNameChanged("Telemost")
+            editor.onOpenFluxTransportChanged("telemost")
+            editor.onOpenFluxDocumentUrlChanged("https://telemost.yandex.ru/j/12345678901234")
+            editor.onOpenFluxEncryptionKeyChanged("Ab12".repeat(16))
+            assertEquals(2, editor.editingOpenFluxConfig.version)
+            assertEquals(OpenFluxProfileConfig.CODEC_SESSION, editor.editingOpenFluxConfig.wireCodec)
+            assertTrue(editor.isFormValid)
+            editor.saveEditing {}
+            advanceUntilIdle()
+            val saved = assertNotNull(OpenFluxProfileConfig.parse(assertNotNull(source.stored).locations.single().profile.rawConfig))
+            assertTrue(saved.isSession)
+            assertEquals("Ab12".repeat(16), saved.encryptionKey)
+            editor.onOpenFluxTransportChanged("yandex")
+            assertEquals(1, editor.editingOpenFluxConfig.version)
+            assertEquals(OpenFluxProfileConfig.CODEC_LEGACY, editor.editingOpenFluxConfig.wireCodec)
+            assertFalse(editor.isFormValid)
+        }
+    }
+
+    @Test
+    fun batchProfilePreservesCodecWhenEditedAndRequiresAnExplicitCompatibleTransport() = runTest {
+        val batch = config().copy(wireCodec = OpenFluxProfileConfig.CODEC_BATCH)
+        val entry = LocationEntry.fromProfile(
+            storageId = "batch",
+            profile = VpnProfileConfig(type = VpnProfileConfig.TYPE_OPENFLUX, name = "Batch", uri = batch.toUri())
+        )
+        withEditor(LocationBundleV4(activeLocationId = "batch", locations = listOf(entry))) { editor, source ->
+            editor.startEditing("batch")
+            editor.onNameChanged("Renamed batch")
+            editor.onOpenFluxTransportChanged("vyandex")
+            assertEquals(OpenFluxProfileConfig.CODEC_BATCH, editor.editingOpenFluxConfig.wireCodec)
+            assertFalse(editor.isFormValid)
+            assertNotNull(editor.openFluxWireCodecError)
+            assertNull(editor.openFluxDocumentUrlError)
+            editor.onOpenFluxTransportChanged("yandex")
+            assertTrue(editor.isFormValid)
+            editor.saveEditing {}
+            advanceUntilIdle()
+            assertEquals(batch, OpenFluxProfileConfig.parse(assertNotNull(source.stored).locations.single().profile.rawConfig))
+            editor.startEditing("batch")
+            editor.onOpenFluxWireCodecChanged("unknown")
+            assertFalse(editor.isFormValid)
+            editor.onOpenFluxWireCodecChanged(" LEGACY-LZ4-V1 ")
+            assertTrue(editor.isFormValid)
+            assertEquals(OpenFluxProfileConfig.CODEC_LEGACY, editor.editingOpenFluxConfig.wireCodec)
+        }
+    }
+
+    @Test
     fun creatingVolgaProfileRequiresAnExplicitTransportSelection() = runTest {
         withEditor { editor, source ->
             editor.startCreating(VpnProfileConfig.TYPE_OPENFLUX)

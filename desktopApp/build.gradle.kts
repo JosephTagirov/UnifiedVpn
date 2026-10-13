@@ -223,14 +223,26 @@ abstract class VerifyDesktopAppImageTask : DefaultTask() {
             appImage.resolve("app/${launcherName.get().substringBeforeLast('.')}.cfg"),
             appImage.resolve("runtime/bin/java.dll"),
             appImage.resolve("runtime/bin/server/jvm.dll"),
+            appImage.resolve("runtime/lib/modules"),
         )
         val missing = requiredFiles.filterNot { it.isFile && it.length() > 0L }
         check(missing.isEmpty()) {
             "Incomplete Windows app image:\n" +
                     missing.joinToString(separator = "\n") { "- ${it.absolutePath}" }
         }
-        check(appImage.resolve("app").listFiles().orEmpty().any { it.isFile && it.extension == "jar" }) {
-            "Windows app image does not contain application JARs: ${appImage.absolutePath}"
+        val appDir = appImage.resolve("app").toPath().toAbsolutePath().normalize()
+        val classpath = requiredFiles[1].readLines().map(String::trim)
+            .filter { it.startsWith("app.classpath=") }
+            .map { it.substringAfter('=') }
+        check(classpath.isNotEmpty()) { "Windows launcher does not declare an application classpath" }
+        classpath.forEach { entry ->
+            check(entry.startsWith("\$APPDIR\\") || entry.startsWith("\$APPDIR/")) {
+                "Windows launcher classpath must be relative to its app directory: $entry"
+            }
+            val path = appDir.resolve(entry.substring("\$APPDIR/".length)).normalize()
+            check(path.startsWith(appDir) && Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && Files.size(path) > 0L) {
+                "Missing or invalid Windows launcher classpath entry: $entry"
+            }
         }
 
         val smokeRoot = temporaryDir.resolve("isolated-user-data")
@@ -378,13 +390,59 @@ abstract class BuildAwareWindowsInstallerTask @Inject constructor(format: Target
         expect(downgradeRange, "Maximum", "")
         expect(downgradeRange, "OnlyDetect", "\$(var.JpUpgradeVersionOnlyDetectDowngrade)")
         expect(downgradeRange, "IncludeMinimum", "\$(var.JpUpgradeVersionOnlyDetectDowngrade)")
-        val removeExisting = single(single(product, "InstallExecuteSequence"), "RemoveExistingProducts")
+        val executeSequence = single(product, "InstallExecuteSequence")
+        val removeExisting = single(executeSequence, "RemoveExistingProducts")
         expect(removeExisting, "Before", "CostInitialize")
         expect(removeExisting, "After", "")
         check(unifiedVpnBuild.get() > 0L) { "Windows installer requires a positive build number" }
         product.setAttribute("Id", productCode())
         upgradeRange.setAttribute("IncludeMaximum", "yes")
         downgradeRange.setAttribute("IncludeMinimum", "no")
+        // Validate first and keep old-product removal inside the installation transaction.
+        removeExisting.removeAttribute("Before")
+        removeExisting.setAttribute("After", "InstallInitialize")
+
+        fun append(parent: Element, name: String, attributes: Map<String, String>, condition: String? = null): Element =
+            document.createElementNS(namespace, name).also { element ->
+                attributes.forEach { (key, value) -> element.setAttribute(key, value) }
+                if (condition != null) element.textContent = condition
+                parent.appendChild(element)
+            }
+
+        val installOrRepair = "NOT REMOVE~=\"ALL\""
+        val runningProperty = "UNIFIEDVPN_APP_RUNNING"
+        // WiX only detects here: no close messages, termination, or deferred reboot action.
+        val detector = document.createElementNS("http://schemas.microsoft.com/wix/UtilExtension", "util:CloseApplication")
+        mapOf(
+            "Id" to "UnifiedVpnDetectRunningApp",
+            "Target" to "\$(var.JpAppName).exe",
+            "Property" to runningProperty,
+            "CloseMessage" to "no",
+            "ElevatedCloseMessage" to "no",
+            "EndSessionMessage" to "no",
+            "ElevatedEndSessionMessage" to "no",
+            "RebootPrompt" to "no",
+            "PromptToContinue" to "no",
+        ).forEach { (key, value) -> detector.setAttribute(key, value) }
+        detector.textContent = installOrRepair
+        product.appendChild(detector)
+        append(product, "CustomAction", mapOf(
+            "Id" to "UnifiedVpnRequireClosed",
+            "Error" to "Close UnifiedVPN, including its tray icon, then run this installer again. Other VPN applications do not need to be closed.",
+        ))
+        append(product, "CustomAction", mapOf(
+            "Id" to "UnifiedVpnRequireReboot",
+            "Error" to "Windows has pending file operations. Restart Windows before installing UnifiedVPN, then run this installer again.",
+        ))
+        append(executeSequence, "Custom", mapOf(
+            "Action" to "WixCloseApplications", "Before" to "UnifiedVpnRequireClosed",
+        ), installOrRepair)
+        append(executeSequence, "Custom", mapOf(
+            "Action" to "UnifiedVpnRequireClosed", "Before" to "UnifiedVpnRequireReboot",
+        ), "$installOrRepair AND $runningProperty")
+        append(executeSequence, "Custom", mapOf(
+            "Action" to "UnifiedVpnRequireReboot", "Before" to "InstallValidate",
+        ), "$installOrRepair AND MsiSystemRebootPending")
 
         val output = jpackageResources.get().asFile.resolve("main.wxs")
         output.parentFile.mkdirs()
@@ -430,7 +488,7 @@ abstract class BuildAwareWindowsInstallerTask @Inject constructor(format: Target
         }
         val output = log.readText().trim()
         check(process.exitValue() == 0) { "Windows installer policy verification failed:\n$output" }
-        logger.lifecycle("Verified compiled Windows installer build identity and same-version upgrade policy")
+        logger.lifecycle("Verified compiled Windows installer identity, upgrade ordering, and non-destructive preflight guards")
     }
 }
 
@@ -459,8 +517,15 @@ val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
 )
 val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
 val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
-val expectedOpenFluxWrapper = 5
+val expectedOpenFluxWrapper = 8
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
+val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
+    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026101102")
+)
+val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
+val expectedOpenFluxSessionUpstream = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
+val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 1 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 val singBoxAwgRepoDir = providers.environmentVariable("SING_BOX_AWG_REPO")
     .map { rootProject.file(it) }
     .orElse(rootProject.layout.projectDirectory.dir(".downloads/sing-box-awg/source").asFile)
@@ -483,19 +548,20 @@ fun shellQuote(value: String): String = "'${value.replace("'", "'\"'\"'")}'"
 
 val hostDesktopArch = desktopArchName(System.getProperty("os.arch"))
 
-fun verifyOpenFluxWindowsArtifact(binary: File) {
+fun verifyOpenFluxWindowsArtifact(binary: File, session: Boolean = false) {
     check(binary.isFile && binary.length() > 0L && !Files.isSymbolicLink(binary.toPath())) {
         "OpenFlux Windows artifact is missing or invalid. Run tools/openflux/build.ps1 first."
     }
-    val manifest = JsonSlurper().parse(openFluxManifest.asFile) as? Map<*, *>
+    val manifest = JsonSlurper().parse((if (session) openFluxSessionManifest else openFluxManifest).asFile) as? Map<*, *>
         ?: error("Invalid OpenFlux artifact manifest")
     check(
         manifest["schema"] == 1 &&
-            manifest["upstream"] == expectedOpenFluxUpstream &&
-            manifest["protocol"] == expectedOpenFluxProtocol &&
-            manifest["version_text"] == "unified-openflux $expectedOpenFluxWrapper upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol"
+            manifest["upstream"] == (if (session) expectedOpenFluxSessionUpstream else expectedOpenFluxUpstream) &&
+            manifest["protocol"] == (if (session) expectedOpenFluxSessionProtocol else expectedOpenFluxProtocol) &&
+            manifest["version_text"] == (if (session) expectedOpenFluxSessionVersion else "unified-openflux $expectedOpenFluxWrapper upstream=$expectedOpenFluxUpstream protocol=$expectedOpenFluxProtocol")
     ) { "OpenFlux artifact manifest does not match the pinned encrypted engine" }
-    val expectedSha = ((manifest["files"] as? Map<*, *>)?.get("openflux-windows-amd64.exe") as? String)?.lowercase()
+    val artifactName = if (session) "openflux-session-windows-amd64.exe" else "openflux-windows-amd64.exe"
+    val expectedSha = ((manifest["files"] as? Map<*, *>)?.get(artifactName) as? String)?.lowercase()
     check(expectedSha?.matches(Regex("[0-9a-f]{64}")) == true) {
         "OpenFlux artifact manifest has no Windows SHA-256"
     }
@@ -876,6 +942,44 @@ if (currentBuildOs.isWindows) {
         doFirst { verifyOpenFluxWindowsArtifact(openFluxWindowsSource.get()) }
     }
 
+    val copyOpenFluxSessionWindowsAmd64 = tasks.register<Copy>("copyOpenFluxSessionWindowsAmd64") {
+        val binary = openFluxSessionDirectory.file("openflux-session-windows-amd64.exe")
+        from(binary)
+        into(generatedNativeResources.map { it.dir("native") })
+        inputs.file(openFluxSessionManifest)
+        inputs.property("sessionVersion", expectedOpenFluxSessionVersion)
+        outputs.file(generatedNativeResources.map { it.file("native/openflux-session-windows-amd64.exe") })
+        doFirst { verifyOpenFluxWindowsArtifact(binary.asFile, session = true) }
+    }
+
+    val copyVkCallsWindowsAmd64 = tasks.register<Copy>("copyVkCallsWindowsAmd64") {
+        val directory = rootProject.layout.projectDirectory.dir(
+            providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts")
+        )
+        val name = "olcrtc-vkcalls-windows-amd64.exe"
+        val binary = directory.file(name)
+        val manifestFile = directory.file("manifest.json")
+        from(binary)
+        into(generatedNativeResources.map { it.dir("native") })
+        inputs.file(manifestFile)
+        inputs.property("revision", "403edd409011dd371796260196ecd17630df0fdd")
+        outputs.file(generatedNativeResources.map { it.file("native/$name") })
+        doFirst {
+            val manifest = JsonSlurper().parse(manifestFile.asFile) as Map<*, *>
+            check(manifest["revision"] == "403edd409011dd371796260196ecd17630df0fdd") { "VK Calls source revision mismatch" }
+            val hashes = manifest["files"] as Map<*, *>
+            val sha = MessageDigest.getInstance("SHA-256").digest(binary.asFile.readBytes()).joinToString("") { "%02x".format(it) }
+            check(hashes[name] == sha) { "VK Calls Windows artifact mismatch" }
+        }
+    }
+    val copyVkCallsNotices = tasks.register<Copy>("copyVkCallsNotices") {
+        val directory = rootProject.layout.projectDirectory.dir(
+            providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts")
+        )
+        from(directory) { include("LICENSE", "NOTICE") }
+        into(generatedNativeResources.map { it.dir("vkcalls") })
+    }
+
     val copySingBoxAwgWindowsAmd64 = tasks.register<Copy>("copySingBoxAwgWindowsAmd64") {
         dependsOn(":verifyAwgWindowsBinary")
         from(singBoxAwgWindowsSource)
@@ -932,7 +1036,7 @@ if (currentBuildOs.isWindows) {
     val buildWindowsTunHelper = tasks.register<Exec>("buildWindowsTunHelper") {
         dependsOn(extractTun2SocksWindowsAmd64, extractWintunWindowsAmd64)
         // Copy tasks declare the shared native directory as their output.
-        mustRunAfter(copyOpenFluxWindowsAmd64, copySingBoxAwgWindowsAmd64, copyXrayWindowsAmd64)
+        mustRunAfter(copyOpenFluxWindowsAmd64, copyOpenFluxSessionWindowsAmd64, copyVkCallsWindowsAmd64, copySingBoxAwgWindowsAmd64, copyXrayWindowsAmd64)
         val helperSource = rootProject.layout.projectDirectory.dir("desktopApp/src/windowsTunHelper")
         val buildScript = rootProject.layout.projectDirectory.file("tools/Build-WindowsTunHelper.ps1")
         val helperOutput = generatedNativeResources.map { it.file("native/unifiedvpn-tun-helper.exe") }
@@ -952,7 +1056,7 @@ if (currentBuildOs.isWindows) {
     }
 
     val buildWindowsBrowserHelper = tasks.register<Exec>("buildWindowsBrowserHelper") {
-        mustRunAfter(copyOpenFluxWindowsAmd64, copySingBoxAwgWindowsAmd64, copyXrayWindowsAmd64)
+        mustRunAfter(copyOpenFluxWindowsAmd64, copyOpenFluxSessionWindowsAmd64, copyVkCallsWindowsAmd64, copySingBoxAwgWindowsAmd64, copyXrayWindowsAmd64)
         val helperSource = rootProject.layout.projectDirectory.dir("desktopApp/src/windowsBrowserHelper")
         val buildScript = rootProject.layout.projectDirectory.file("tools/Build-WindowsBrowserHelper.ps1")
         val nativeDirectory = generatedNativeResources.map { it.dir("native") }
@@ -983,11 +1087,17 @@ if (currentBuildOs.isWindows) {
     desktopNativeAssetTasks.add(copySingBoxAwgWindowsAmd64)
     desktopNativeAssetTasks.add(copyXrayWindowsAmd64)
     desktopNativeAssetTasks.add(copyOpenFluxWindowsAmd64)
+    desktopNativeAssetTasks.add(copyOpenFluxSessionWindowsAmd64)
+    desktopNativeAssetTasks.add(copyVkCallsWindowsAmd64)
+    desktopNativeAssetTasks.add(copyVkCallsNotices)
     hostDesktopNativeAssetTasks.add(extractTun2SocksWindowsAmd64)
     hostDesktopNativeAssetTasks.add(extractWintunWindowsAmd64)
     hostDesktopNativeAssetTasks.add(copySingBoxAwgWindowsAmd64)
     hostDesktopNativeAssetTasks.add(copyXrayWindowsAmd64)
     hostDesktopNativeAssetTasks.add(copyOpenFluxWindowsAmd64)
+    hostDesktopNativeAssetTasks.add(copyOpenFluxSessionWindowsAmd64)
+    hostDesktopNativeAssetTasks.add(copyVkCallsWindowsAmd64)
+    hostDesktopNativeAssetTasks.add(copyVkCallsNotices)
 }
 
 fun requiredHostNativeResourcePaths(): List<String> = buildList {
@@ -1009,6 +1119,10 @@ fun requiredHostNativeResourcePaths(): List<String> = buildList {
             add("native/sing-box-awg-windows-amd64.exe")
             add("native/xray-windows-amd64.exe")
             add("native/openflux-windows-amd64.exe")
+            add("native/openflux-session-windows-amd64.exe")
+            add("native/olcrtc-vkcalls-windows-amd64.exe")
+            add("vkcalls/LICENSE")
+            add("vkcalls/NOTICE")
         }
         currentBuildOs.isLinux -> {
             add("native/olcrtc-linux-$hostDesktopArch")

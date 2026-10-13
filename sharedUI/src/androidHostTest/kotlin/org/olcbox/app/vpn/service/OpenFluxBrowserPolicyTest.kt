@@ -13,6 +13,81 @@ import kotlin.test.assertTrue
 
 class OpenFluxBrowserPolicyTest {
     @Test
+    fun initialNavigationWaitsOnlyWhileNoUrlOrNavigationHasBeenObserved() {
+        listOf(null, "").forEach { url ->
+            assertEquals(OpenFluxBrowserNavigationPoll.AwaitInitialNavigation, openFluxBrowserNavigationPoll(url, false))
+            assertEquals(OpenFluxBrowserNavigationPoll.Reject, openFluxBrowserNavigationPoll(url, true))
+        }
+    }
+
+    @Test
+    fun permittedNavigationStartMayPrecedeCurrentUrlButObservedUrlCannotRegress() {
+        // onPageStarted validates the destination without setting navigationObserved.
+        assertTrue(isOpenFluxBrowserNavigationAllowed(URL))
+        assertEquals(OpenFluxBrowserNavigationPoll.AwaitInitialNavigation, openFluxBrowserNavigationPoll(null, false))
+        assertEquals(OpenFluxBrowserNavigationPoll.InspectDocument, openFluxBrowserNavigationPoll(URL, false))
+        // Inspection or onPageFinished ends the initial missing-URL allowance permanently.
+        assertEquals(OpenFluxBrowserNavigationPoll.Reject, openFluxBrowserNavigationPoll(null, true))
+    }
+
+    @Test
+    fun navigationPollingInspectsOnlyAllowedDocuments() {
+        listOf(false, true).forEach { observed ->
+            listOf(URL, "https://disk.yandex.ru/i/synthetic").forEach { url ->
+                assertEquals(OpenFluxBrowserNavigationPoll.InspectDocument, openFluxBrowserNavigationPoll(url, observed))
+            }
+        }
+    }
+
+    @Test
+    fun initialNavigationNeverAllowsBlankPagesOrAnActualDisallowedUrl() {
+        listOf(false, true).forEach { observed ->
+            listOf(" ", "about:blank", "javascript:alert(1)", "file:///private", "https://passport.yandex.ru/",
+                "http://docs.yandex.ru/", "https://docs.yandex.ru:444/", "https://docs.yandex.ru.attacker.invalid/"
+            ).forEach { url ->
+                assertEquals(OpenFluxBrowserNavigationPoll.Reject, openFluxBrowserNavigationPoll(url, observed))
+            }
+        }
+    }
+
+    @Test
+    fun replyCarriesExactValidatedBrowserIdentityWithoutChangingCookieScope() {
+        val cookies = parseOpenFluxBrowserCookies("proof=synthetic", "https://docs.yandex.ru/")
+        val session = OpenFluxBrowserSession(cookies, "SyntheticBrowser/1.0")
+        val reply = Json.parseToJsonElement(openFluxBrowserResponse(ID, session.cookies, session.userAgent)).jsonObject
+        assertEquals("SyntheticBrowser/1.0", reply.getValue("user_agent").jsonPrimitive.content)
+        assertEquals("docs.yandex.ru", reply.getValue("cookies").jsonArray.single().jsonObject.getValue("domain").jsonPrimitive.content)
+        assertFalse(openFluxBrowserResponse(ID, cookies).contains("user_agent"))
+        assertFalse(session.toString().contains("synthetic"))
+        listOf("", " leading", "trailing ", "a\r\nb", "a\tb", "a\u0000b", "a\u007fb", "a\u0080b", "a".repeat(1025)).forEach { agent ->
+            assertFalse(isOpenFluxBrowserUserAgentValid(agent))
+            assertFailsWith<IllegalArgumentException> { OpenFluxBrowserSession(cookies, agent) }
+            assertFailsWith<IllegalArgumentException> { openFluxBrowserResponse(ID, cookies, agent) }
+        }
+        assertTrue(isOpenFluxBrowserUserAgentValid("a".repeat(1024)))
+        assertFailsWith<IllegalArgumentException> { openFluxBrowserResponse(ID, null, session.userAgent) }
+    }
+
+    @Test
+    fun tlsDiagnosticsReturnOnlyFixedResourceCategories() {
+        mapOf(
+            "https://docs.yandex.ru/private?token=secret" to OpenFluxBrowserTlsResource.Document,
+            "https://disk.yandex.ru/private" to OpenFluxBrowserTlsResource.Disk,
+            "https://HDRC.yandex.net/private" to OpenFluxBrowserTlsResource.Hdrc,
+            "https://mdd.yandex.net/private" to OpenFluxBrowserTlsResource.Mdd,
+            "https://static.yastatic.net/private" to OpenFluxBrowserTlsResource.Static,
+            "https://other.yandex.net/private" to OpenFluxBrowserTlsResource.Provider
+        ).forEach { (url, category) ->
+            assertEquals(category, openFluxBrowserTlsResource(url))
+        }
+        listOf(null, "", "https://private.invalid/", "https://hdrc.yandex.net.attacker.invalid/",
+            "https://passport.yandex.ru/", "http://hdrc.yandex.net/", "https://user@hdrc.yandex.net/",
+            "https://hdrc.yandex.net:444/", "https://hdrc.yandex.net/\nprivate").forEach {
+            assertEquals(OpenFluxBrowserTlsResource.Unapproved, openFluxBrowserTlsResource(it))
+        }
+    }
+
+    @Test
     fun redirectCookiesStayBoundToTwoIndependentDocumentHosts() {
         val cookies = parseOpenFluxBrowserCookieHeaders(mapOf(
             "disk.yandex.ru" to "proof=disk-value", "docs.yandex.ru" to "proof=docs-value"

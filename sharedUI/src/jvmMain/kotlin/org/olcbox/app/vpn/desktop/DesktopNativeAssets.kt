@@ -23,6 +23,8 @@ internal object DesktopNativeAssets {
                 assets.add(resolveSingBoxBinary())
                 assets.add(resolveXrayBinary())
                 assets.add(resolveOpenFluxBinary())
+                assets.add(resolveOpenFluxBinary(session = true))
+                assets.add(resolveVkCallsBinary())
                 assets.add(resolveWindowsBrowserHelper())
             }
             DesktopOs.Linux -> {
@@ -37,6 +39,12 @@ internal object DesktopNativeAssets {
 
     fun resolveOlcRtcBinary(): Path {
         return resolveOlcRtcBinaryCandidates().first()
+    }
+
+    fun resolveVkCallsBinary(): Path {
+        require(DesktopPaths.os == DesktopOs.Windows) { "VK Calls is currently packaged for Windows and Android" }
+        val name = "olcrtc-vkcalls-windows-amd64.exe"
+        return resolveBinary(name, "native/$name", desktopNativeResourceCandidates(name))
     }
 
     fun resolveOlcRtcBinaryCandidates(): List<Path> {
@@ -150,12 +158,12 @@ internal object DesktopNativeAssets {
         )
     }
 
-    fun resolveOpenFluxBinary(): Path {
+    fun resolveOpenFluxBinary(session: Boolean = false): Path {
         require(DesktopPaths.os == DesktopOs.Windows) {
             "The bundled OpenFlux desktop engine requires Windows"
         }
-        val fileName = "openflux-windows-amd64.exe"
-        val explicitBinary = System.getenv("OPENFLUX_BINARY")
+        val fileName = if (session) "openflux-session-windows-amd64.exe" else "openflux-windows-amd64.exe"
+        val explicitBinary = System.getenv(if (session) "OPENFLUX_SESSION_BINARY" else "OPENFLUX_BINARY")
             ?.takeIf { it.isNotBlank() }
             ?.let { Path(it) }
         return resolveBinary(

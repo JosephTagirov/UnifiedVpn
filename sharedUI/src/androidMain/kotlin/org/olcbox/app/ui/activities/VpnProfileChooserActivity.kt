@@ -110,6 +110,7 @@ class VpnProfileChooserActivity : ComponentActivity() {
                 themeMode = appearance.theme,
                 language = appearance.language
             ) {
+                OpenFluxVerificationDialog()
                 val status by OlcboxVpnState.status.collectAsState()
                 val session by OlcboxVpnState.session.collectAsState()
                 var profiles by remember { mutableStateOf<List<NotificationProfileChoice>?>(null) }
@@ -303,7 +304,7 @@ class VpnProfileChooserActivity : ComponentActivity() {
     private companion object {
         const val PROFILE_SWITCH_POLL_MS = 100L
         const val PROFILE_SWITCH_ACCEPT_TIMEOUT_MS = 10_000L
-        const val PROFILE_SWITCH_WAIT_TIMEOUT_MS = 4 * 60 * 1_000L
+        const val PROFILE_SWITCH_WAIT_TIMEOUT_MS = 5 * 60 * 1_000L
     }
 }
 

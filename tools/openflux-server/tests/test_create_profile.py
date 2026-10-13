@@ -117,6 +117,71 @@ class ProfileWizardTests(unittest.TestCase):
         wizard.read_plan(self.output)
         self.assert_original_unchanged()
 
+    def test_batch_codec_is_explicit_and_included_in_private_uri_and_installed_config(self):
+        self.assertEqual(wizard.main(self.cli_args() + ["--wire-codec", "batch-zstd-v2"]), 0)
+        self.assertEqual(self.fake.commands, [])
+        server = json.loads((self.output / "server.json").read_bytes())
+        encoded = (self.output / "profile.uri").read_text().strip().split("#")[0].removeprefix("openflux://")
+        profile = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+        self.assertEqual(server["wire_codec"], "batch-zstd-v2")
+        self.assertEqual(profile["wire_codec"], server["wire_codec"])
+        self.assertEqual(set(profile), {"version", "transport", "document_url", "encryption_key", "wire_codec"})
+        wizard.read_plan(self.output)
+        wizard.apply_prepared(self.output)
+        target = manage.Manager(instance="phone2")
+        self.assertEqual(manage.read_config(target.root / "server.json")["wire_codec"], "batch-zstd-v2")
+        self.assert_original_unchanged()
+        wizard.rollback_prepared(self.output)
+        self.assert_original_unchanged()
+        for secret in (server["document_url"], server["encryption_key"], "openflux://"):
+            self.assertNotIn(secret, self.stdout.getvalue() + self.stderr.getvalue())
+
+    def test_explicit_legacy_codec_keeps_config_shape_and_byte_identical_uri(self):
+        self.assertEqual(wizard.main(self.cli_args() + ["--wire-codec", "legacy-lz4-v1"]), 0)
+        server = json.loads((self.output / "server.json").read_bytes())
+        self.assertNotIn("wire_codec", server)
+        implicit = wizard.profile_uri(server, "OpenFlux phone2")
+        explicit = wizard.profile_uri(dict(server, wire_codec="legacy-lz4-v1"), "OpenFlux phone2")
+        self.assertEqual(implicit, explicit)
+        self.assertEqual((self.output / "profile.uri").read_bytes(), implicit)
+        self.assert_original_unchanged()
+
+    def test_invalid_or_volga_batch_codec_refused_before_output_key_or_docker(self):
+        cases = [("yandex", codec) for codec in ("", "auto", "SECRET", [], {}, False, True)]
+        cases += [("vyandex", "batch-zstd-v2")]
+        for transport, codec in cases:
+            self.args.transport, self.args.wire_codec = transport, codec
+            with self.subTest(transport=transport, codec=codec), patch.object(wizard.secrets, "token_hex") as random:
+                with self.assertRaises(manage.DeploymentError) as error:
+                    wizard.prepare(self.args)
+                self.assertNotIn("SECRET", str(error.exception))
+                random.assert_not_called()
+                self.assertFalse(self.output.exists())
+                self.assertEqual(self.fake.commands, [])
+
+    def test_prepared_codec_cannot_be_overridden_by_cli(self):
+        wizard.prepare(self.args)
+        for codec in manage.WIRE_CODECS:
+            with self.subTest(codec=codec), patch.object(wizard, "apply_prepared") as apply:
+                self.assertEqual(wizard.main(["--prepared", str(self.output), "--wire-codec", codec, "--apply"]), 1)
+                apply.assert_not_called()
+        self.assert_original_unchanged()
+
+    def test_batch_uri_cannot_be_silently_downgraded_even_with_rehashed_plan(self):
+        self.args.wire_codec = "batch-zstd-v2"
+        wizard.prepare(self.args)
+        server = json.loads((self.output / "server.json").read_bytes())
+        legacy = dict(server)
+        del legacy["wire_codec"]
+        uri = wizard.profile_uri(legacy, "OpenFlux phone2")
+        (self.output / "profile.uri").write_bytes(uri)
+        plan = json.loads((self.output / "plan.json").read_bytes())
+        plan["profile_sha256"] = wizard.hashlib.sha256(uri).hexdigest()
+        (self.output / "plan.json").write_bytes(wizard.json_bytes(plan))
+        with self.assertRaises(manage.DeploymentError):
+            wizard.read_plan(self.output)
+        self.assertEqual(self.fake.commands, [])
+
     def test_mismatched_or_missing_confirmation_refused_before_key_or_directory(self):
         for transport, legacy, volga in (("vyandex", True, False), ("vyandex", False, False),
                                          ("yandex", False, True), (None, False, True),

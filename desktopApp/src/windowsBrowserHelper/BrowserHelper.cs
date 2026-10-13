@@ -19,11 +19,13 @@ using Microsoft.Web.WebView2.WinForms;
 internal static class BrowserHelper
 {
     internal const int MaximumMessageBytes = 32768;
+    internal const int MaximumClassicDocumentBytes = 24576;
+    private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
     internal static readonly JavaScriptSerializer Json = new JavaScriptSerializer {
         MaxJsonLength = MaximumMessageBytes, RecursionLimit = 12
     };
     // Volga readiness permits cookie bootstrap only; native authorization still checks write access.
-    internal const string BootstrapReadyScript = @"() => {
+    internal const string BootstrapReadyScript = @"(capture = false) => {
       try {
         const nodes = document.querySelectorAll('script#client-config');
         if (nodes.length !== 1 || !nodes[0].textContent || nodes[0].textContent.length > 2097152) return false;
@@ -34,8 +36,12 @@ internal static class BrowserHelper
         const nonempty = value => typeof value === 'string' && value.length > 0;
         if (!office || !editor) return false;
         if (office.office_online_editor_type !== 'volga') {
-          return !!(doc && nonempty(office.balancer_url) && nonempty(editor.token) &&
+          const ready = !!(doc && nonempty(office.balancer_url) && nonempty(editor.token) &&
             nonempty(doc.key) && doc.permissions && doc.permissions.edit === true);
+          if (!ready || !capture) return ready;
+          return {balancer_url: office.balancer_url, token: editor.token,
+            document_key: doc.key, file_type: doc.fileType, download_url: doc.url,
+            title: doc.title, edit: doc.permissions.edit};
         }
         const denied = rights => Array.isArray(rights) && !rights.includes('write');
         if (denied(root.rights) || denied(root.editorParams && root.editorParams.rights) ||
@@ -66,7 +72,8 @@ internal static class BrowserHelper
             var request = requestTask.Result;
             id = Text(request, "id");
             if (!ValidId(id) || request.Count != 3) return 2;
-            var url = DocumentUri(Text(request, "document_url"));
+            string sourceUrl = Text(request, "document_url");
+            var url = DocumentUri(sourceUrl);
             var directory = OwnedDirectory(Text(request, "user_data_dir"));
             if (url == null || directory == null) throw new InvalidOperationException();
             if (new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
@@ -87,7 +94,7 @@ internal static class BrowserHelper
                 });
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                using (var form = new VerificationForm(id, url, directory, offline)) {
+                using (var form = new VerificationForm(id, sourceUrl, url, directory, offline)) {
                     Application.Run(form);
                     deadline.Cancel();
                     Console.WriteLine(Json.Serialize(form.Response ?? Failure(id)));
@@ -131,12 +138,131 @@ internal static class BrowserHelper
 
     internal static Uri DocumentUri(string value)
     {
-        Uri uri;
-        if (value == null || value.Length > 8192 || value.Any(Char.IsWhiteSpace) ||
-            !Uri.TryCreate(value, UriKind.Absolute, out uri)) return null;
-        return uri.Scheme == "https" && uri.Port == 443 && uri.UserInfo.Length == 0 &&
-            uri.Fragment.Length == 0 && uri.AbsolutePath.Length > 1 &&
+        Uri uri = StrictHttpsUri(value);
+        return uri != null && uri.AbsolutePath.Length > 1 &&
             (uri.Host == "docs.yandex.ru" || uri.Host == "disk.yandex.ru") ? uri : null;
+    }
+
+    private static int Utf8Length(string value)
+    {
+        try { return value == null ? -1 : StrictUtf8.GetByteCount(value); }
+        catch (EncoderFallbackException) { return -1; }
+    }
+
+    private static bool UrlTextAllowed(string value)
+    {
+        int bytes = Utf8Length(value);
+        return bytes >= 1 && bytes <= 8192 && !value.Any(c => Char.IsWhiteSpace(c) || Char.IsControl(c) || c == '\\') &&
+            !Regex.IsMatch(value, "%(?![0-9a-fA-F]{2})");
+    }
+
+    private static Uri StrictHttpsUri(string value)
+    {
+        if (!UrlTextAllowed(value)) return null;
+        var match = Regex.Match(value, "\\Ahttps://([A-Za-z0-9.-]+)(?::443)?(?:[/?][^#]*)?\\z",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success) return null;
+        string host = match.Groups[1].Value;
+        if (host.Length > 253 || host.Split('.').Any(label => !Regex.IsMatch(label,
+            "\\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\z"))) return null;
+        Uri uri;
+        return Uri.TryCreate(value, UriKind.Absolute, out uri) && uri.Scheme == "https" &&
+            uri.Port == 443 && uri.UserInfo.Length == 0 && uri.Fragment.Length == 0 ? uri : null;
+    }
+
+    internal static bool ClassicResourceAllowed(string value, bool originOnly)
+    {
+        Uri uri = StrictHttpsUri(value);
+        return uri != null && (uri.Host.EndsWith(".yandex.ru", StringComparison.Ordinal) ||
+            uri.Host.EndsWith(".yandex.net", StringComparison.Ordinal)) &&
+            (!originOnly || Regex.IsMatch(value, "\\Ahttps://[A-Za-z0-9.-]+(?::443)?\\z",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+    }
+
+    internal static bool ClassicBalancerAllowed(string value)
+    {
+        if (!UrlTextAllowed(value)) return false;
+        var match = Regex.Match(value, "\\Ahttps://([A-Za-z0-9_.-]+)(?::443)?\\z",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success) return false;
+        string host = match.Groups[1].Value;
+        return host.Length <= 253 && host.Split('.').All(label => Regex.IsMatch(label,
+            "\\A[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?\\z")) &&
+            (host.EndsWith(".yandex.ru", StringComparison.OrdinalIgnoreCase) ||
+             host.EndsWith(".yandex.net", StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal static bool ClassicDocumentReferenceAllowed(string value)
+    {
+        if (ClassicResourceAllowed(value, false)) return true;
+        const string authority = "http://localhost:12701";
+        const string prefix = authority + "/disk/";
+        if (!UrlTextAllowed(value) || !value.StartsWith(prefix, StringComparison.Ordinal) || value.Contains("#")) return false;
+        Uri uri;
+        if (!Uri.TryCreate(value, UriKind.Absolute, out uri) || uri.Scheme != "http" ||
+            uri.Authority != "localhost:12701" || uri.UserInfo.Length != 0 || uri.Fragment.Length != 0) return false;
+        // This reference is forwarded to OnlyOffice, never fetched locally. Inspect the raw
+        // path because System.Uri normalizes dot segments before exposing AbsolutePath.
+        int query = value.IndexOf('?');
+        string rawPath = value.Substring(authority.Length, (query < 0 ? value.Length : query) - authority.Length);
+        foreach (Match encoded in Regex.Matches(rawPath, "(?:%[0-9a-fA-F]{2})+")) {
+            var bytes = new byte[encoded.Value.Length / 3];
+            for (int index = 0; index < bytes.Length; index++)
+                bytes[index] = Convert.ToByte(encoded.Value.Substring(index * 3 + 1, 2), 16);
+            try { StrictUtf8.GetString(bytes); }
+            catch (DecoderFallbackException) { return false; }
+        }
+        string path = Uri.UnescapeDataString(rawPath);
+        return path.StartsWith("/disk/", StringComparison.Ordinal) && path.Length > 6 && Utf8Length(path) >= 0 &&
+            !path.Any(c => Char.IsWhiteSpace(c) || Char.IsControl(c) || "\\%?#".Contains(c)) &&
+            !path.Split('/').Any(segment => segment == "." || segment == "..");
+    }
+
+    private static bool VisibleAscii(string value, int maximum)
+    {
+        return value != null && value.Length >= 1 && value.Length <= maximum &&
+            value.All(c => c >= 0x21 && c <= 0x7e);
+    }
+
+    private static bool JsonFits(object value, int maximum)
+    {
+        try {
+            int bytes = Utf8Length(Json.Serialize(value));
+            return bytes >= 0 && bytes <= maximum;
+        } catch (InvalidOperationException) { return false; }
+        catch (ArgumentException) { return false; }
+    }
+
+    internal static bool ClassicDocumentAllowed(Dictionary<string, object> value, string sourceUrl, long now)
+    {
+        string[] fields = { "source_url", "captured_at", "balancer_url", "token", "document_key",
+            "file_type", "download_url", "title", "edit" };
+        if (value == null || value.Count != fields.Length || fields.Any(key => !value.ContainsKey(key)) ||
+            Text(value, "source_url") != sourceUrl || DocumentUri(sourceUrl) == null) return false;
+        object timestamp = value["captured_at"];
+        if (!(timestamp is int) && !(timestamp is long)) return false;
+        long capturedAt = Convert.ToInt64(timestamp);
+        string keyValue = Text(value, "document_key");
+        string fileType = Text(value, "file_type");
+        string title = Text(value, "title");
+        int titleBytes = Utf8Length(title);
+        return capturedAt >= now - 120 && capturedAt <= now + 5 &&
+            ClassicBalancerAllowed(Text(value, "balancer_url")) &&
+            VisibleAscii(Text(value, "token"), 16384) && VisibleAscii(keyValue, 512) &&
+            keyValue != "." && keyValue != ".." && fileType != null &&
+            Regex.IsMatch(fileType, "\\A[A-Za-z0-9._-]{1,32}\\z") &&
+            ClassicDocumentReferenceAllowed(Text(value, "download_url")) &&
+            titleBytes >= 0 && titleBytes <= 1024 && !title.Any(Char.IsControl) &&
+            value["edit"] is bool && (bool)value["edit"] &&
+            JsonFits(value, MaximumClassicDocumentBytes);
+    }
+
+    internal static bool CaptureStillCurrent(long capturedRevision, long currentRevision,
+        string capturedSource, string currentSource, bool navigationSucceeded, bool offline)
+    {
+        return capturedRevision == currentRevision && navigationSucceeded &&
+            String.Equals(capturedSource, currentSource, StringComparison.Ordinal) &&
+            (offline || DocumentUri(currentSource) != null);
     }
 
     internal static bool NavigationAllowed(string value)
@@ -147,6 +273,12 @@ internal static class BrowserHelper
         return uri.Host == "docs.yandex.ru" || uri.Host == "disk.yandex.ru" ||
             uri.Host == "yandex.ru" || uri.Host == "captcha.yandex.ru" ||
             uri.Host == "smartcaptcha.yandexcloud.net";
+    }
+
+    internal static bool UserAgentAllowed(string value)
+    {
+        return value != null && value.Length >= 1 && value.Length <= 1024 &&
+            value.Trim() == value && value.All(ch => ch >= 0x20 && ch <= 0x7e);
     }
 
     internal static bool IsAccountCookie(string name)
@@ -224,8 +356,12 @@ internal static class BrowserHelper
     private static int SelfTest()
     {
         string id = new string('a', 32);
-        var checks = new[] {
+        var checks = new List<bool> {
             ValidId(id), !ValidId(id.ToUpperInvariant()), !ValidId(id + "\n"),
+            UserAgentAllowed("SyntheticBrowser/1.0"), UserAgentAllowed(new string('a', 1024)),
+            !UserAgentAllowed(null), !UserAgentAllowed(""), !UserAgentAllowed(" leading"),
+            !UserAgentAllowed("trailing "), !UserAgentAllowed("a\r\nb"), !UserAgentAllowed("a\tb"),
+            !UserAgentAllowed("a\u007fb"), !UserAgentAllowed("a\u0080b"), !UserAgentAllowed(new string('a', 1025)),
             DocumentUri("https://docs.yandex.ru/docs/view?test=1") != null,
             DocumentUri("https://disk.yandex.ru/i/test") != null,
             DocumentUri("http://docs.yandex.ru/x") == null,
@@ -258,9 +394,127 @@ internal static class BrowserHelper
             !ResourceAllowed("content://test"),
             !ResourceAllowed("https://docs.yandex.ru:444/test")
         };
+        checks.AddRange(ClassicDocumentChecks());
         if (checks.Any(value => !value)) return 1;
-        Console.WriteLine("Browser helper policy self-test: " + checks.Length + " passed");
+        Console.WriteLine("Browser helper policy self-test: " + checks.Count + " passed");
         return 0;
+    }
+
+    private static IEnumerable<bool> ClassicDocumentChecks()
+    {
+        const string source = "https://docs.yandex.ru/docs/view?url=synthetic%2fvalue";
+        const long now = 1000;
+        var valid = new Dictionary<string, object> {
+            { "source_url", source }, { "captured_at", now },
+            { "balancer_url", "https://docs.yandex.ru" }, { "token", "synthetic-token" },
+            { "document_key", "synthetic-key" }, { "file_type", "docx" },
+            { "download_url", "https://disk.yandex.net/synthetic?value=1" }, { "title", "" }, { "edit", true }
+        };
+        Func<string, object, bool> changedAllowed = (key, value) => {
+            var changed = new Dictionary<string, object>(valid);
+            changed[key] = value;
+            return ClassicDocumentAllowed(changed, source, now);
+        };
+        yield return ClassicDocumentAllowed(valid, source, now);
+        yield return !ClassicDocumentAllowed(valid, source.Replace("%2f", "%2F"), now);
+        foreach (string field in valid.Keys) {
+            var missing = new Dictionary<string, object>(valid);
+            missing.Remove(field);
+            yield return !ClassicDocumentAllowed(missing, source, now);
+            yield return !changedAllowed(field, null);
+        }
+        yield return !changedAllowed("unexpected", "synthetic");
+        yield return changedAllowed("captured_at", now - 120);
+        yield return changedAllowed("captured_at", now + 5);
+        foreach (object timestamp in new object[] { now - 121, now + 6, "1000", 1000.0, true })
+            yield return !changedAllowed("captured_at", timestamp);
+        yield return changedAllowed("token", new string('a', 16384));
+        foreach (object token in new object[] { "", "a b", "a\tb", "a\u007fb", "a\u0080b", new string('a', 16385), true })
+            yield return !changedAllowed("token", token);
+        yield return changedAllowed("document_key", new string('a', 512));
+        foreach (string key in new[] { "", ".", "..", "a b", "a\nb", new string('a', 513) })
+            yield return !changedAllowed("document_key", key);
+        yield return changedAllowed("file_type", new string('a', 32));
+        foreach (string type in new[] { "", "a/b", "a b", "\u00e9", new string('a', 33) })
+            yield return !changedAllowed("file_type", type);
+        yield return changedAllowed("title", new string('\u00e9', 512));
+        foreach (object title in new object[] { new string('\u00e9', 513), "a\nb", "a\u007fb", "a\u0085b", "\ud800", true })
+            yield return !changedAllowed("title", title);
+        yield return !changedAllowed("edit", false);
+        yield return !changedAllowed("edit", "true");
+        yield return !changedAllowed("edit", 1);
+        foreach (string url in new[] {
+            "http://docs.yandex.ru", "https://yandex.ru", "https://yandex.net", "https://docs.yandex.ru.example",
+            "https://docs.yandex.ru.", "https://.yandex.ru", "https://a..yandex.ru", "https://-a.yandex.ru",
+            "https://a-.yandex.ru", "https://a_b.yandex.ru", "https://user@docs.yandex.ru", "https://docs.yandex.ru:444",
+            "https://docs.yandex.ru:0443", "https://docs.yandex.ru:", "https://docs.yandex.ru#", "https://docs.yandex.ru#x",
+            "https://docs.yandex.ru\\test", "https://docs.yandex.ru/\t", "https://docs.yandex.ru/\u00a0", "https://docs.yandex.ru/%zz",
+            "https://" + new string('a', 64) + ".yandex.ru", "https://\u044f.yandex.ru"
+        }) {
+            yield return !ClassicResourceAllowed(url, true);
+            yield return !ClassicResourceAllowed(url, false);
+        }
+        yield return ClassicResourceAllowed("https://docs.yandex.ru:443", true);
+        yield return ClassicResourceAllowed("https://docs.yandex.net/synthetic?value=1", false);
+        yield return !ClassicResourceAllowed("https://docs.yandex.ru/", true);
+        yield return !ClassicResourceAllowed("https://docs.yandex.ru?", true);
+        yield return !ClassicResourceAllowed("https://docs.yandex.ru?value=1", true);
+        yield return !ClassicResourceAllowed("https://docs.yandex.ru/" + new string('a', 8192), false);
+        foreach (string balancer in new[] { "https://classic_a.yandex.ru", "https://_classic.yandex.net:443",
+            "HTTPS://CLASSIC_.YANDEX.RU", "https://_.yandex.ru",
+            "https://" + String.Join(".", Enumerable.Repeat(new string('a', 60), 4)) + ".yandex.ru" }) {
+            yield return ClassicBalancerAllowed(balancer);
+            yield return changedAllowed("balancer_url", balancer);
+        }
+        yield return !ClassicResourceAllowed("https://classic_a.yandex.ru", false);
+        yield return !changedAllowed("download_url", "https://classic_a.yandex.ru/file");
+        foreach (string balancer in new[] { "http://a_b.yandex.ru", "https://a_b.yandex.ru/",
+            "https://a_b.yandex.ru/path", "https://a_b.yandex.ru?", "https://a_b.yandex.ru?q=1",
+            "https://a_b.yandex.ru#", "https://a_b.yandex.ru#x", "https://user@a_b.yandex.ru",
+            "https://a_b.yandex.ru:0443", "https://a_b.yandex.ru:", "https://a_b.yandex.ru:444",
+            "https://a_b.yandex.ru.", "https://a_b..yandex.ru", "https://-a_b.yandex.ru",
+            "https://a_b-.yandex.ru", "https://a_b.yandex.ru.example", "https://yandex.ru",
+            "https://a%5fb.yandex.ru", "https://a+b.yandex.ru", "https://\u044f_b.yandex.ru",
+            "https://" + new string('_', 64) + ".yandex.ru",
+            "https://" + new string('a', 61) + "." + String.Join(".", Enumerable.Repeat(new string('a', 60), 3)) + ".yandex.ru" })
+            yield return !changedAllowed("balancer_url", balancer);
+        const string internalPrefix = "http://localhost:12701/disk/";
+        foreach (string reference in new[] { internalPrefix + "x", internalPrefix + "x?",
+            internalPrefix + "x?signature=synthetic%2fvalue&fragment=%23",
+            internalPrefix + "%D1%84?signature=%ff", internalPrefix + "\u0444",
+            internalPrefix + "x%2Fy", internalPrefix + new string('a', 8192 - internalPrefix.Length) }) {
+            yield return ClassicDocumentReferenceAllowed(reference);
+            yield return changedAllowed("download_url", reference);
+            yield return !ClassicResourceAllowed(reference, false);
+            yield return !ResourceAllowed(reference);
+            yield return !NavigationAllowed(reference);
+            yield return DocumentUri(reference) == null;
+        }
+        foreach (string reference in new[] { "HTTP://localhost:12701/disk/x", "http://LOCALHOST:12701/disk/x",
+            "http://127.0.0.1:12701/disk/x", "http://localhost/disk/x", "http://localhost:12702/disk/x",
+            "http://localhost:012701/disk/x", "http://user@localhost:12701/disk/x",
+            "http://localhost:12701/other/x", internalPrefix, internalPrefix + "?x=1",
+            internalPrefix + "x#", internalPrefix + "x#fragment", internalPrefix + "x y",
+            internalPrefix + "x\\y", internalPrefix + ".", internalPrefix + "..", internalPrefix + "a/../x",
+            internalPrefix + "%2e", internalPrefix + "%2e%2e/x", internalPrefix + "a/%2E%2E/x",
+            internalPrefix + "%252e%252e/x", internalPrefix + "x%5Cy", internalPrefix + "x%20y",
+            internalPrefix + "x%C2%A0y", internalPrefix + "x%00y", internalPrefix + "x%7Fy",
+            internalPrefix + "x%3Fy", internalPrefix + "x%23y", internalPrefix + "%ff",
+            internalPrefix + "%c0%af", internalPrefix + "%ed%a0%80", internalPrefix + "%C3%28",
+            internalPrefix + "%", internalPrefix + "x?bad=%zz", internalPrefix + "x?bad= ",
+            internalPrefix + new string('a', 8193 - internalPrefix.Length) })
+            yield return !changedAllowed("download_url", reference);
+        var oversized = new Dictionary<string, object>(valid);
+        oversized["token"] = new string('a', 16384);
+        oversized["download_url"] = "https://docs.yandex.ru/" + new string('a', 8000);
+        oversized["title"] = new string('a', 1024);
+        yield return !ClassicDocumentAllowed(oversized, source, now);
+        yield return CaptureStillCurrent(1, 1, source, source, true, false);
+        yield return !CaptureStillCurrent(1, 2, source, source, true, false);
+        yield return !CaptureStillCurrent(1, 1, source, source + "x", true, false);
+        yield return !CaptureStillCurrent(1, 1, source, source, false, false);
+        yield return !CaptureStillCurrent(1, 1, "https://captcha.yandex.ru/", "https://captcha.yandex.ru/", true, false);
+        yield return CaptureStillCurrent(1, 1, "about:blank", "about:blank", true, true);
     }
 
     [StructLayout(LayoutKind.Sequential)] private struct BasicLimits {
@@ -288,6 +542,7 @@ internal static class BrowserHelper
 internal sealed class VerificationForm : Form
 {
     private readonly string id;
+    private readonly string sourceUrl;
     private readonly Uri document;
     private readonly string directory;
     private readonly bool offline;
@@ -297,15 +552,18 @@ internal sealed class VerificationForm : Form
     private Process browser;
     private string stage = "initializing";
     private bool navigationSucceeded;
+    private long navigationRevision;
+    private ulong navigationId;
     private bool navigationCancelled;
     private bool nodePresent;
     private bool finished;
     internal Dictionary<string, object> Response;
     internal int ExitCode = 22;
 
-    internal VerificationForm(string id, Uri document, string directory, bool offline)
+    internal VerificationForm(string id, string sourceUrl, Uri document, string directory, bool offline)
     {
         this.id = id;
+        this.sourceUrl = sourceUrl;
         this.document = document;
         this.directory = directory;
         this.offline = offline;
@@ -375,13 +633,19 @@ internal sealed class VerificationForm : Form
             core.ClientCertificateRequested += (sender, args) => { args.Cancel = true; args.Handled = true; };
             core.LaunchingExternalUriScheme += (sender, args) => args.Cancel = true;
             core.NavigationStarting += (sender, args) => {
+                navigationRevision++;
+                navigationId = args.NavigationId;
+                navigationSucceeded = false;
                 // NavigateToString uses a runtime-specific synthetic URI; offline resources are denied below.
                 if (!offline && !BrowserHelper.NavigationAllowed(args.Uri)) {
                     args.Cancel = true;
                     navigationCancelled = true;
                 }
             };
-            core.NavigationCompleted += (sender, args) => navigationSucceeded = args.IsSuccess;
+            core.SourceChanged += (sender, args) => navigationRevision++;
+            core.NavigationCompleted += (sender, args) => {
+                if (args.NavigationId == navigationId) navigationSucceeded = args.IsSuccess;
+            };
             core.ServerCertificateErrorDetected += (sender, args) => args.Action = CoreWebView2ServerCertificateErrorAction.Cancel;
             core.ProcessFailed += (sender, args) => cancellation.Cancel();
             core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All,
@@ -396,27 +660,52 @@ internal sealed class VerificationForm : Form
             };
             if (offline) {
                 stage = "loading_synthetic";
-                if ((await core.CookieManager.GetCookiesAsync(document.AbsoluteUri)).Count != 0)
+                if ((await core.CookieManager.GetCookiesAsync(sourceUrl)).Count != 0)
                     throw new InvalidOperationException();
                 var synthetic = core.CookieManager.CreateCookie("anonymous", "synthetic", ".yandex.ru", "/");
                 synthetic.IsSecure = true;
                 synthetic.IsHttpOnly = true;
                 core.CookieManager.AddOrUpdateCookie(synthetic);
                 core.NavigateToString("<!doctype html><html><body><script type='application/json' id='client-config'>" +
-                    "{\"officeActionData\":{\"balancer_url\":\"synthetic\",\"editor_config\":{\"token\":\"synthetic\"," +
-                    "\"document\":{\"key\":\"synthetic\",\"permissions\":{\"edit\":true}}}}}</script></body></html>");
+                    "{\"officeActionData\":{\"balancer_url\":\"https://docs.yandex.ru\",\"editor_config\":{\"token\":\"synthetic\"," +
+                    "\"document\":{\"key\":\"synthetic\",\"fileType\":\"docx\",\"url\":\"https://docs.yandex.ru/synthetic\"," +
+                    "\"title\":\"Synthetic\",\"permissions\":{\"edit\":true}}}}}</script></body></html>");
             } else {
-                core.Navigate(document.AbsoluteUri);
+                core.Navigate(sourceUrl);
             }
             stage = "waiting_document";
             while (true) {
                 await Task.Delay(250, cancellation.Token);
-                if (!offline && BrowserHelper.DocumentUri(core.Source) == null) continue;
-                if (offline) nodePresent = await core.ExecuteScriptAsync("Boolean(document.getElementById('client-config'))") == "true";
-                string ready = await core.ExecuteScriptAsync("(" + BrowserHelper.BootstrapReadyScript + ")()");
-                if (ready != "true") continue;
+                long capturedRevision = navigationRevision;
+                string capturedSource = core.Source;
+                if (!BrowserHelper.CaptureStillCurrent(capturedRevision, navigationRevision,
+                    capturedSource, core.Source, navigationSucceeded, offline)) continue;
+                if (offline) {
+                    nodePresent = await core.ExecuteScriptAsync("Boolean(document.getElementById('client-config'))") == "true";
+                    cancellation.Token.ThrowIfCancellationRequested();
+                    if (!BrowserHelper.CaptureStillCurrent(capturedRevision, navigationRevision,
+                        capturedSource, core.Source, navigationSucceeded, offline)) continue;
+                }
+                string ready = await core.ExecuteScriptAsync("(" + BrowserHelper.BootstrapReadyScript + ")(true)");
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (!BrowserHelper.CaptureStillCurrent(capturedRevision, navigationRevision,
+                    capturedSource, core.Source, navigationSucceeded, offline)) continue;
+                if (ready == "false" || ready == "null") continue;
+                Dictionary<string, object> classicDocument = null;
+                if (ready != "true") {
+                    classicDocument = BrowserHelper.Json.Deserialize<Dictionary<string, object>>(ready);
+                    if (classicDocument == null) throw new InvalidOperationException();
+                    long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                    classicDocument.Add("source_url", sourceUrl);
+                    classicDocument.Add("captured_at", now);
+                    if (!BrowserHelper.ClassicDocumentAllowed(classicDocument, sourceUrl, now))
+                        throw new InvalidOperationException();
+                }
                 stage = "reading_cookies";
-                var values = await core.CookieManager.GetCookiesAsync(document.AbsoluteUri);
+                var values = await core.CookieManager.GetCookiesAsync(sourceUrl);
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (!BrowserHelper.CaptureStillCurrent(capturedRevision, navigationRevision,
+                    capturedSource, core.Source, navigationSucceeded, offline)) continue;
                 if (values.Any(cookie => BrowserHelper.IsAccountCookie(cookie.Name)))
                     throw new InvalidOperationException();
                 var cookies = new List<Dictionary<string, object>>();
@@ -437,10 +726,18 @@ internal sealed class VerificationForm : Form
                         { "path", "/" }, { "secure", true }, { "expires", expires }
                     });
                 }
-                var response = new Dictionary<string, object> { { "id", id }, { "cookies", cookies } };
+                string userAgent = core.Settings.UserAgent;
+                if (!BrowserHelper.UserAgentAllowed(userAgent)) throw new InvalidOperationException();
+                var response = new Dictionary<string, object> {
+                    { "id", id }, { "cookies", cookies }, { "user_agent", userAgent }
+                };
+                if (classicDocument != null) response.Add("classic_document", classicDocument);
                 if (cookies.Count == 0 || cookies.Count > 64 ||
                     Encoding.UTF8.GetByteCount(BrowserHelper.Json.Serialize(response)) > BrowserHelper.MaximumMessageBytes - 2)
                     throw new InvalidOperationException();
+                cancellation.Token.ThrowIfCancellationRequested();
+                if (!BrowserHelper.CaptureStillCurrent(capturedRevision, navigationRevision,
+                    capturedSource, core.Source, navigationSucceeded, offline)) continue;
                 Response = response;
                 ExitCode = 0;
                 if (offline) Console.Error.WriteLine("OFFLINE_WEBVIEW2_SMOKE in_private=true owned_job=true initial_cookies=0 document_ready=true network_requests_allowed=0");

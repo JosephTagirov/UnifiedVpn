@@ -23,6 +23,8 @@ logs/
 .env
 .env.*
 *.pem
+# Public GlobalSign R46 test fixture; DER SHA-256 is pinned in roots.go.
+!/tools/olcrtc-android-bind/tlsbootstrap/testdata/globalsign-r46.pem
 *.key
 *.p12
 *.pfx

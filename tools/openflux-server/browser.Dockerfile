@@ -11,7 +11,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HOME=/home/browser
-LABEL org.unifiedvpn.openflux.browser-contract="2"
+LABEL org.unifiedvpn.openflux.browser-contract="3"
 USER 10001:10001
 WORKDIR /opt/openflux-browser
 HEALTHCHECK NONE

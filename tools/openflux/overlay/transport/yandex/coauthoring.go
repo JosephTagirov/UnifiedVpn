@@ -8,23 +8,52 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func (t *YandexDocsTransport) acknowledgeCoAuthoring(session *DocSession, data []byte) bool {
+type classicCoauthoringMessage struct {
+	Type     string `json:"type"`
+	Result   *int   `json:"result"`
+	WaitAuth bool   `json:"waitAuth"`
+}
+
+func parseClassicCoauthoring(data []byte) (classicCoauthoringMessage, bool) {
+	var message classicCoauthoringMessage
 	if !bytes.HasPrefix(data, []byte("42[")) {
-		return false
+		return message, false
 	}
 	var event []json.RawMessage
 	var name string
-	var message struct {
-		Type     string `json:"type"`
-		Result   int    `json:"result"`
-		WaitAuth bool   `json:"waitAuth"`
-	}
 	if json.Unmarshal(data[2:], &event) != nil || len(event) != 2 ||
 		json.Unmarshal(event[0], &name) != nil || name != "message" ||
 		json.Unmarshal(event[1], &message) != nil {
+		return message, false
+	}
+	return message, true
+}
+
+func acknowledgeClassicDocumentLock(session *DocSession) error {
+	// Never save, delete document changes, or release editing locks.
+	ack := []byte(`42["message",{"type":"unLockDocument","unlock":true,"isSave":false,"releaseLocks":false}]`)
+	return session.safeWrite(websocket.TextMessage, ack)
+}
+
+func (t *YandexDocsTransport) acknowledgeCoAuthoring(session *DocSession, data []byte) bool {
+	message, ok := parseClassicCoauthoring(data)
+	if !ok {
 		return false
 	}
-	if !(message.Type == "auth" && message.Result == 1 || message.Type == "connectState" && message.WaitAuth) {
+	authAccepted := message.Type == "auth" && message.Result != nil && *message.Result == 1
+	if message.Type == "auth" && message.Result != nil {
+		t.Mu.RLock()
+		current := session != nil && session.Conn != nil && t.session == session && t.IsRunning() && t.IsConnected()
+		t.Mu.RUnlock()
+		if current {
+			if authAccepted {
+				session.diagnostics.record(classicAuthAccepted)
+			} else {
+				session.diagnostics.record(classicAuthRejected)
+			}
+		}
+	}
+	if !(authAccepted || message.Type == "connectState" && message.WaitAuth) {
 		return false
 	}
 	t.Mu.RLock()
@@ -33,10 +62,7 @@ func (t *YandexDocsTransport) acknowledgeCoAuthoring(session *DocSession, data [
 	if !current {
 		return true
 	}
-	// Release only this connection's co-authoring auth lock. Never save, delete
-	// document changes or release editing locks when acknowledging another peer.
-	ack := []byte(`42["message",{"type":"unLockDocument","unlock":true,"isSave":false,"releaseLocks":false}]`)
-	if err := session.safeWrite(websocket.TextMessage, ack); err != nil {
+	if err := acknowledgeClassicDocumentLock(session); err != nil {
 		t.disconnectSession(session)
 	}
 	return true

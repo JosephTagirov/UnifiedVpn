@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/net/html"
 )
 
 var errVolgaDocument = errors.New("Yandex Volga text document is unavailable or does not allow editing")
@@ -74,11 +72,11 @@ func (t *YandexVolgaTransport) CheckDocumentAccess() error {
 	if t.IsRunning() {
 		return errors.New("document diagnostic requires a stopped transport")
 	}
-	body, err := t.bootstrap.fetch(t.docURL)
+	result, err := t.bootstrap.fetchVolga(t.docURL)
 	if err != nil {
 		return err
 	}
-	_, err = parseVolgaDocument(body)
+	_, err = parseVolgaDocument(result.html)
 	return err
 }
 
@@ -90,40 +88,10 @@ func allowedVolgaURL(raw string) bool {
 }
 
 func parseVolgaDocument(body string) (volgaDocument, error) {
-	z := html.NewTokenizer(strings.NewReader(body))
-	var script string
-	found := false
-	for {
-		switch z.Next() {
-		case html.ErrorToken:
-			if z.Err() != io.EOF {
-				return volgaDocument{}, errVolgaDocument
-			}
-			if !found {
-				return volgaDocument{}, errVolgaDocument
-			}
-			goto decode
-		case html.StartTagToken:
-			token := z.Token()
-			if token.Data != "script" {
-				continue
-			}
-			match := false
-			for _, attr := range token.Attr {
-				if attr.Key == "id" && attr.Val == "client-config" {
-					match = true
-				}
-			}
-			if !match {
-				continue
-			}
-			if found || z.Next() != html.TextToken {
-				return volgaDocument{}, errVolgaDocument
-			}
-			found, script = true, string(z.Text())
-		}
+	script, _, err := clientConfigScript(body)
+	if err != nil {
+		return volgaDocument{}, errVolgaDocument
 	}
-decode:
 	var root map[string]any
 	d := json.NewDecoder(strings.NewReader(script))
 	d.UseNumber()
@@ -166,15 +134,16 @@ decode:
 
 func (t *YandexVolgaTransport) authorizeDocument() (*volgaAuth, error) {
 	b := t.bootstrap
-	body, err := b.fetch(t.docURL)
+	result, err := b.fetchVolga(t.docURL)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := parseVolgaDocument(body)
+	doc, err := parseVolgaDocument(result.html)
 	if err != nil {
 		return nil, err
 	}
 	// The cookie jar stays in memory and is shared only with these exact Yandex origins.
+	userAgent := b.requestUserAgent()
 	session := *b.client
 	session.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	form := url.Values{"access_token": {doc.token}, "access_token_ttl": {doc.ttl}}
@@ -182,7 +151,7 @@ func (t *YandexVolgaTransport) authorizeDocument() (*volgaAuth, error) {
 	if err != nil {
 		return nil, errVolgaDocument
 	}
-	req.Header.Set("User-Agent", volgaUserAgent)
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "https://disk.yandex.ru")
 	req.Header.Set("Referer", t.docURL)
@@ -213,7 +182,7 @@ func (t *YandexVolgaTransport) authorizeDocument() (*volgaAuth, error) {
 	}
 	user, err := strconv.ParseInt(getStr(data, "userId"), 10, 32)
 	xiva, _ := data["xiva"].(map[string]any)
-	auth := &volgaAuth{Session: &session, Token: query.Get("token"), RequestPath: query.Get("request-path"),
+	auth := &volgaAuth{Session: &session, BrowserUserAgent: userAgent, Token: query.Get("token"), RequestPath: query.Get("request-path"),
 		UserID: int(user), SessionID: getStr(data, "sessionId"), UserIDStr: getStr(xiva, "user"),
 		Sign: getStr(xiva, "sign"), TS: getStr(xiva, "ts")}
 	if err != nil || user <= 0 || !volgaRequestPath.MatchString(auth.RequestPath) || auth.RequestPath == "." || auth.RequestPath == ".." ||
@@ -224,7 +193,7 @@ func (t *YandexVolgaTransport) authorizeDocument() (*volgaAuth, error) {
 	if err != nil {
 		return nil, errVolgaDocument
 	}
-	req.Header.Set("User-Agent", volgaUserAgent)
+	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Referer", doc.action)
 	response, err = session.Do(req)
 	if err != nil {

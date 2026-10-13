@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,6 +16,15 @@ import (
 // Control records are inside upstream authenticated encryption, not a second
 // cryptographic protocol. A fresh challenge prevents stale welcome replay.
 var controlPrefix = []byte{0, 'U', 'O', 'F', 1}
+
+var errPeerWaitTimeout = fmt.Errorf("encrypted peer readiness timed out; check the server, document access, and matching key (stage=peer_wait): %w", context.DeadlineExceeded)
+
+func peerWaitError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errPeerWaitTimeout
+	}
+	return err
+}
 
 type peerSession struct {
 	transport.Transport
@@ -154,7 +164,7 @@ func (s *peerSession) receive(packet []byte) {
 
 func (s *peerSession) waitPeer(ctx context.Context) (result error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return peerWaitError(err)
 	}
 	if s.server {
 		return errors.New("only a client can initiate the peer handshake")
@@ -188,7 +198,7 @@ func (s *peerSession) waitPeer(ctx context.Context) (result error) {
 	defer ticker.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return peerWaitError(err)
 		}
 		if s.isStopped() {
 			return errors.New("encrypted peer session is stopped")
@@ -196,14 +206,14 @@ func (s *peerSession) waitPeer(ctx context.Context) (result error) {
 		_ = s.Transport.Send(controlRecord('H', a.challenge[:]))
 		select {
 		case <-ctx.Done():
-			return errors.New("encrypted peer handshake timed out; check the server, document access, and matching key")
+			return peerWaitError(ctx.Err())
 		case <-s.stopped:
 			return errors.New("encrypted peer session is stopped")
 		case <-a.ready:
 			s.mu.Lock()
 			if err := ctx.Err(); err != nil {
 				s.mu.Unlock()
-				return err
+				return peerWaitError(err)
 			}
 			if s.isStopped() || s.attempt != a {
 				s.mu.Unlock()

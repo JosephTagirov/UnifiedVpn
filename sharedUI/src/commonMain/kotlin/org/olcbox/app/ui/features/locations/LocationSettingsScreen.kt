@@ -318,7 +318,28 @@ fun LocationSettingsScreen(
                             when (transport) {
                                 OpenFluxProfileConfig.TRANSPORT_YANDEX -> "Yandex Docs (classic)"
                                 OpenFluxProfileConfig.TRANSPORT_VYANDEX -> "Yandex Docs (Volga)"
+                                OpenFluxProfileConfig.TRANSPORT_TELEMOST -> "Telemost (experimental)"
+                                OpenFluxProfileConfig.TRANSPORT_MAILRU -> "Mail.ru (experimental)"
                                 else -> "Unsupported OpenFlux transport"
+                            }
+                        }
+                    )
+                }
+                item {
+                    SettingsDropdown(
+                        label = "Wire codec",
+                        selectedValue = viewModel.editingOpenFluxConfig.normalized().wireCodec,
+                        options = if (viewModel.editingOpenFluxConfig.isSession) listOf(OpenFluxProfileConfig.CODEC_SESSION)
+                            else OpenFluxProfileConfig.classicWireCodecs,
+                        enabled = !isSaving && !viewModel.editingOpenFluxConfig.isSession,
+                        onValueSelected = viewModel::onOpenFluxWireCodecChanged,
+                        supportingText = viewModel.openFluxWireCodecError,
+                        valueLabel = { codec ->
+                            when (codec) {
+                                OpenFluxProfileConfig.CODEC_LEGACY -> "Compatibility (LZ4)"
+                                OpenFluxProfileConfig.CODEC_BATCH -> "Batch (Zstd v2)"
+                                OpenFluxProfileConfig.CODEC_SESSION -> "Encrypted Session"
+                                else -> "Unsupported OpenFlux wire codec"
                             }
                         }
                     )
@@ -327,8 +348,12 @@ fun LocationSettingsScreen(
                     SettingsTextField(
                         value = viewModel.editingOpenFluxConfig.documentUrl,
                         onValueChange = viewModel::onOpenFluxDocumentUrlChanged,
-                        label = "Yandex document URL",
-                        placeholder = "https://docs.yandex.ru/...",
+                        label = if (viewModel.editingOpenFluxConfig.isSession) "Transport URL" else "Yandex document URL",
+                        placeholder = when (viewModel.editingOpenFluxConfig.transport) {
+                            OpenFluxProfileConfig.TRANSPORT_TELEMOST -> "https://telemost.yandex.ru/j/..."
+                            OpenFluxProfileConfig.TRANSPORT_MAILRU -> "https://cloud.mail.ru/public/..."
+                            else -> "https://docs.yandex.ru/..."
+                        },
                         enabled = !isSaving,
                         isError = viewModel.openFluxDocumentUrlError != null,
                         supportingText = viewModel.openFluxDocumentUrlError,
@@ -841,16 +866,17 @@ private fun roomIdPlaceholder(provider: String): String {
         LocationConfig.PROVIDER_JAZZ -> "room id or any"
         LocationConfig.PROVIDER_WB_STREAM -> "123e4567-e89b-12d3-a456-426614174000"
         LocationConfig.PROVIDER_JITSI -> "https://meet.example.com/room"
+        LocationConfig.PROVIDER_VK_CALLS -> "https://vk.ru/call/join/..."
         else -> "room id"
     }
 }
 
 private fun roomIdLabel(provider: String): String {
-    return if (isJitsiProvider(provider)) "Room URL" else "Room ID"
+    return if (isJitsiProvider(provider) || LocationConfig.normalizeProvider(provider) == LocationConfig.PROVIDER_VK_CALLS) "Room URL" else "Room ID"
 }
 
 private fun roomKeyboardType(provider: String): KeyboardType {
-    return if (isJitsiProvider(provider)) KeyboardType.Uri else KeyboardType.Text
+    return if (isJitsiProvider(provider) || LocationConfig.normalizeProvider(provider) == LocationConfig.PROVIDER_VK_CALLS) KeyboardType.Uri else KeyboardType.Text
 }
 
 private fun isJitsiProvider(provider: String): Boolean {

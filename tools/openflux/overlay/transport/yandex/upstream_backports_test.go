@@ -74,12 +74,13 @@ func TestYandexBackportWriterKeepsPendingPacketAcrossReconnect(t *testing.T) {
 		t.Fatal("failed write did not disconnect its session")
 	}
 	queue <- second
-	if err := tpt.activateSession(&DocSession{
-		Conn: replacement, WriteQueue: queue, UserID: "synthetic-user",
-		Info: YandexDocsInfo{Token: "synthetic-token", DocID: "synthetic-document"},
-	}); err != nil {
-		t.Fatal("replacement authentication failed")
-	}
+	activated := make(chan error, 1)
+	go func() {
+		activated <- tpt.activateSession(&DocSession{
+			Conn: replacement, WriteQueue: queue, UserID: "synthetic-user",
+			Info: YandexDocsInfo{Token: "synthetic-token", DocID: "synthetic-document"},
+		})
+	}()
 	peer.SetReadDeadline(time.Now().Add(2 * time.Second))
 	_, tokenFrame, err := peer.ReadMessage()
 	var token map[string]string
@@ -87,6 +88,7 @@ func TestYandexBackportWriterKeepsPendingPacketAcrossReconnect(t *testing.T) {
 		json.Unmarshal(tokenFrame[2:], &token) != nil || token["token"] != "synthetic-token" {
 		t.Fatal("queued data preceded the authentication token")
 	}
+	_ = peer.WriteMessage(websocket.TextMessage, []byte("40"))
 	_, authFrame, err := peer.ReadMessage()
 	var auth []json.RawMessage
 	var event string
@@ -96,6 +98,19 @@ func TestYandexBackportWriterKeepsPendingPacketAcrossReconnect(t *testing.T) {
 		json.Unmarshal(auth[0], &event) != nil || event != "message" ||
 		json.Unmarshal(auth[1], &details) != nil || details["type"] != "auth" {
 		t.Fatal("queued data preceded document authentication")
+	}
+	_ = peer.WriteMessage(websocket.TextMessage, []byte(`42["message",{"type":"auth","result":1}]`))
+	_, unlock, err := peer.ReadMessage()
+	if err != nil || string(unlock) != `42["message",{"type":"unLockDocument","unlock":true,"isSave":false,"releaseLocks":false}]` {
+		t.Fatal("replacement co-authoring acknowledgment missing")
+	}
+	select {
+	case err := <-activated:
+		if err != nil {
+			t.Fatal("replacement authentication failed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replacement activation did not finish")
 	}
 	for _, want := range [][]byte{first, second} {
 		kind, message, err := peer.ReadMessage()

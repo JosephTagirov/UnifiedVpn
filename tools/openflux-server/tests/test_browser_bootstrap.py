@@ -178,6 +178,26 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(instance.verify.call_count, 2)
         self.assertEqual(visible.getvalue(), "OPENFLUX_SERVER_WAITING\n")
 
+    def test_bridge_relays_fixed_unavailable_status_without_private_suffixes(self):
+        manager = SimpleNamespace(name="unifiedvpn-openflux-browsercheck")
+        instance = supervisor.Supervisor(manager, IMAGE, Path("/root/seccomp"), "f" * 64)
+        instance.verify = Mock(side_effect=AssertionError("No browser request expected"))
+        source = io.BytesIO(
+            b"OPENFLUX_ENCRYPTION AES-256-GCM\nOPENFLUX_SERVER_WAITING\n"
+            b"OPENFLUX_BROWSER_UNAVAILABLE\r\n"
+            b"OPENFLUX_BROWSER_UNAVAILABLE SECRET\n"
+            b"OPENFLUX_FATAL: SECRET\nUNKNOWN_STATUS SECRET\n"
+            b"OPENFLUX_READY\n"
+        )
+        destination, visible = io.BytesIO(), io.StringIO()
+        with contextlib.redirect_stdout(visible):
+            instance.bridge(source, destination, STATE, DOCUMENT)
+        self.assertEqual(visible.getvalue(),
+                         "OPENFLUX_ENCRYPTION AES-256-GCM\nOPENFLUX_SERVER_WAITING\n"
+                         "OPENFLUX_BROWSER_UNAVAILABLE\nOPENFLUX_READY\n")
+        self.assertEqual(destination.getvalue(), b"")
+        instance.verify.assert_not_called()
+
     def test_production_names_refused_before_host_or_docker_calls(self):
         for name in ("default", "phone2", "releasewin", "releaseandroid", "releasetest"):
             manager = SimpleNamespace(instance=name, name="name", preflight=Mock())
@@ -290,9 +310,31 @@ class ContractTests(unittest.TestCase):
                 self.assertEqual(json.loads(result.stdout), expected)
 
 
+class BrowserIdentityTests(unittest.TestCase):
+    def test_legacy_and_matched_user_agent_responses(self):
+        for value in (response(), response(user_agent="SyntheticBrowser/1.0")):
+            self.assertEqual(worker.validate_response(value, REQUEST_ID, DOCUMENT), value)
+        request = {"id": REQUEST_ID, "document_url": DOCUMENT}
+        self.assertEqual(worker.export_cookies([cookie()], request, "SyntheticBrowser/1.0"),
+                         response(user_agent="SyntheticBrowser/1.0"))
+
+    def test_invalid_user_agent_rejected_without_cookie_or_nonce_relaxation(self):
+        for value in (None, True, 3, [], {}, "", " leading", "trailing ", "a\r\nb", "a\tb", "a\0b", "a\x7fb", "a\u0080b", "a" * 1025):
+            with self.subTest(value=value), self.assertRaises(worker.VerificationError):
+                worker.validate_response(response(user_agent=value), REQUEST_ID, DOCUMENT)
+        self.assertTrue(worker.valid_user_agent("a" * 1024))
+        for value in (response(user_agent="SyntheticBrowser/1.0", id="b" * 32),
+                      response([cookie(domain="other.invalid")], user_agent="SyntheticBrowser/1.0"),
+                      {"id": REQUEST_ID, "error": "verification_failed", "user_agent": "SyntheticBrowser/1.0"}):
+            with self.assertRaises(worker.VerificationError):
+                worker.validate_response(value, REQUEST_ID, DOCUMENT)
+
+
 class BrowserApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_sandbox_strict_tls_ephemeral_context_and_cleanup(self):
-        page = SimpleNamespace(url=DOCUMENT, goto=AsyncMock(), wait_for_function=AsyncMock())
+        page = SimpleNamespace(url=DOCUMENT, goto=AsyncMock(), wait_for_function=AsyncMock(),
+                               on=Mock(), main_frame=object(),
+                               evaluate=AsyncMock(side_effect=["SyntheticBrowser/1.0", {"kind": "volga"}]))
         context = SimpleNamespace(route=AsyncMock(), route_web_socket=AsyncMock(), new_page=AsyncMock(return_value=page),
                                   cookies=AsyncMock(return_value=[cookie(secure=False)]))
         browser = SimpleNamespace(new_context=AsyncMock(return_value=context), close=AsyncMock())
@@ -303,7 +345,9 @@ class BrowserApiTests(unittest.IsolatedAsyncioTestCase):
             async def __aexit__(self, *_):
                 pass
         result = await worker.verify({"id": REQUEST_ID, "document_url": DOCUMENT}, Factory)
-        self.assertEqual(result, response())
+        self.assertEqual(result, response(user_agent="SyntheticBrowser/1.0"))
+        self.assertEqual(page.evaluate.await_args_list[0].args, ("navigator.userAgent",))
+        self.assertEqual(page.evaluate.await_args_list[1].args, (worker.CLASSIC_DOCUMENT_SCRIPT,))
         kwargs = chromium.launch.call_args.kwargs
         self.assertIs(kwargs["chromium_sandbox"], True)
         self.assertEqual(kwargs["args"], ["--no-proxy-server"])
@@ -415,7 +459,7 @@ class PreflightTests(unittest.TestCase):
         self.seccomp.write_text(json.dumps({"defaultAction": "SCMP_ACT_ERRNO",
                                            "syscalls": [{"names": ["read", "clone", "setns", "unshare"], "action": "SCMP_ACT_ALLOW"}]}))
         self.image = {"Id": IMAGE, "Os": "linux", "Architecture": "amd64", "RepoTags": ["reviewed-browser:retained"],
-                      "Config": {"User": "10001:10001", "Labels": {manage.LABEL + ".browser-contract": "2"}}}
+                      "Config": {"User": "10001:10001", "Labels": {manage.LABEL + ".browser-contract": "3"}}}
         self.manager = SimpleNamespace(instance="browsercheck", name="test-browser", root=self.root,
                                        preflight=Mock(), load_state=Mock(return_value=STATE),
                                        owned=Mock(return_value={"Id": STATE["image_id"]}),
@@ -433,7 +477,7 @@ class PreflightTests(unittest.TestCase):
         self.manager.docker.assert_not_called()
 
     def test_old_wrapper_rejected_before_browser_image_inspection(self):
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4, 5, 6, 7):
             with self.subTest(version=version):
                 name, current, metadata = manage.VERSION.split(" ", 2)
                 self.assertEqual(name, "unified-openflux")

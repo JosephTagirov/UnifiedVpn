@@ -113,3 +113,50 @@ func TestConfigStrictJSONAndSize(t *testing.T) {
 		}
 	}
 }
+
+func TestWireCodecConfigurationIsExplicit(t *testing.T) {
+	for _, test := range []struct {
+		name, transport, raw, want string
+		valid                      bool
+	}{
+		{"missing", "yandex", "", legacyWireCodec, true},
+		{"native null", "yandex", "null", legacyWireCodec, true},
+		{"explicit legacy", "yandex", `"legacy-lz4-v1"`, legacyWireCodec, true},
+		{"volga legacy", "vyandex", `"legacy-lz4-v1"`, legacyWireCodec, true},
+		{"batch", "yandex", `"batch-zstd-v2"`, batchWireCodec, true},
+		{"batch volga", "vyandex", `"batch-zstd-v2"`, "", false},
+		{"batch unknown transport", "future", `"batch-zstd-v2"`, "", false},
+		{"empty", "yandex", `""`, "", false},
+		{"unknown", "yandex", `"secret-unknown"`, "", false},
+		{"case", "yandex", `"BATCH-ZSTD-V2"`, "", false},
+		{"whitespace", "yandex", `" batch-zstd-v2"`, "", false},
+		{"wrong type", "yandex", "42", "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := validClientConfig()
+			c.Transport = test.transport
+			data, err := json.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.raw != "" {
+				data = []byte(strings.TrimSuffix(string(data), "}") + `,"wire_codec":` + test.raw + "}")
+			}
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			actual, err := readConfiguration(path)
+			if (err == nil) != test.valid {
+				t.Fatalf("valid=%v error=%v", test.valid, err)
+			}
+			if err != nil {
+				if strings.Contains(err.Error(), "secret-unknown") {
+					t.Fatal("unsupported codec value leaked")
+				}
+			} else if actual.effectiveWireCodec() != test.want {
+				t.Fatal("wire codec silently changed")
+			}
+		})
+	}
+}

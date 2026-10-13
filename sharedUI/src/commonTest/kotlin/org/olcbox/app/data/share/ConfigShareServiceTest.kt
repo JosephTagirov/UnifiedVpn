@@ -22,6 +22,23 @@ import kotlin.test.assertTrue
 
 class ConfigShareServiceTest {
     @Test
+    fun sessionShareImportsNameAndKeepsItsSeparateProtocolAndSecret() = runTest {
+        val config = OpenFluxProfileConfig(
+            documentUrl = "https://telemost.yandex.ru/j/12345678901234", encryptionKey = "Ab12".repeat(16),
+            version = 2, transport = OpenFluxProfileConfig.TRANSPORT_TELEMOST,
+            wireCodec = OpenFluxProfileConfig.CODEC_SESSION
+        )
+        val uri = assertNotNull(ConfigShareService.openFluxUri(config, "Telemost phone + #2"))
+        assertTrue(uri.startsWith("openflux://v1/"))
+        val imported = importSharedProfile(uri)
+        assertTrue(imported.isComplete())
+        assertEquals("Telemost phone + #2", imported.displayName())
+        assertEquals(config, OpenFluxProfileConfig.parse(imported.profile.rawConfig))
+        assertEquals(config, OpenFluxProfileConfig.parse(imported.profile.uri))
+        assertNull(ConfigShareService.openFluxUri(config, "x".repeat(257)))
+    }
+
+    @Test
     fun volgaShareAndImportPreserveTransportAndCredentials() = runTest {
         val config = fixtureConfig().copy(transport = "vyandex")
         val uri = assertNotNull(ConfigShareService.openFluxUri(config, "Volga device"))

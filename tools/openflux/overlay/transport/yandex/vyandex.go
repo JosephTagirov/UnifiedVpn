@@ -117,18 +117,19 @@ type VolgaStats struct {
 }
 
 type volgaAuth struct {
-	Session     *http.Client
-	AccessToken string
-	Token       string
-	RequestPath string
-	ResourceURL string
-	DocID       string
-	UserID      int
-	UserIDStr   string
-	Sign        string
-	TS          string
-	SessionID   string
-	Cookies     []*http.Cookie
+	Session          *http.Client
+	BrowserUserAgent string
+	AccessToken      string
+	Token            string
+	RequestPath      string
+	ResourceURL      string
+	DocID            string
+	UserID           int
+	UserIDStr        string
+	Sign             string
+	TS               string
+	SessionID        string
+	Cookies          []*http.Cookie
 }
 
 func getStr(m map[string]interface{}, key string) string {
@@ -425,7 +426,7 @@ func (r *relayClient) sendBatch(batch [][]byte) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", volgaUserAgent)
+	req.Header.Set("User-Agent", browserUserAgent(r.auth.BrowserUserAgent))
 	req.Header.Set("Authorization", "Bearer "+r.auth.Token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "https://volga.yandex.ru")
@@ -561,7 +562,7 @@ func (w *wsListener) connect() error {
 		"&x_request_attempt=0"
 
 	header := http.Header{}
-	header.Set("User-Agent", volgaUserAgent)
+	header.Set("User-Agent", browserUserAgent(w.auth.BrowserUserAgent))
 	header.Set("Origin", "https://volga.yandex.ru")
 
 	header.Set("Cookie", w.cookieHeader())

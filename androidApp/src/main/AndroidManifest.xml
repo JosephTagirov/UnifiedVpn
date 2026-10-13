@@ -81,6 +81,17 @@
             android:exported="false"
             android:process=":openflux_verification" />
 
+        <activity
+            android:name="org.olcbox.app.vpn.service.OpenFluxBrowserVerificationActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:process=":openflux_verification"
+            android:showWhenLocked="false"
+            android:taskAffinity=""
+            android:turnScreenOn="false" />
+
         <service
             android:name="org.olcbox.app.vpn.service.OlcboxVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"

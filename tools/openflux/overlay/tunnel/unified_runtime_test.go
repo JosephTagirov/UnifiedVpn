@@ -83,6 +83,7 @@ func TestUnifiedTunnelL4KeepsPerStackMemoryLimits(t *testing.T) {
 		defer network.UnifiedClose()
 		var rcv tcpip.TCPReceiveBufferSizeRangeOption
 		var snd tcpip.TCPSendBufferSizeRangeOption
+		var recovery tcpip.TCPRecovery
 		if err := network.gvisorStack.TransportProtocolOption(tcp.ProtocolNumber, &rcv); err != nil {
 			t.Fatal(err)
 		}
@@ -93,6 +94,9 @@ func TestUnifiedTunnelL4KeepsPerStackMemoryLimits(t *testing.T) {
 			snd.Min != 65536 || snd.Default != 262144 || snd.Max != 1048576 {
 			t.Fatalf("unexpected TCP limits: receive=%+v send=%+v", rcv, snd)
 		}
+		if err := network.gvisorStack.TransportProtocolOption(tcp.ProtocolNumber, &recovery); err != nil || recovery != tcpip.TCPRACKLossDetection {
+			t.Fatal("legacy TCP recovery setting changed")
+		}
 		if network.exitMode != ExitModeL4 {
 			t.Fatal("server must not require raw sockets or host networking")
 		}
@@ -102,15 +106,58 @@ func TestUnifiedTunnelL4KeepsPerStackMemoryLimits(t *testing.T) {
 	}
 }
 
+func TestUnifiedBatchTCPSettingsArePerStack(t *testing.T) {
+	for _, batch := range []bool{true, false, true} {
+		for _, server := range []bool{false, true} {
+			base, _ := newTestTransportPair(t)
+			makeTunnel := NewUnifiedTCPTunnel
+			wantDefault, wantRecovery := 262144, tcpip.TCPRecovery(tcpip.TCPRACKLossDetection)
+			if batch {
+				makeTunnel = NewUnifiedBatchTCPTunnel
+				wantDefault, wantRecovery = 1048576, 0
+			}
+			network, err := makeTunnel(base, server)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(network.UnifiedClose)
+			var rcv tcpip.TCPReceiveBufferSizeRangeOption
+			var snd tcpip.TCPSendBufferSizeRangeOption
+			var recovery tcpip.TCPRecovery
+			if err := network.gvisorStack.TransportProtocolOption(tcp.ProtocolNumber, &rcv); err != nil {
+				t.Fatal(err)
+			}
+			if err := network.gvisorStack.TransportProtocolOption(tcp.ProtocolNumber, &snd); err != nil {
+				t.Fatal(err)
+			}
+			if err := network.gvisorStack.TransportProtocolOption(tcp.ProtocolNumber, &recovery); err != nil {
+				t.Fatal(err)
+			}
+			if rcv.Min != 65536 || rcv.Max != 1048576 || rcv.Default != wantDefault ||
+				snd.Min != 65536 || snd.Max != 1048576 || snd.Default != wantDefault || recovery != wantRecovery {
+				t.Fatal("batch TCP options escaped their selected stack")
+			}
+		}
+	}
+}
+
 func TestUnifiedTunnelLegacyEncryptedTCPRoundTrip(t *testing.T) {
-	testUnifiedTCPRoundTrip(t, false)
+	testUnifiedTCPRoundTrip(t, false, false)
 }
 
 func TestUnifiedTunnelLegacyEncryptedResponseAfterRequestEOF(t *testing.T) {
-	testUnifiedTCPRoundTrip(t, true)
+	testUnifiedTCPRoundTrip(t, true, false)
 }
 
-func testUnifiedTCPRoundTrip(t *testing.T, halfClose bool) {
+func TestUnifiedTunnelBatchEncryptedTCPRoundTrip(t *testing.T) {
+	testUnifiedTCPRoundTrip(t, false, true)
+}
+
+func TestUnifiedTunnelBatchEncryptedResponseAfterRequestEOF(t *testing.T) {
+	testUnifiedTCPRoundTrip(t, true, true)
+}
+
+func testUnifiedTCPRoundTrip(t *testing.T, halfClose, batch bool) {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -152,7 +199,12 @@ func testUnifiedTCPRoundTrip(t *testing.T, halfClose bool) {
 			t.Fatal(err)
 		}
 		wire := transport.NewCompressedTransport(enc)
-		network, err := NewUnifiedTCPTunnel(wire, server)
+		makeTunnel := NewUnifiedTCPTunnel
+		if batch {
+			wire = transport.NewBatchedTransport(enc)
+			makeTunnel = NewUnifiedBatchTCPTunnel
+		}
+		network, err := makeTunnel(wire, server)
 		if err != nil {
 			t.Fatal(err)
 		}

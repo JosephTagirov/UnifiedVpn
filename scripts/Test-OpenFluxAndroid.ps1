@@ -23,6 +23,7 @@ param(
     [int]$BootTimeoutSeconds = 90,
     [ValidateRange(30, 180)]
     [int]$ReadyTimeoutSeconds = 110,
+    [switch]$DownloadSpeed,
     [ValidateRange(30, 240)]
     [int]$ProbeTimeoutSeconds = 200
 )
@@ -586,8 +587,18 @@ function Send-PrivateProfileBundle {
         $transport -notin @('yandex', 'vyandex')) {
         throw 'Private OpenFlux profile has an unsupported version or transport'
     }
-    $canonical = [ordered]@{ version = 1; transport = $transport; document_url = $document; encryption_key = $key } |
-        ConvertTo-Json -Compress
+    $codec = if ($null -eq $profile.PSObject.Properties['wire_codec']) {
+        'legacy-lz4-v1'
+    } elseif ($profile.wire_codec -is [string]) {
+        $profile.wire_codec.Trim().ToLowerInvariant()
+    } else { '' }
+    if ($codec -notin @('legacy-lz4-v1', 'batch-zstd-v2') -or
+        ($codec -eq 'batch-zstd-v2' -and $transport -ne 'yandex')) {
+        throw 'Private OpenFlux profile has an unsupported codec or codec/transport combination'
+    }
+    $canonicalFields = [ordered]@{ version = 1; transport = $transport; document_url = $document; encryption_key = $key }
+    if ($codec -ne 'legacy-lz4-v1') { $canonicalFields['wire_codec'] = $codec }
+    $canonical = $canonicalFields | ConvertTo-Json -Compress
     $bundle = [ordered]@{
         version = 5
         active_location_id = 'isolated-openflux'
@@ -753,6 +764,19 @@ function Invoke-OpenFluxAndroidTest {
         if ($crashes -match 'app\.unifiedvpn\.local|org\.olcbox\.app') { throw 'App crash detected during VPN test' }
         $flags.https_completed = $true
         $responses | ForEach-Object { Write-Output $_ }
+        if ($DownloadSpeed) {
+            $stage = 'download_probe'
+            $download = Invoke-IsolatedAdb -AdbArguments @('shell', 'env', "CLASSPATH=$remoteProbe", 'app_process',
+                '/data/local/tmp', 'NetworkProbe', '--download32') -TimeoutSeconds 100 -HealthCheck $healthCheck
+            & $healthCheck
+            $measurement = @($download.Output -split '\r?\n' | Where-Object {
+                $_ -match '^ANDROID_DOWNLOAD_BYTES=33554432 ANDROID_DOWNLOAD_MBPS=\d+\.\d+ TLS_VERIFIED=true$'
+            })
+            if ($download.ExitCode -ne 0 -or $measurement.Count -ne 1) {
+                throw 'Full verified Android VPN throughput measurement failed'
+            }
+            Write-Output $measurement[0]
+        }
         $stage = 'vpn_stop'
         Invoke-CheckedAdb -AdbArguments @('shell', 'am', 'broadcast', '-n', $receiver, '-a', 'org.olcbox.app.DEBUG_STOP_VPN') | Out-Null
         Wait-TransportStopped

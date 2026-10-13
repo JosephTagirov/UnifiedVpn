@@ -403,8 +403,8 @@ func TestPeerSessionExpiredAttemptIgnoresLateWelcome(t *testing.T) {
 	pair.serverWire.hook(func([]byte) bool { return false })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	if err := pair.client.waitPeer(ctx); err == nil {
-		t.Fatal("the handshake must time out when all welcomes are dropped")
+	if err := pair.client.waitPeer(ctx); err != errPeerWaitTimeout || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("the handshake deadline must retain its peer-readiness stage")
 	}
 	pair.clientWire.deliver(awaitPackets(t, pair.serverWire, 1)[0])
 	pair.serverWire.hook(nil)
@@ -418,11 +418,23 @@ func TestPeerSessionAlreadyCancelledDoesNotSendHello(t *testing.T) {
 	pair := normalSessionPair(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := pair.client.waitPeer(ctx); err == nil {
-		t.Fatal("an already-cancelled handshake succeeded")
+	if err := pair.client.waitPeer(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("an already-cancelled handshake lost its cancellation reason")
 	}
 	if len(pair.clientWire.packets()) != 0 || len(pair.serverWire.packets()) != 0 {
 		t.Fatal("an already-cancelled handshake touched the transport")
+	}
+}
+
+func TestPeerSessionAlreadyExpiredDoesNotSendHello(t *testing.T) {
+	pair := normalSessionPair(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	if err := pair.client.waitPeer(ctx); err != errPeerWaitTimeout || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("an already-expired handshake lost its peer-readiness stage")
+	}
+	if len(pair.clientWire.packets()) != 0 || len(pair.serverWire.packets()) != 0 {
+		t.Fatal("an already-expired handshake touched the transport")
 	}
 }
 
@@ -434,8 +446,8 @@ func TestPeerSessionSynchronousWelcomeCannotOverrideCancellation(t *testing.T) {
 		cancel()
 		return true
 	})
-	if err := pair.client.waitPeer(ctx); err == nil {
-		t.Fatal("a synchronous welcome overrode a cancelled context")
+	if err := pair.client.waitPeer(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("a synchronous welcome overrode the cancellation reason")
 	}
 	pair.serverWire.hook(nil)
 	if err := pair.serverStream.Send([]byte("cancelled attempt data")); err != nil {

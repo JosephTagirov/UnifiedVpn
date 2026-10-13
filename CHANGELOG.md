@@ -2,6 +2,260 @@
 
 Все существенные изменения Unified VPN / Olcbox фиксируются в этом файле.
 
+## [0.0.14 / 2026101301] - 2026-10-13
+
+### English
+
+- Added an experimental VK Calls provider with VP8 and Chrome-compatible DTLS, using a separate pinned olcRTC fork at `403edd409011`. Existing Jitsi native libraries and the Android AAR retain `d7a00da5242f`.
+- Android VK Calls uses the external-engine lifecycle, authenticated loopback SOCKS and the existing olcRTC split-tunneling group. Cancellation and Stop terminate only the owned process and remove its private temporary configuration. Windows uses a separate native executable and the existing olcRTC startup retry path.
+- Build packaging verifies VK Calls source revision and artifact hashes for Windows and three Android ABIs. No private rooms or keys are bundled. Signaling URLs and credentials are redacted from startup errors as well as logs; Android certificate failures are not retried.
+- Local verification passed: 410 JVM tests, 304 Android host tests and four native Go suites. The final packaged Windows manager/core and exact signed release APK both reached application-level Connected through a separate permanent VK service and returned HTTPS 200 from Instagram and Wikipedia. Android API 35 TUN/UID routing, clean Stop, complete emulator shutdown, Windows JVM/native-assets and MSI policy checks passed. Nine Android core hashes, three unchanged Jitsi AAR library hashes and all 251 portable files were verified. Host VPN/proxy/routes were preserved. Physical Android 13, direct Megafon whitelist operation, long-duration stability, sustained speed and in-place MSI installation remain untested.
+- Publication uses the checked APK/MSI/manual ZIP, build-specific checksums, corresponding native sources and notices for 226 native dependency versions. Private-profile/credential scanning found no private data in the selected source or application archives. All 18 updater tests passed, including newer MSI selection over the historical EXE and no repeat update for the same build. Historic release files and tags are retained; the newer source snapshot is `build-2026101301`.
+
+### Русский
+
+- Добавлен экспериментальный провайдер VK Calls с VP8 и Chrome-совместимым DTLS: используется отдельный форк olcRTC `403edd409011`. Библиотеки Jitsi и Android AAR сохраняют ядро `d7a00da5242f`.
+- На Android VK Calls работает через отдельный процесс, локальный SOCKS с авторизацией и существующую группу раздельного туннелирования olcRTC. Отмена и остановка завершают только собственный процесс и удаляют временный файл с ключом. Windows использует отдельный исполняемый файл и существующие повторные попытки запуска olcRTC.
+- При упаковке проверяются версия исходников и хеши ядер для Windows и трёх Android ABI. Приватные комнаты и ключи не включаются. Ссылки сигналинга и учётные данные скрываются как в журнале, так и в ошибках запуска; Android не повторяет попытки при недоверенном сертификате.
+- Пройдены 410 JVM-тестов, 304 Android host-теста и четыре набора Go-тестов. Manager и ядро итогового Windows-пакета, а также точный подписанный release APK подключились через отдельную постоянную VK-службу и получили HTTPS 200 от Instagram и Wikipedia. Проверены TUN/UID-маршрутизация API 35, штатная остановка, полное завершение эмулятора, JVM и встроенные ядра Windows, правила MSI. Сверены девять Android-ядер, три неизменившиеся библиотеки AAR Jitsi и все 251 файл portable. Рабочие VPN, прокси и маршруты ноутбука сохранены. Физический Android 13, прямое подключение при белых списках Мегафона, длительная стабильность, скорость и установка MSI поверх рабочей версии ещё не проверены.
+- Для публикации используются проверенные APK/MSI/ручной ZIP, отдельные контрольные суммы, соответствующие исходники ядер и уведомления для 226 версий зависимостей. Проверка выбранных исходников и архивов приложения не обнаружила приватных профилей и учётных данных. Все 18 тестов апдейтера пройдены: новая MSI выбирается вместо старого EXE, одинаковая сборка не предлагается повторно. Прежние файлы и теги сохранены; новые исходники отмечены `build-2026101301`.
+
+## [0.0.14 / 2026101102] - Local Test Build / Локальная тестовая сборка
+
+### English
+
+- Integrated the separate pinned OpenFlux 0.5.0 Session engine into Android and Windows for experimental Telemost and Mail.ru profiles. Classic Yandex profiles retain their existing engine and wire format. Mail.ru still requires live validation with a working link.
+- Added bounded raw-DEFLATE `openflux://v1/` import/export, case-sensitive Session secrets, transport selection and manual editing. A compatibility fixture comes from upstream's pinned Go sharing implementation. Direct, plaintext and legacy-negotiation fallbacks are not accepted.
+- Oversized Session profile names are rejected by sharing without throwing an exception.
+- Session profiles start without the Yandex Docs browser verification window. Connected requires an authenticated Session and the local SOCKS listener; Stop requests graceful native shutdown before bounded termination. Diagnostics identify both bundled OpenFlux cores. Android uses the existing OpenFlux/olcRTC split-tunneling group; Windows Telemost uses local SOCKS or system proxy, not TUN.
+- The two earlier native Telemost tests do not establish stable reconnects or a throughput guarantee: intermittent `TIE-0003` and stalled transfers remain known limitations. This build is for local user testing, not a GitHub release. No private rooms, credentials or user profiles are bundled.
+- Local verification passed: 120 JVM tests, 139 Android host tests, five Go suites and 31 installer-policy tests. The final packaged Windows manager/core reached authenticated Connected on Telemost-01, returned HTTPS 200 from Instagram and Telegram, and stopped cleanly. The exact signed release APK reached Connected on Telemost-02 in an isolated API 35 emulator, with verified TUN/UID routing, HTTPS 200 from Instagram and Wikipedia, and clean Stop. An earlier Android attempt required a retry. Physical Android 13, sustained throughput, Mail.ru and an in-place Windows install remain untested. Host AWG/proxy/routes/DNS were preserved; the test emulator was stopped. Six Android core hashes and all 251 portable files were verified.
+
+### Русский
+
+- В Android и Windows добавлено отдельное ядро OpenFlux 0.5.0 Session для экспериментальных профилей Телемоста и Mail.ru. Старые профили Яндекс Документов сохраняют прежнее ядро и протокол. Mail.ru ещё требует проверки с рабочей ссылкой.
+- Добавлены импорт и экспорт `openflux://v1/` с ограничением размера распаковки, сохранение регистра ключа Session, выбор транспорта и ручное редактирование. Совместимость проверяется на примере ссылки из закреплённой Go-версии upstream. Прямой и незашифрованный обход, а также переход на старое согласование сеанса запрещены.
+- Слишком длинное имя профиля Session при экспорте отклоняется без исключения.
+- Профили Session запускаются без окна проверки Яндекс Документов. Состояние «Подключено» требует подтверждённого зашифрованного сеанса и локального SOCKS; при остановке сначала отправляется команда штатного завершения ядра. Журнал показывает версии обоих ядер OpenFlux. Android использует общую группу раздельного туннелирования OpenFlux/olcRTC; Телемост в Windows работает через локальный SOCKS или системный прокси, без TUN.
+- Прежние проверки двух профилей отдельным ядром не гарантируют устойчивое переподключение или скорость: периодические `TIE-0003` и остановки передачи остаются известными ограничениями. Это локальная сборка для проверки пользователем, а не релиз на GitHub. Приватные комнаты, ключи и профили в приложения не включаются.
+- Пройдены 120 JVM-тестов, 139 Android host-тестов, пять наборов Go-тестов и 31 тест правил установщика. Manager и ядро итогового Windows-пакета подключились к Telemost-01, получили HTTPS 200 от Instagram и Telegram и штатно остановились. Точный подписанный release APK подключился к Telemost-02 в изолированном эмуляторе API 35: подтверждены TUN, маршрутизация UID, HTTPS 200 от Instagram и Wikipedia и остановка. В более ранней Android-попытке потребовался повтор. Физический Android 13, длительная скорость, Mail.ru и установка Windows поверх рабочей версии ещё не проверены. AWG, прокси, маршруты и DNS ноутбука сохранены; тестовый эмулятор остановлен. Проверены шесть хешей Android-ядер и все 251 файл portable.
+
+## [0.0.14 / 2026101101] - In Development / В разработке
+
+### English
+
+- Prepared a separate configuration model for encrypted upstream OpenFlux Session profiles using Telemost or Mail.ru. It retains the exact encryption secret/context, requires strict negotiation, rejects direct/unencrypted fallbacks and config injection, binds client SOCKS to loopback, and records Telemost's desktop TUN restriction. Existing UnifiedVPN classic profiles and their engine pin are unchanged.
+- Added a separate pinned OpenFlux 0.5.0 build with two regression-tested fixes: application destination DNS goes through the encrypted tunnel with IPv4-only results, and a saturated retransmission counter prevents the negative-shift panic observed after a Telemost client disconnected. The existing classic engine is not replaced. The transport, tunnel, SOCKS and sharing Go suites pass; focused classic/Session configuration tests pass on JVM and Android host.
+- Both separately provisioned Telemost peers passed encrypted Windows-core connections and verified HTTPS, including Instagram HTTP 200, without altering the active host VPN, proxy or routes. Short 2 MB transfers measured approximately 1.4 Mbit/s, not a sustained-throughput guarantee. These native-core tests do not establish Android or UnifiedVPN application support; Mail.ru has not been live-tested.
+- Reconnect checks are not a release pass: one Telemost peer subsequently stalled a transfer and received WebSocket closure `TIE-0003` on new attempts. Restarting only that experimental exit restored authenticated HTTPS and a full 2 MB download. The recurrence/recovery issue remains open; no automatic server restart workaround or change to existing VPN services was introduced.
+- This is integration groundwork, not released transport support: importing upstream links through the official parser, packaging the second core, runtime/status handling, Android socket protection and end-to-end app validation remain required. No new APK/EXE is released. Private provisioning data and test credentials are not included in the repository.
+
+### Русский
+
+- Подготовлена отдельная модель конфигурации зашифрованных OpenFlux Session-профилей для Телемоста и Mail.ru. Ключ и контекст шифрования сохраняются без преобразований; обязательна строгая проверка сеанса, запрещены прямые и незашифрованные резервные подключения и внедрение настроек через поля. Клиентский SOCKS доступен только локально; учтено ограничение Телемоста для desktop TUN. Старые профили UnifiedVPN и версия их ядра не изменены.
+- Добавлена отдельная сборка закреплённой версии OpenFlux 0.5.0 с двумя исправлениями и регрессионными тестами: DNS для адресов приложений проходит через зашифрованный туннель и выбирает IPv4; защита счётчика повторных отправок предотвращает падение из-за отрицательного сдвига после отключения клиента Телемоста. Старое ядро не заменяется. Пройдены Go-тесты транспорта, туннеля, SOCKS и ссылок, а также целевые тесты конфигураций classic/Session на JVM и Android host.
+- Оба отдельно созданных профиля Телемоста прошли зашифрованное подключение Windows-ядром и проверенный HTTPS, включая HTTP 200 от Instagram, без изменения рабочего VPN ноутбука, прокси и маршрутов. Короткие загрузки по 2 МБ показали примерно 1,4 Мбит/с; это не гарантия устойчивой скорости. Проверка отдельного ядра не подтверждает работу на Android или внутри UnifiedVPN; Mail.ru в сети не проверен.
+- Повторные подключения пока не проходят критерии релиза: у одного профиля остановилась передача, а следующие попытки получили закрытие WebSocket `TIE-0003`. После перезапуска только этого экспериментального сервиса восстановились зашифрованный HTTPS и полная загрузка 2 МБ. Причина повторного сбоя и устойчивое восстановление ещё требуют исправления; автоматический перезапуск сервера как обходной способ не добавлялся, существующие VPN-службы не менялись.
+- Это подготовка интеграции, а не выпущенная поддержка транспортов: ещё нужны импорт через официальный парсер, упаковка второго ядра, управление процессом и состоянием, защита Android-сокетов и проверки соединений в приложениях. Новые APK/EXE не опубликованы. Приватные конфиги и тестовые ключи в репозиторий не включены.
+
+## [0.0.14 / 2026100802] - Local Candidate / Локальный кандидат
+
+### English
+
+- Android no longer closes the whole verification window solely because an exact `hdrc.yandex.net` or `mdd.yandex.net` HTTPS subresource has invalid TLS. The request is still cancelled; the main document, cookie/metadata validation and encrypted peer readiness must independently succeed. Unknown hosts and main-document TLS failures remain fatal. No certificate trust is added. The Android host suite passes 287 tests; recovery on the physical phone is not yet confirmed.
+- Classic Yandex now completes the Engine.IO polling/session upgrade before sending editor authorization, with a direct-WebSocket fallback that waits for the server's OPEN packet. Adapted from upstream OpenFlux PR #115 with retained attribution, bounded reads/timeouts, cancellation cleanup and the verified browser identity. TLS and encrypted peer protocols remain unchanged.
+- Classic Yandex also waits for the Socket.IO namespace acknowledgment and the actual successful editor authorization before publishing the session or starting its persistent writer. Early peer packets, reads and authorization time are bounded; cancellation closes unpublished sockets. A deterministic regression reproduces the premature send in the old code, and the focused race suite passes 20 repetitions.
+- Added strict/lenient handshake, malformed packet, cookie/identity, cancellation and real transport-callsite regression tests. A live classic27 attempt still received an initial WebSocket 1005 closure, then passed editor authorization but timed out waiting for its encrypted peer. Neither that closure nor classic27 connectivity is confirmed fixed. The previously built Android diagnostic APK remains build 2026100801.
+- The physical phone's 2026100801 log confirms `tls_untrusted` for the `mdd` resource. The signed, non-debuggable 2026100802 APK contains the new resource handling and native handshake changes; its three ABI hashes and unchanged signing certificate/olcRTC libraries were verified. A separate Windows classic43 test with the final native candidate reached Connected in 16.45 seconds and passed authenticated SOCKS plus verified HTTPS to two sites. It still required an internal retry and does not establish classic27 recovery or sustained throughput.
+- The exact signed 2026100802 APK passed visible browser verification, encrypted readiness, application Connected, TUN/UID routing and HTTPS 200 from both test sites in an isolated API 35 emulator. The final packaged Windows 0802 manager/core also reached Connected in 13.40 seconds and passed the same traffic checks via authenticated local SOCKS. Stop, cleanup and preservation of the active host AWG all passed. Local APK, EXE and portable ZIP are built; Windows JVM/native-assets, installer-policy and 251 portable-file checks passed. These classic43 results do not cover the user's Android 13/classic27 combination. No release was published.
+
+### Русский
+
+- Android больше не закрывает всё окно проверки только из-за ошибки TLS у вспомогательного HTTPS-ресурса `hdrc.yandex.net` или `mdd.yandex.net`. Сам запрос по-прежнему отменяется; основной документ, проверка cookies и параметров, а затем готовность зашифрованного узла должны завершиться успешно независимо. Ошибки TLS основного документа и неизвестных узлов остаются критическими. Доверие сертификатам не расширяется. Пройдены 287 Android host-тестов; восстановление работы на физическом телефоне ещё не подтверждено.
+- Старый транспорт Яндекса завершает открытие сессии и переключение Engine.IO до отправки авторизации редактора. Резервное прямое WebSocket-подключение ожидает пакет OPEN от сервера. Подход адаптирован из OpenFlux PR #115 с сохранением авторства, ограничениями чтения и времени, очисткой при отмене и сохранением проверенной браузерной сессии. TLS и зашифрованный протокол между узлами не меняются.
+- Старый транспорт также ждёт подтверждение пространства Socket.IO и успешную авторизацию редактора, прежде чем публиковать сессию или запускать постоянную отправку. Ограничены ранние пакеты, объём чтения и время авторизации; отмена закрывает ещё не опубликованный сокет. Регрессионный тест воспроизводит преждевременную отправку в старом коде; проверка гонок прошла 20 повторов.
+- Добавлены тесты строгого и обычного рукопожатия, некорректных пакетов, cookies, параметров браузера, отмены и вызова из настоящего транспорта. В живой попытке classic27 сохранилось начальное закрытие WebSocket 1005; затем авторизация редактора прошла, но зашифрованный ответ узла не пришёл. Устранение ни этого закрытия, ни проблемы подключения classic27 пока не подтверждено. Ранее собранный диагностический Android APK остаётся сборкой 2026100801.
+- Журнал физического телефона со сборкой 2026100801 подтвердил `tls_untrusted` у ресурса `mdd`. В подписанный APK 2026100802 без отладки включены новая обработка ресурсов и изменения рукопожатия ядра; проверены три ABI, неизменность подписи и библиотек olcRTC. Отдельный Windows-тест classic43 с итоговым ядром дошёл до «Подключено» за 16,45 секунды и передал проверенный HTTPS-трафик к двум сайтам через SOCKS с авторизацией. Внутренняя повторная попытка всё ещё потребовалась; восстановление classic27 и устойчивая скорость этим тестом не подтверждены.
+- Именно подписанный APK 2026100802 прошёл видимую браузерную проверку, готовность зашифрованного соединения, «Подключено», маршрутизацию TUN/UID и HTTPS 200 от двух тестовых сайтов в отдельном эмуляторе API 35. Итоговый Windows-пакет 0802 также дошёл до «Подключено» за 13,40 секунды и передал проверенный трафик через локальный SOCKS с авторизацией. Остановка, очистка и сохранность работающего AWG ноутбука подтверждены. Собраны локальные APK, EXE и portable ZIP; пройдены проверки JVM, встроенных ядер, правил установщика и 251 файла portable. Результаты classic43 не охватывают сочетание Android 13 и classic27 пользователя. Публикации не было.
+
+## [0.0.14 / 2026100801] - Unreleased Diagnostics / Неопубликованная диагностика
+
+### English
+
+- The user's classic27 profile still fails on both platforms in build 2026100702; earlier classic43 test passes do not cover it. Android fails at browser preflight; Windows reaches native startup and then its initial readiness deadline. No claim of repaired classic27 connectivity is made by these diagnostic changes.
+- Android release logs now retain allowlisted browser TLS, WebView, HTTP and metadata-validation categories across the private verification process. Windows records accepted browser responses and browser timeout/failure paths. URLs, keys, cookies and arbitrary page/error text remain excluded.
+- OpenFlux preserves the initial readiness timeout stage while distinguishing cancellation and queued browser errors. The server supervisor forwards the exact safe browser-unavailable marker instead of silently discarding it. Encryption, certificate verification and routing policies are unchanged.
+- Classic Yandex connections emit bounded, fixed-category lifecycle diagnostics. `auth_accepted` requires an actual successful editor response, not merely a sent frame. A live classic27 Windows test reached editor authorization but still timed out waiting for its encrypted peer; an isolated VPS document-only test failed at browser bootstrap. These results do not establish a complete fix.
+
+### Русский
+
+- Профиль пользователя classic27 по-прежнему не подключается на обеих платформах в сборке 2026100702; прежние успешные тесты classic43 на него не распространяются. Android останавливается на предварительной проверке браузера, Windows запускает ядро и затем достигает таймаута готовности. Эти диагностические изменения не означают, что связь classic27 исправлена.
+- Релизный журнал Android сохраняет разрешённые категории ошибок TLS, WebView, HTTP и проверки параметров при обмене с приватным процессом проверки. Windows отмечает принятие ответа браузера, таймаут и отказ. Адреса, ключи, cookies и произвольный текст страниц или ошибок не выводятся.
+- OpenFlux сохраняет этап таймаута начальной готовности, отличая его от отмены и уже полученных ошибок браузера. Серверный supervisor передаёт точный безопасный маркер недоступности браузера, который раньше отбрасывался. Шифрование, проверка сертификатов и правила маршрутизации не менялись.
+- Для старого редактора Яндекса добавлены ограниченные фиксированные метки этапов подключения. `auth_accepted` означает полученное подтверждение редактора, а не просто отправку кадра. Живой Windows-тест classic27 прошёл авторизацию редактора, но не дождался зашифрованного ответа сервера; отдельная проверка документа на VPS завершилась ошибкой браузера. Полное исправление этими результатами не подтверждается.
+
+## [0.0.14 / 2026100702] - Local Tested Candidate / Локально проверенный кандидат
+
+### English
+
+- Corrected two classic-editor metadata compatibility errors observed in a live browser test: Yandex balancer hostnames containing underscores and the editor's internal `localhost:12701/disk/` file reference. The internal reference is forwarded unchanged to the remote editor, never fetched locally; document navigation and TLS verification are not relaxed.
+- Android metadata validation now uses strict UTF-8 byte limits and rejects document fragments and malformed Unicode consistently with the native core.
+- On October 8, the packaged Windows client passed two fresh OpenFlux connections, authenticated SOCKS, verified HTTPS traffic and complete process cleanup. The exact signed Android APK passed visible verification, Connected, TUN routing, HTTPS traffic and Stop in an isolated API 35 emulator. The user's active AWG and host network settings were preserved. Physical-phone testing, direct carrier throughput and unattended server restart recovery remain unverified; nothing was published. See [test results and limits](docs/testing/openflux-editor-diagnostics-20260929.md#october-8-build-2026100702-live-results).
+
+### Русский
+
+- Исправлены две ошибки совместимости параметров старого редактора, подтверждённые живой браузерной проверкой: подчёркивания в имени балансировщика Яндекса и внутренняя ссылка редактора `localhost:12701/disk/`. Эта ссылка передаётся удалённому редактору без изменений и никогда не загружается локально; ограничения переходов и проверка TLS не ослабляются.
+- Проверка параметров Android использует строгие ограничения размера UTF-8 и отклоняет фрагменты адреса документа и некорректный Unicode согласованно с ядром.
+- 8 октября Windows-клиент из готового пакета дважды прошёл новое подключение OpenFlux, авторизацию SOCKS, проверенный HTTPS-трафик и полную очистку процессов. Итоговый подписанный APK прошёл видимую проверку, «Подключено», маршрутизацию TUN, HTTPS-трафик и остановку в изолированном эмуляторе API 35. Работающий AWG и сетевые настройки ноутбука сохранены. Физический телефон, прямая скорость через оператора и автоматическое восстановление сервера после перезагрузки ещё не проверены; публикации не было. См. [результаты и ограничения](docs/testing/openflux-editor-diagnostics-20260929.md#october-8-build-2026100702-live-results).
+
+## [0.0.14 / 2026100701] - Unreleased Source Candidate / Неопубликованный кандидат
+
+### English
+
+- OpenFlux wrapper 8 adds a bounded, short-lived classic-document handoff from the verified browser to the native client. The document URL, nonce, write permission and permitted HTTPS endpoints are validated; raw page contents are not forwarded. Cookie-only bootstrap remains supported. This does not change the encrypted wire protocol.
+- Android gains a user-initiated verification window before native startup, opened from the app or a notification action. A one-use result belongs to one connection attempt and upstream network; stopping or switching invalidates it. Native startup no longer has to wait for an invisible user challenge.
+- Server browser contract 3 forwards the same validated snapshot and rejects a page navigation during capture. Existing running server profiles are not upgraded automatically. Live connection and restart checks are still required before release; no GitHub publication is included.
+
+### Русский
+
+- Обёртка OpenFlux 8 передаёт ядру ограниченный по размеру и сроку действия снимок параметров старого редактора из проверенного браузера. Проверяются адрес документа, nonce, право редактирования и допустимые HTTPS-адреса; содержимое страницы не передаётся. Прежний обмен только cookies остаётся допустимым. Зашифрованный протокол между клиентом и сервером не меняется.
+- На Android добавлено открываемое пользователем окно проверки до запуска ядра: из приложения или кнопкой уведомления. Одноразовый результат привязан к попытке подключения и исходной сети; остановка и переключение его аннулируют. Ядру больше не нужно ждать невидимую пользователю проверку.
+- Серверный браузерный контракт 3 передаёт тот же проверенный снимок и отклоняет смену страницы во время его получения. Работающие серверные профили автоматически не обновляются. До релиза необходимы живые проверки подключения и повторного запуска; публикация на GitHub не выполняется.
+
+## [0.0.14 / 2026100601] - Unreleased Source Candidate / Неопубликованный кандидат
+
+### English
+
+- OpenFlux anonymous browser bootstrap now carries the verified browser's User-Agent with its nonce-bound cookies into native HTTPS and WebSocket requests. Cookie-only replies remain accepted by the new core; new helpers require the matching new core. Encryption, profile keys, TLS verification and system trust stores are unchanged.
+- Added malformed-header, legacy-response and forwarding regression tests across Go, Kotlin, Windows helper and server tools. This source change is not yet a verified APK/EXE release or a claim that CAPTCHA and throughput issues are solved.
+- Android browser verification now waits for the first navigation instead of rejecting a cold WebView's initial missing URL. Disallowed destinations and TLS errors still fail closed. APK packaging preserves the already-stripped OpenFlux executable bytes for exact artifact verification.
+- Independently provisioned and verified additional Jitsi profiles using separate rooms and keys. Both passed packaged Windows manager/SOCKS/HTTPS/Stop and signed Android 2026092901 emulator TUN/HTTPS/Stop; existing FI2 and the user's active AWG were preserved. Private profiles are not release assets. See [test scope](docs/testing/olcrtc-fi3-2026092702.md).
+- Local Windows candidate 2026100601 transferred real HTTPS traffic through OpenFlux after refreshing the isolated test server's anonymous session, but a subsequent launch failed at browser re-verification. Signed Android 2026100601 still times out at Yandex browser verification before the tunnel; this is not a cross-platform OpenFlux release. Short transfers do not establish sustained throughput. See [diagnostic evidence and remaining gates](docs/testing/openflux-editor-diagnostics-20260929.md).
+
+### Русский
+
+- Анонимная проверка браузера OpenFlux теперь передаёт его User-Agent вместе с привязанными к nonce cookies в HTTPS- и WebSocket-запросы ядра. Новое ядро принимает и прежние ответы только с cookies; новые помощники требуют соответствующего нового ядра. Шифрование, ключи профилей, проверка TLS и системные хранилища доверия не изменены.
+- Добавлены регрессионные тесты некорректных заголовков, прежнего формата ответа и передачи данных в Go, Kotlin, Windows-помощнике и серверных инструментах. Это изменение исходников, а не проверенный релиз APK/EXE и не заявление об устранении CAPTCHA или проблем скорости.
+- Android-проверка браузера теперь ожидает первую навигацию вместо ошибки на изначально пустом URL холодного WebView. Запрещённые адреса и ошибки TLS по-прежнему отклоняются. Упаковка APK сохраняет байты уже очищенного от отладочных символов OpenFlux для точной проверки артефактов.
+- Созданы и проверены дополнительные Jitsi-профили с отдельными комнатами и ключами. Оба прошли менеджер Windows из готового пакета/SOCKS/HTTPS/остановку и подписанный Android 2026092901 в эмуляторе/TUN/HTTPS/остановку; исходный FI2 и активный AWG пользователя сохранены. Приватные профили не входят в файлы релиза. См. [границы проверки](docs/testing/olcrtc-fi3-2026092702.md).
+- Локальный Windows-кандидат 2026100601 передал реальный HTTPS-трафик через OpenFlux после обновления анонимной сессии отдельного тестового сервера, но следующий запуск завершился ошибкой повторной проверки браузера. Подписанный Android 2026100601 пока останавливается по таймауту на проверке Яндекса до создания туннеля; это не готовый OpenFlux-релиз для обеих платформ. Короткие загрузки не подтверждают устойчивую скорость. См. [результаты диагностики и оставшиеся проверки](docs/testing/openflux-editor-diagnostics-20260929.md).
+
+## [Unreleased Server Tools / Неопубликованные серверные инструменты] - 2026-09-29
+
+### English
+
+- Added an explicit `manual-once` bootstrap option for a new, isolated OpenFlux browser profile. A root-only Unix socket accepts one nonce-, document-, owner- and native-process-bound anonymous cookie response. Cookies stay in memory; no new TCP port, account login or TLS bypass is introduced. Existing profiles retain automatic bootstrap.
+- The socket's private runtime directory belongs to its own systemd service. The admin manifest and unit receipt bind the selected mode; pre-existing runtime paths are never adopted. This is an operator-assisted startup option, not unattended CAPTCHA recovery or a client APK/EXE update.
+
+### Русский
+
+- Добавлен явный режим `manual-once` для нового изолированного серверного профиля OpenFlux. Локальный Unix-сокет, доступный только root, принимает одну анонимную сессию браузера с привязкой к nonce, документу, владельцу и native-процессу. Cookies остаются в памяти; новый TCP-порт, вход в аккаунт и обход TLS не добавляются. Существующие профили сохраняют автоматический запуск.
+- Приватным временным каталогом сокета управляет только его служба systemd. Выбранный режим закреплён в манифесте и контрольной сумме unit; существующие каталоги не присваиваются. Это запуск с участием администратора, не автоматическое решение CAPTCHA и не обновление APK/EXE.
+
+## [0.0.14 / 2026092902] - Local Debug Diagnostic / Локальная debug-диагностика
+
+### English
+
+- Added fixed-category Android OpenFlux browser diagnostics for TLS resources and robot-verification pages. Logs do not include document URLs, page contents or cookies; TLS handling and trust stores are unchanged.
+- The isolated API 35 Volga test still stopped at browser verification before an authenticated tunnel. This debug-only build is not a connectivity fix or a published release. Browser policy host tests and diagnostic page-state checks passed; signed build 2026092901 remains unchanged.
+
+### Русский
+
+- Добавлена диагностика Android-браузера OpenFlux с фиксированными категориями TLS-ресурсов и страниц проверки на робота. Ссылки документов, содержимое страниц и cookies в журнал не выводятся; обработка TLS и хранилища доверия не изменены.
+- В изолированном тесте API 35 Volga по-прежнему останавливается на проверке браузера до готовности зашифрованного туннеля. Эта debug-сборка не является исправлением подключения или опубликованным релизом. Тесты браузерной политики и классификации страниц прошли; подписанная сборка 2026092901 не изменена.
+
+## [0.0.14 / 2026092901] - Local Android Candidate / Локальный Android-кандидат
+
+### English
+
+- Fixed Android's supplemental olcRTC TLS root handoff: libc `setenv` did not update the embedded Go runtime's environment. The fingerprint-verified GlobalSign R46 root is now configured directly in Go before certificate loading, and effective trust is checked. System root directories, hostname verification and expiry checks remain enabled.
+- Added focused certificate/bootstrap regression tests. The local Go shim is built as a versioned, checksum-pinned module from a local file proxy so native build metadata does not expose the developer's absolute workspace path. Upstream files, server rooms and VPN protocols are unchanged.
+- Debug and exact signed-release APKs separately passed FI_2 Connected, Android TUN, Instagram/Wikipedia HTTPS and clean Stop in an isolated API 35 emulator. On September 29 the user also confirmed connection and working Internet on their physical Android 13 phone. This candidate is not published. See [results and limits](docs/testing/android-olcrtc-tls-2026092901.md).
+
+### Русский
+
+- Исправлена передача дополнительного TLS-сертификата в olcRTC на Android: вызов libc `setenv` не обновлял окружение встроенного Go. Проверенный по отпечатку корень GlobalSign R46 теперь передаётся непосредственно в Go до загрузки сертификатов, после чего проверяется фактическое доверие к нему. Системные корни, проверка имени сайта и срока действия сохраняются.
+- Добавлены регрессионные тесты сертификатов и инициализации. Локальная Go-обёртка собирается как версионированный модуль с закреплённой контрольной суммой из локального файлового proxy, чтобы метаданные библиотеки не содержали абсолютный путь рабочей папки разработчика. Исходники upstream, серверные комнаты и VPN-протоколы не менялись.
+- Debug и итоговый подписанный release APK отдельно прошли подключение FI_2 до «Подключено», Android TUN, HTTPS к Instagram/Wikipedia и корректную остановку в изолированном эмуляторе API 35. 29 сентября пользователь также подтвердил подключение и работающий интернет на физическом Android 13. Кандидат не опубликован. См. [результаты и ограничения](docs/testing/android-olcrtc-tls-2026092901.md#русский).
+
+## [0.0.14 / 2026092704] - Unreleased / Не опубликовано
+
+### English
+
+- Windows installation/repair detects a running UnifiedVPN before replacing files and asks the user to close it. The guard does not terminate applications or change their VPN connections. A pending file-replacement reboot also blocks replacement until Windows is restarted.
+- Old-product removal is scheduled after installation initialization and validation. The compiled MSI policy is checked for guard conditions and execution order.
+- Windows app-image verification requires the Java module image and every declared classpath JAR. Investigation of a silent installed-app failure found missing runtime files; the complete 2026092703 portable package opened its real window successfully. In-place upgrade validation of this new candidate is still pending.
+- This packaging fix does not change VPN cores or claim higher throughput. No release has been published.
+
+### Русский
+
+- Перед заменой файлов установщик Windows проверяет, закрыта ли UnifiedVPN. Если приложение запущено, установка просит закрыть его; защита не завершает процессы и не меняет VPN-соединения. Ожидающая перезагрузки замена файлов также блокирует установку до перезапуска Windows.
+- Удаление предыдущей версии перенесено после инициализации установки и проверок. В готовом MSI проверяются условия защиты и порядок выполнения.
+- Проверка Windows-пакета требует наличие модулей Java и всех JAR из конфигурации запуска. При диагностике молчаливого сбоя установленного приложения обнаружены пропавшие файлы; полная portable-копия 2026092703 успешно открыла настоящее окно. Проверка обновления установленной версии новым кандидатом ещё не завершена.
+- Исправление упаковки не меняет VPN-ядра и не заявляет прирост скорости. Релиз не опубликован.
+
+## [0.0.14 / 2026092703] - Unreleased / Не опубликовано
+
+### English
+
+- Classic OpenFlux batching now drains ready packets before starting the linger timer. Its input queue has a 2 MiB byte budget, including packets being collected or sent, instead of a small packet-count-only limit. This addresses verified backlog/overflow cases without changing encryption, legacy profiles or Volga.
+- Windows briefly drains pending core diagnostics after an early process exit, so a delayed certificate/configuration failure is not replaced by a generic retryable error. Waiting is bounded and remains cancellable.
+- Added byte-budget, ordering, stop/cancellation and burst regression checks, including Go race tests. Build 2026092702 measured 13.548 Mbit/s on Windows and 13.068 Mbit/s through Android emulator TUN; neither those results nor the offline tests establish 20 Mbit/s for this candidate.
+
+### Русский
+
+- Пакетирование классического OpenFlux сначала забирает готовые пакеты, затем запускает таймер ожидания. Входная очередь ограничена 2 МиБ с учётом собираемых и отправляемых пакетов вместо небольшого ограничения только по их количеству. Это исправляет проверенные случаи накопления и переполнения очереди, не меняя шифрование, старые профили или Volga.
+- Windows ограниченно дочитывает диагностику быстро завершившегося ядра: запоздавшая ошибка сертификата или конфигурации больше не заменяется общей ошибкой с лишними повторами. Ожидание ограничено по времени и поддерживает отмену.
+- Добавлены проверки лимита байтов, порядка, остановки/отмены и всплесков нагрузки, включая Go race-тесты. Сборка 2026092702 показала 13,548 Мбит/с на Windows и 13,068 Мбит/с через TUN Android-эмулятора; эти результаты и тесты без сети не подтверждают 20 Мбит/с для нового кандидата.
+
+## [0.0.14 / 2026092702] - Unreleased / Не опубликовано
+
+### English
+
+- Added the explicit OpenFlux `batch-zstd-v2` codec for classic Yandex Docs, with bounded batching and codec-specific TCP tuning. AES-256-GCM and authenticated readiness remain mandatory. Legacy LZ4 stays the default for existing profiles; Volga does not silently switch codecs.
+- Profile editing, sharing, runtime configuration and the server admin wizard preserve the selected codec. Both ends must use matching codec settings; native wrapper 6 is required for batch mode.
+- Includes the Android certificate and Windows olcRTC startup-retry fixes from build 2026092701. This is a local candidate, not a published release or a guarantee of 20 Mbit/s on a mobile network.
+
+### Русский
+
+- Добавлен явный кодек OpenFlux `batch-zstd-v2` для классических Яндекс Документов: ограниченные очереди пакетирования и отдельные параметры TCP. AES-256-GCM и проверка готовности зашифрованного соединения обязательны. Старые профили по умолчанию используют прежний LZ4; Volga не переключается на другой кодек автоматически.
+- Редактирование, передача профилей, конфигурация ядра и серверный мастер сохраняют выбранный кодек. Значения на клиенте и сервере должны совпадать; пакетному режиму требуется native-обёртка 6.
+- Включены исправления сертификатов Android и повторных подключений olcRTC на Windows из сборки 2026092701. Это локальный кандидат, а не опубликованный релиз и не гарантия 20 Мбит/с в мобильной сети.
+
+## [0.0.14 / 2026092701] - Unreleased / Не опубликовано
+
+### English
+
+- Android prepares the fingerprint-verified public GlobalSign R46 root before loading the Go runtime, supplementing its system CA directories. This addresses the observed Jitsi `certificate signed by unknown authority` error on older Android trust stores without disabling certificate, hostname or expiry checks.
+- Windows retries temporary olcRTC startup failures up to three times, with bounded backoff and a separate process/readiness state for each attempt. Stop or a different profile cancels pending retries; invalid keys, incompatible protocols and certificate errors do not trigger retries.
+- Added certificate integrity, retry-limit and cancellation tests. The olcRTC core, wire protocol, server configuration and OpenFlux codec are unchanged. Local validation is in progress; this is not a published release.
+- Validation: 366 JVM and 239 Android host tests passed. A separate live Windows manager test recovered after a handshake timeout and passed HTTPS/stop; an intermediate Android debug APK passed TUN/HTTPS in an API 35 emulator. Exact final package and physical-phone checks remain pending. See [results and limits](docs/testing/olcrtc-startup-2026092701.md).
+
+### Русский
+
+- Android подготавливает проверенный по отпечатку публичный корень GlobalSign R46 до загрузки Go, дополняя системные каталоги сертификатов. Это исправление наблюдавшейся ошибки Jitsi `certificate signed by unknown authority` на старых хранилищах Android; проверки сертификата, имени сайта и срока действия не отключаются.
+- Windows автоматически повторяет временно неудачный запуск olcRTC до трёх раз, с ограниченной задержкой и отдельным процессом/состоянием готовности каждой попытки. Остановка или выбор другого профиля отменяет повторы; неправильные ключи, несовместимый протокол и ошибки сертификата повторно не запускаются.
+- Добавлены тесты целостности сертификата, лимита повторов и отмены. Ядро olcRTC, протокол обмена, конфигурация сервера и кодек OpenFlux не менялись. Локальные проверки продолжаются; сборка не опубликована.
+- Проверки: прошли 366 JVM и 239 Android host-тестов. Отдельный реальный Windows-тест восстановился после тайм-аута handshake и прошёл HTTPS/остановку; промежуточная debug APK прошла TUN/HTTPS в эмуляторе API 35. Точная итоговая упаковка и физический телефон ещё требуют проверки. См. [результаты и ограничения](docs/testing/olcrtc-startup-2026092701.md#русский).
+
+## [OpenFlux Admin Tools 1] - Unreleased / Не опубликовано
+
+### English
+
+- Added a separate, admin-only server wizard for a fresh device name, explicit Yandex editor, and hidden document URL. It generates an independent key and private Unified VPN import file; existing documents and installations are not reused.
+- Added pinned browser/runtime artifacts, frozen helper copies, automatic collision-checked subnet allocation, and an owned persistent systemd service. Preparation stays offline; installation requires explicit confirmation. Rollback checks resource ownership, unit identity and locking without replacing existing VPN services.
+- Tightened Docker inspection errors: an inaccessible daemon or failed inspection is no longer treated as an absent resource. Added regression tests for duplicate document aliases, partial installation, foreign resources, changed helpers and interrupted cleanup.
+- This is a server-tool update, not a replacement of the published 0.0.14 / 2026092406 APK or EXE. See the [admin instructions](tools/openflux-server/ADMIN.md).
+- Validation on September 25: 291 local tests passed; the focused VPS suite ran 159 with one optional JavaScript skip. A fresh wizard-created Volga profile passed encrypted traffic and stop on the unchanged packaged Windows client and released APK in an Android API 35 emulator. The new service passed an explicit restart; no host reboot was performed. See [results and limits](docs/testing/openflux-admin-20260925.md).
+
+### Русский
+
+- Добавлен отдельный админский мастер на сервере: новое имя устройства, явный выбор редактора Яндекса и скрытый ввод ссылки. Он создаёт независимый ключ и приватный файл импорта Unified VPN; существующие документы и установки повторно не используются.
+- Добавлены закреплённые браузерные/runtime-артефакты, отдельные копии помощников, автоматический выбор подсети с проверкой пересечений и собственная постоянная служба systemd. Подготовка выполняется без сети, установка требует явного подтверждения. Откат проверяет владельца, службу и блокировки, не заменяя существующие VPN-службы.
+- Ошибка доступа к Docker или неудачная проверка больше не считаются отсутствующим ресурсом. Добавлены тесты повторных ссылок на документ, частичной установки, чужих ресурсов, изменённых помощников и прерванной очистки.
+- Это обновление серверного инструмента, а не замена опубликованных APK и EXE 0.0.14 / 2026092406. См. [инструкцию администратора](tools/openflux-server/ADMIN.md#русский).
+- Проверка 25 сентября: 291 локальный тест прошёл; на VPS выполнены 159 с одним необязательным JS-пропуском. Новый созданный мастером Volga-профиль прошёл зашифрованный трафик и остановку неизменённой Windows-сборки и релизной APK в эмуляторе Android API 35. Перезапуск новой службы проверен, весь VPS не перезагружался. См. [результаты и ограничения](docs/testing/openflux-admin-20260925.md#русский).
+
 ## [0.0.14 / 2026092406] - 2026-09-24 (Preview / Предварительная)
 
 ### English

@@ -2,4 +2,7 @@
 // Binding a dependency avoids embedding local source replacement paths in the AAR.
 package olcrtcpin
 
-import _ "github.com/openlibrecommunity/olcrtc/mobile"
+import (
+	_ "github.com/openlibrecommunity/olcrtc/mobile"
+	_ "unified-vpn.local/olcrtc-tls"
+)

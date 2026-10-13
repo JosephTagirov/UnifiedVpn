@@ -7,7 +7,10 @@ import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.testing.Test
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
 import java.util.Properties
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -38,6 +41,9 @@ val olcrtcAndroidModule = "github.com/openlibrecommunity/olcrtc"
 val olcrtcAndroidModuleVersion = "v0.0.2-0.20260827214920-d7a00da5242f"
 val olcrtcAndroidModuleCommit = "d7a00da5242f72a48b505ffc4b6aa8246376bf25"
 val olcrtcAndroidModuleSum = "h1:UDWaXHI5nHTo+O1L21T10U3JzB9noORcn2AvUGxPLwQ="
+val olcrtcTlsModule = "unified-vpn.local/olcrtc-tls"
+val olcrtcTlsVersion = "v0.0.1"
+val olcrtcTlsSum = "h1:Xm4m6HHAoZt7U2UcePX8Xbo9I2NV6lfkPIinRjqDBkM="
 val localProperties = Properties().apply {
     rootProject.file("local.properties")
         .takeIf { it.isFile }
@@ -113,19 +119,32 @@ abstract class GenerateAppInfoTask : DefaultTask() {
 
 olcrtcAndroidAarFile.parentFile.mkdirs()
 
+val testOlcrtcTlsBootstrap by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Tests the Android olcRTC Go certificate bootstrap."
+    workingDir = olcrtcAndroidBindDir.resolve("tlsbootstrap")
+    environment("GOWORK", "off")
+    environment("GOFLAGS", "")
+    commandLine("go", "test", "-mod=readonly", "./...")
+}
+
 val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
     group = "build"
     description = "Builds the pinned versioned olcrtc Android module using gomobile."
     dependsOn(":verifyOlcRtcSource")
+    dependsOn(testOlcrtcTlsBootstrap)
 
     inputs.files(
         olcrtcAndroidBindDir.resolve("go.mod"),
         olcrtcAndroidBindDir.resolve("go.sum"),
         olcrtcAndroidBindDir.resolve("pin.go")
     )
+    inputs.dir(olcrtcAndroidBindDir.resolve("tlsbootstrap"))
     inputs.property("olcrtcCommit", olcrtcCommitSha)
     inputs.property("olcrtcModuleVersion", olcrtcAndroidModuleVersion)
     inputs.property("olcrtcModuleSum", olcrtcAndroidModuleSum)
+    inputs.property("tlsModuleVersion", olcrtcTlsVersion)
+    inputs.property("tlsModuleSum", olcrtcTlsSum)
     outputs.file(olcrtcAndroidAar)
 
     workingDir = olcrtcAndroidBindDir
@@ -143,6 +162,8 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
             "The Android module pin must be updated with olcbox.olcrtcSha."
         }
 
+        var buildProxy: String? = null
+        var noSumDb: String? = null
         fun go(vararg arguments: String): String {
             val process = ProcessBuilder(listOf("go") + arguments)
                 .directory(olcrtcAndroidBindDir)
@@ -150,12 +171,37 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
                 .apply {
                     environment()["GOWORK"] = "off"
                     environment()["GOFLAGS"] = ""
+                    buildProxy?.let { environment()["GOPROXY"] = it }
+                    noSumDb?.let { environment()["GONOSUMDB"] = it }
                 }
                 .start()
             val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
             check(process.waitFor() == 0) { "Cannot verify the olcRTC Android module: $output" }
             return output
         }
+
+        // A local replacement leaks the workspace path into native Go build info.
+        // Serve our tiny, checksum-pinned module from a file proxy instead.
+        val proxyRoot = layout.buildDirectory.dir("generated/olcrtc/tls-module-proxy").get().asFile
+        val moduleVersions = proxyRoot.resolve("$olcrtcTlsModule/@v").apply { mkdirs() }
+        val tlsSource = olcrtcAndroidBindDir.resolve("tlsbootstrap")
+        fun moduleBytes(name: String) = tlsSource.resolve(name).readText().replace("\r\n", "\n").toByteArray(Charsets.UTF_8)
+        moduleVersions.resolve("$olcrtcTlsVersion.mod").writeBytes(moduleBytes("go.mod"))
+        moduleVersions.resolve("$olcrtcTlsVersion.info").writeText(JsonOutput.toJson(mapOf(
+            "Version" to olcrtcTlsVersion, "Time" to "2026-09-29T00:00:00Z"
+        )))
+        moduleVersions.resolve("list").writeText("$olcrtcTlsVersion\n")
+        ZipOutputStream(moduleVersions.resolve("$olcrtcTlsVersion.zip").outputStream()).use { zip ->
+            for (name in listOf("go.mod", "roots.go")) {
+                zip.putNextEntry(ZipEntry("$olcrtcTlsModule@$olcrtcTlsVersion/$name").apply { time = 0 })
+                zip.write(moduleBytes(name))
+                zip.closeEntry()
+            }
+        }
+        buildProxy = proxyRoot.toPath().toUri().toASCIIString() + "," + go("env", "GOPROXY")
+        noSumDb = listOf(olcrtcTlsModule, go("env", "GONOSUMDB")).filter { it.isNotBlank() }.joinToString(",")
+        environment("GOPROXY", buildProxy)
+        environment("GONOSUMDB", noSumDb)
 
         val manifest = JsonSlurper().parseText(go("mod", "edit", "-json")) as Map<*, *>
         check((manifest["Replace"] as? List<*>).isNullOrEmpty()) {
@@ -170,8 +216,25 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
         check(module["Sum"] == olcrtcAndroidModuleSum) {
             "The Android olcRTC module checksum does not match the verified pin."
         }
+        val tlsModule = JsonSlurper().parseText(
+            go("mod", "download", "-json", "$olcrtcTlsModule@$olcrtcTlsVersion")
+        ) as Map<*, *>
+        check(tlsModule["Version"] == olcrtcTlsVersion && tlsModule["Sum"] == olcrtcTlsSum) {
+            "The Android TLS module checksum does not match the reviewed shim."
+        }
+        val selectedTls = JsonSlurper().parseText(go("list", "-mod=readonly", "-m", "-json", olcrtcTlsModule)) as Map<*, *>
+        check(selectedTls["Version"] == olcrtcTlsVersion && selectedTls["Replace"] == null && selectedTls["Sum"] == olcrtcTlsSum) {
+            "The Android binding graph must use the pinned TLS shim without replacement."
+        }
+        val cachedTlsSource = File(tlsModule["Dir"] as String)
+        for (name in listOf("go.mod", "roots.go")) {
+            check(cachedTlsSource.resolve(name).readBytes().contentEquals(moduleBytes(name))) {
+                "TLS shim source changed; update its version and reviewed module checksum."
+            }
+        }
         go("mod", "verify")
         logger.lifecycle("Verified Android olcRTC module $olcrtcAndroidModuleVersion")
+
     }
     commandLine(
         "gomobile",
@@ -184,7 +247,8 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
         "-s -w -checklinkname=0",
         "-o",
         olcrtcAndroidAarFile.absolutePath,
-        "$olcrtcAndroidModule/mobile"
+        "$olcrtcAndroidModule/mobile",
+        olcrtcTlsModule
     )
 }
 

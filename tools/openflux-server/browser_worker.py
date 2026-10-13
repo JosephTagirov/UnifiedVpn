@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from urllib.parse import unquote, urlsplit
 
 
@@ -16,6 +17,7 @@ MAX_MESSAGE = 32768
 MAX_COOKIES = 64
 MAX_COOKIE = 4096
 MAX_COOKIE_BYTES = 24576
+MAX_CLASSIC_DOCUMENT = 24576
 TIMEOUT_SECONDS = 45
 DOCUMENT_HOSTS = frozenset(("docs.yandex.ru", "disk.yandex.ru"))
 RESOURCE_ROOTS = ("yandex.ru", "yandex.net", "yastatic.net", "yandexcloud.net")
@@ -49,6 +51,21 @@ READY_SCRIPT = """() => {
       action.password === '' && action.hash === '';
   } catch (_) { return false; }
 }"""
+CLASSIC_DOCUMENT_SCRIPT = """() => {
+  const nodes = document.querySelectorAll('script#client-config');
+  if (nodes.length !== 1 || !nodes[0].textContent || nodes[0].textContent.length > 2097152) throw new Error('invalid_config');
+  const root = JSON.parse(nodes[0].textContent);
+  const office = root && root.officeActionData;
+  const editor = office && office.editor_config;
+  if (!office || !editor) throw new Error('invalid_config');
+  if (office.office_online_editor_type === 'volga') return {kind: 'volga'};
+  const doc = editor.document;
+  if (!doc || !doc.permissions || doc.permissions.edit !== true) throw new Error('invalid_config');
+  return {kind: 'classic', document: {
+    balancer_url: office.balancer_url, token: editor.token, document_key: doc.key,
+    file_type: doc.fileType, download_url: doc.url, title: doc.title, edit: true
+  }};
+}"""
 
 
 class VerificationError(Exception):
@@ -72,19 +89,24 @@ def decode_message(raw):
 
 
 def encode_message(value):
-    raw = json.dumps(value, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode("ascii")
+    try:
+        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise VerificationError() from None
     if len(raw) > MAX_MESSAGE:
         raise VerificationError()
     return raw + b"\n"
 
 
 def allowed_url(value, *, navigation=False):
-    if not isinstance(value, str) or len(value) > 8192 or any(ord(char) <= 32 or ord(char) == 127 for char in value):
+    if not valid_url_text(value) or navigation and "#" in value:
         return False
     try:
         parsed = urlsplit(value)
         host = parsed.hostname or ""
-        if parsed.scheme != "https" or parsed.port not in (None, 443) or parsed.username is not None or parsed.password is not None:
+        if (parsed.scheme != "https" or parsed.port not in (None, 443)
+                or parsed.username is not None or parsed.password is not None
+                or parsed.netloc.lower() not in (host, host + ":443")):
             return False
         if navigation:
             if host not in DOCUMENT_HOSTS:
@@ -118,13 +140,100 @@ def cookie_domain(value, document_url):
     return "" if domain == host else domain
 
 
+def valid_user_agent(value):
+    return (isinstance(value, str) and 1 <= len(value) <= 1024 and value.strip() == value
+            and all(0x20 <= ord(char) <= 0x7e for char in value))
+
+
+def valid_url_text(value):
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        return (len(value.encode("utf-8")) <= 8192
+                and not any(char.isspace() or unicodedata.category(char) == "Cc" or char == "\\" for char in value)
+                and re.search(r"%(?![0-9a-fA-F]{2})", value) is None)
+    except UnicodeError:
+        return False
+
+
+def classic_url(value, *, origin=False):
+    if not valid_url_text(value):
+        return False
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        label_pattern = (r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?" if origin
+                         else r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+        if (parsed.scheme != "https" or parsed.port not in (None, 443)
+                or parsed.username is not None or parsed.password is not None or "#" in value
+                or parsed.netloc.lower() not in (host, host + ":443")
+                or len(host) > 253 or not host.isascii()
+                or any(re.fullmatch(label_pattern, label) is None for label in host.split("."))
+                or not any(host.endswith("." + root) for root in ("yandex.ru", "yandex.net"))):
+            return False
+        return not origin or (parsed.path == "" and "?" not in value)
+    except (ValueError, UnicodeError):
+        return False
+
+
+def classic_document_reference(value):
+    if classic_url(value):
+        return True
+    # OnlyOffice consumes this signed reference remotely; it is never a URL we fetch.
+    if not valid_url_text(value) or not value.startswith("http://localhost:12701/disk/") or "#" in value:
+        return False
+    try:
+        parsed = urlsplit(value)
+        path = unquote(parsed.path, errors="strict")
+        return (parsed.scheme == "http" and parsed.netloc == "localhost:12701"
+                and len(path) > len("/disk/")
+                and not any(part in (".", "..") for part in path.split("/"))
+                and not any(char.isspace() or unicodedata.category(char) == "Cc" or char in "\\%?#" for char in path))
+    except (ValueError, UnicodeError):
+        return False
+
+
+def validate_classic_document(value, document_url):
+    fields = {"source_url", "captured_at", "balancer_url", "token", "document_key", "file_type", "download_url", "title", "edit"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise VerificationError()
+    if value["source_url"] != document_url or not allowed_url(document_url, navigation=True):
+        raise VerificationError()
+    captured_at = value["captured_at"]
+    now = int(time.time())
+    if type(captured_at) is not int or not now - 120 <= captured_at <= now + 5:
+        raise VerificationError()
+    if value["edit"] is not True or not classic_url(value["balancer_url"], origin=True) or not classic_document_reference(value["download_url"]):
+        raise VerificationError()
+    for field, maximum in (("token", 16384), ("document_key", 512)):
+        text = value[field]
+        if not isinstance(text, str) or not 1 <= len(text) <= maximum or any(not 0x21 <= ord(char) <= 0x7e for char in text):
+            raise VerificationError()
+    if value["document_key"] in (".", "..") or not isinstance(value["file_type"], str) or re.fullmatch(r"[A-Za-z0-9._-]{1,32}", value["file_type"]) is None:
+        raise VerificationError()
+    title = value["title"]
+    if not isinstance(title, str) or any(unicodedata.category(char) == "Cc" for char in title):
+        raise VerificationError()
+    try:
+        size = len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8"))
+        if len(title.encode("utf-8")) > 1024 or size > MAX_CLASSIC_DOCUMENT:
+            raise VerificationError()
+    except (ValueError, UnicodeError):
+        raise VerificationError() from None
+    return value
+
+
 def validate_response(value, request_id, document_url):
     if not isinstance(value, dict) or value.get("id") != request_id:
         raise VerificationError()
     if set(value) == {"id", "error"} and value["error"] == "verification_failed":
         return value
-    if set(value) != {"id", "cookies"} or not isinstance(value["cookies"], list) or not 1 <= len(value["cookies"]) <= MAX_COOKIES:
+    if not {"id", "cookies"} <= set(value) <= {"id", "cookies", "user_agent", "classic_document"} or not isinstance(value["cookies"], list) or not 1 <= len(value["cookies"]) <= MAX_COOKIES:
         raise VerificationError()
+    if "user_agent" in value and not valid_user_agent(value["user_agent"]):
+        raise VerificationError()
+    if "classic_document" in value:
+        validate_classic_document(value["classic_document"], document_url)
     now = int(time.time())
     seen = set()
     total = 0
@@ -151,7 +260,7 @@ def validate_response(value, request_id, document_url):
     return value
 
 
-def export_cookies(cookies, request):
+def export_cookies(cookies, request, user_agent=None, classic_document=None):
     result = []
     for cookie in cookies:
         try:
@@ -170,7 +279,12 @@ def export_cookies(cookies, request):
             continue
         result.append({name: cookie[name] for name in ("name", "value", "domain", "path")})
         result[-1].update(secure=True, expires=expires)
-    return validate_response({"id": request["id"], "cookies": result}, request["id"], request["document_url"])
+    response = {"id": request["id"], "cookies": result}
+    if user_agent is not None:
+        response["user_agent"] = user_agent
+    if classic_document is not None:
+        response["classic_document"] = classic_document
+    return validate_response(response, request["id"], request["document_url"])
 
 
 async def verify(request, playwright_factory=None):
@@ -204,12 +318,38 @@ async def verify(request, playwright_factory=None):
             await context.route("**/*", route_request)
             await context.route_web_socket("**/*", block_websocket)
             page = await context.new_page()
+            navigation_generation = 0
+            def on_navigation(frame):
+                nonlocal navigation_generation
+                if frame == page.main_frame:
+                    navigation_generation += 1
+            page.on("framenavigated", on_navigation)
+            # Read before untrusted document scripts run; this is the context's actual UA.
+            user_agent = await page.evaluate("navigator.userAgent")
+            if not valid_user_agent(user_agent):
+                raise VerificationError()
             await page.goto(request["document_url"], wait_until="domcontentloaded", timeout=20000)
             await page.wait_for_function(READY_SCRIPT, timeout=20000, polling=250)
             if not allowed_url(page.url, navigation=True):
                 raise VerificationError()
+            verified_url = page.url
+            verified_generation = navigation_generation
+            snapshot = await page.evaluate(CLASSIC_DOCUMENT_SCRIPT)
+            if not isinstance(snapshot, dict):
+                raise VerificationError()
+            if snapshot == {"kind": "volga"}:
+                classic_document = None
+            elif (set(snapshot) == {"kind", "document"} and snapshot["kind"] == "classic"
+                  and isinstance(snapshot["document"], dict)
+                  and set(snapshot["document"]) == {"balancer_url", "token", "document_key", "file_type", "download_url", "title", "edit"}):
+                classic_document = {"source_url": request["document_url"], "captured_at": int(time.time()), **snapshot["document"]}
+                validate_classic_document(classic_document, request["document_url"])
+            else:
+                raise VerificationError()
             cookies = await context.cookies([request["document_url"]])
-            return export_cookies(cookies, request)
+            if verified_generation != navigation_generation or page.url != verified_url:
+                raise VerificationError()
+            return export_cookies(cookies, request, user_agent, classic_document)
         finally:
             await browser.close()
 

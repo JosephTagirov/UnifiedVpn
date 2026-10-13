@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Explicit, receipt-bound legacy-to-L4 upgrade; old files and resources are retained."""
+"""Explicit, receipt-bound wrapper upgrade; legacy codec and old resources are retained."""
 
 import argparse
 from contextlib import contextmanager
@@ -51,7 +51,9 @@ except Exception:
 SCHEMA = "unifiedvpn-openflux-upgrade-v1"
 PROOF_SCHEMA = "unifiedvpn-openflux-upgrade-traffic-v1"
 LEGACY_UPSTREAM = "4f1bdb554c262f3ae9adbfe317a092c6b929ba7d"
-LEGACY_VERSIONS = {f"unified-openflux {version} upstream={LEGACY_UPSTREAM} protocol={manage.PROTOCOL}" for version in (1, 2, 3)}
+LEGACY_VERSIONS = {f"unified-openflux {version} upstream={upstream} protocol={manage.PROTOCOL}": upstream
+                   for upstream, versions in ((LEGACY_UPSTREAM, (1, 2, 3)), (manage.UPSTREAM, (4, 5, 6)))
+                   for version in versions}
 SNAPSHOT_FILES = ("manage.py", "Dockerfile", "entrypoint.sh", "openflux", "source.tar.gz", "LICENSE", "NOTICE", "COPYRIGHT", "provenance.json", "server.json", "state.json")
 PHASES = {"preparing", "prepared", "prepare_failed", "checking_document", "document_failed", "creating_candidate",
           "switching", "testing", "committed", "rolling_back", "rolled_back", "inspection_required"}
@@ -215,24 +217,25 @@ class Upgrade:
         root = self.original.root
         hashes = file_hashes(root, SNAPSHOT_FILES)
         state, provenance = read_json(root / "state.json"), read_json(root / "provenance.json", private=False)
-        if (type(state.get("format")) is not int or state.get("format") != 1 or state.get("upstream") != LEGACY_UPSTREAM
+        upstream = LEGACY_VERSIONS.get(provenance.get("wrapper_version"))
+        if (upstream is None or type(state.get("format")) is not int or state.get("format") != 1 or state.get("upstream") != upstream
                 or state.get("instance", "default") != self.instance
                 or not manage.HASH_RE.fullmatch(str(state.get("owner")))
-                or provenance.get("upstream_commit") != LEGACY_UPSTREAM
-                or provenance.get("protocol") != manage.PROTOCOL or provenance.get("wrapper_version") not in LEGACY_VERSIONS
+                or provenance.get("upstream_commit") != upstream
+                or provenance.get("protocol") != manage.PROTOCOL
                 or provenance.get("binary_sha256") != hashes["openflux"] or provenance.get("source_sha256") != hashes["source.tar.gz"]):
             manage.fail("Original package provenance or artifact hashes are not a supported legacy installation.")
         for key, pattern in (("image_id", manage.IMAGE_RE), ("runtime_id", manage.IMAGE_RE), ("container_id", manage.HASH_RE), ("network_id", manage.HASH_RE)):
             if not pattern.fullmatch(str(state.get(key))):
                 manage.fail("Original installation identities are incomplete.")
         manage.validate_subnet(state.get("subnet"))
-        if manage.read_config(root / "server.json").get("codec", "legacy") != "legacy":
-            manage.fail("Legacy upgrades must preserve the legacy codec.")
+        if manage.read_config(root / "server.json").get("wire_codec", manage.DEFAULT_WIRE_CODEC) != manage.DEFAULT_WIRE_CODEC:
+            manage.fail("Wrapper upgrades must preserve the legacy codec; use a separate profile for a new codec.")
         image = self.original.owned("image", state["image_id"], state)
         network = self.original.owned("network", self.original.network, state)
         if image is None or network is None or network.get("Driver") != "bridge":
             manage.fail("Original image or isolated bridge is missing.")
-        if (image.get("Config") or {}).get("Labels", {}).get(manage.LABEL + ".upstream") != LEGACY_UPSTREAM:
+        if (image.get("Config") or {}).get("Labels", {}).get(manage.LABEL + ".upstream") != upstream:
             manage.fail("Original image provenance label does not match.")
         subnets = [entry.get("Subnet") for entry in (network.get("IPAM") or {}).get("Config", [])]
         if subnets != [state["subnet"]] or set(network.get("Containers") or {}) - {state["container_id"], *allowed}:

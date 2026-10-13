@@ -5,25 +5,36 @@ OpenFlux `d34dc8caa70ca059cd80d8f5753499361052dabc`. Yandex Docs only.
 The wrapper requires AES-256-GCM and an authenticated client/server handshake;
 upstream's original executable is not interchangeable with this entrypoint.
 
-New candidate packages require wrapper version 5 and use the upstream L4 TCP exit.
+New candidate packages require wrapper version 7 and use the upstream L4 TCP exit.
 They allow explicit `yandex` (legacy editor) or `vyandex` (new Volga editor);
 the default remains `yandex`, with no automatic detection or fallback. A new
 transport requires matching client/server binaries and separate real traffic
 validation. Do not replace an active document or reuse its key for this test. The
-legacy AES/LZ4 wire format, peer authentication and private profile schema remain
-unchanged. The anonymous, sandboxed browser
+legacy AES/LZ4 wire format and peer authentication remain the default. Optional
+`wire_codec: "batch-zstd-v2"` is an explicit classic-editor-only opt-in requiring
+matching support on both peers; it never falls back to legacy. The anonymous, sandboxed browser
 companion is a separate, opt-in experimental path documented in
 [BROWSER_BOOTSTRAP.md](BROWSER_BOOTSTRAP.md). Ordinary manager commands do not
 launch a browser. Installed legacy helpers/configurations are not upgraded
 or changed by editing this repository. See [staged upgrades](UPGRADE.md) for the
 explicit, receipt-bound path that retains the original installation for rollback.
 
-**Status:** wrapper 4 passed a bounded VPS trial with real traffic from the
-packaged Windows client; Android browser verification still fails. The trial
-restored the original server, not a permanent migration. The separate
-[systemd browser lifecycle](BROWSER_LIFECYCLE.md) passed real controller-loss
-recovery; a host reboot remains untested. See the
-[current validation report](../../docs/testing/openflux-runtime-2026092405.md).
+Roll out the wrapper-7 core with its matching browser helper. Older strict cores
+reject the helper's optional success-response `user_agent` field; wrapper 7
+accepts old cookie-only responses without User-Agent matching. See the
+[paired rollout warning](BROWSER_BOOTSTRAP.md#paired-core-and-helper-rollout).
+The version change alone does not establish a live fix or validate a release.
+
+**Status:** wrapper 5 and the Volga transport passed bounded real-traffic checks
+with the packaged Windows client and the exact Android release APK in an
+API 35 emulator. See the [Volga validation report](../../docs/testing/openflux-volga-2026092406.md)
+and [release notes](../../docs/releases/0.0.14-build.2026092406.md).
+These historical results do not validate wrapper 6's optional batch codec; it
+requires its own encrypted-handshake and real-traffic checks before deployment.
+The earlier [wrapper-4 report](../../docs/testing/openflux-runtime-2026092405.md)
+records the previous Android limitation, not the current Volga result.
+The separate [systemd browser lifecycle](BROWSER_LIFECYCLE.md) passed real
+controller-loss recovery; a full host reboot remains untested.
 Do not change an encrypted profile's exact document URL merely to try another
 editor URL; it is part of the peer context.
 
@@ -41,7 +52,7 @@ editor URL; it is part of the peer context.
   kernel modules, device mounts, or automatic restart. The container drops all
   capabilities without adding `NET_RAW` or `NET_ADMIN`, with a read-only root,
   no-new-privileges, 512 MiB memory, one CPU, and 128-process limits.
-- Wrappers 4 and 5 use OS TCP sockets instead of the old raw exit. No RST suppression
+- Wrappers 4 through 7 use OS TCP sockets instead of the old raw exit. No RST suppression
   or other firewall command is run, even inside the new container. The
   entrypoint still refuses the recorded host namespace. The root UID is retained
   only to read the existing root-only secret mount, not to grant capabilities.
@@ -83,7 +94,7 @@ checks both hashes and validates the executable header. An isolated build with
 utilities. Nothing starts the exit node during installation.
 
 ```text
-unified-openflux 5 upstream=d34dc8caa70ca059cd80d8f5753499361052dabc protocol=unified-openflux-aesgcm-v1
+unified-openflux 8 upstream=d34dc8caa70ca059cd80d8f5753499361052dabc protocol=unified-openflux-aesgcm-v1
 ```
 
 Place the manager and inputs under a root-owned directory, such as
@@ -94,7 +105,10 @@ variables, links, screenshots, or a Docker build context.
 
 ## Private Configuration
 
-Already have a verified installation and need another device? The local
+Already have a verified installation and need another device? The separate
+[admin wizard](ADMIN.md) adds pinned browser verification, automatic subnet
+selection, and a persistent service for a fresh profile. It requires a reviewed
+server-specific manifest and never replaces a working instance. The original
 [profile creation helper](CREATE_PROFILE.md) generates a separate private
 profile and reuses verified public artifacts. Its default is preparation only;
 Docker changes require explicit `--apply`.
@@ -125,6 +139,15 @@ The schema is:
 ```
 
 Do not use the placeholders as credentials. The timeout range is 5..180 seconds.
+The optional `wire_codec` accepts only `legacy-lz4-v1` (default when omitted) or
+`batch-zstd-v2` (only with `transport: "yandex"`). To prepare a separate batch
+profile, add `--transport yandex --wire-codec batch-zstd-v2` to `configure` and
+use a new output file and unused classic-editor document. Ordinary configuration
+generation omits the default field, retaining the original JSON shape. These CLI
+options cannot override an installed configuration. Updating the binary alone
+does not change the codec. Both peers must explicitly use the same codec;
+batch mode requires wrapper 6 or later compatible support on both endpoints.
+
 Both peers need the same exact document URL and encryption key. Move these
 values to the client through a private channel; do not publish a profile link.
 If a key or link leaks, rotate both peers. Root and Docker administrators can
@@ -215,11 +238,15 @@ or image. [Upstream license and notices](https://github.com/p1neappleXpress/Open
 ## Русский
 
 Для дополнительного устройства при уже работающем проверенном сервере есть
+[админский мастер](ADMIN.md#русский) с закреплённым браузерным помощником,
+автоматическим выбором подсети и постоянной службой нового профиля. Нужен
+проверенный манифест для конкретного сервера; рабочие экземпляры не заменяются.
+Исходный
 [пошаговый помощник создания профиля](CREATE_PROFILE.md#русский): отдельный
 документ, новый случайный ключ и приватный файл импорта. По умолчанию выполняется
 только подготовка; Docker меняется лишь с явным `--apply`.
 
-Новые пакеты-кандидаты требуют wrapper 5: `yandex` выбирает старый редактор,
+Новые пакеты-кандидаты требуют wrapper 7: `yandex` выбирает старый редактор,
 `vyandex` выбирает новый Volga. По умолчанию остаётся `yandex`, без автоматической
 подмены транспорта. Для отдельного нового документа укажите
 `configure --transport vyandex` и новый путь `--output`. Этот параметр допустим
@@ -227,19 +254,38 @@ or image. [Upstream license and notices](https://github.com/p1neappleXpress/Open
 Нужны соответствующие клиент и сервер и отдельная проверка реального трафика.
 Не меняйте рабочий документ и не переносите его ключ в тестовый профиль.
 
-Серверный wrapper 4 для Linux amd64 прошёл ограниченный тест с реальным трафиком
-упакованного Windows-клиента. Android пока не проходит браузерную проверку.
-Испытание вернуло исходный сервер; постоянной миграции не было. См.
-[актуальный отчёт](../../docs/testing/openflux-runtime-2026092405.md).
+Обновляйте ядро wrapper 7 вместе с соответствующим браузерным помощником.
+Старое строгое ядро отклоняет необязательное поле `user_agent` успешного ответа;
+wrapper 7 принимает прежние ответы только с cookies, но без совпадения User-Agent.
+См. [предупреждение об обновлении пары](BROWSER_BOOTSTRAP.md#согласованное-обновление-ядра-и-помощника).
+Само изменение версии не подтверждает исправление в сети или проверку релиза.
+
+Необязательное поле `wire_codec` принимает `legacy-lz4-v1` (по умолчанию, также
+при отсутствии поля) или `batch-zstd-v2` (только для `transport: "yandex"`). Для
+отдельного нового профиля добавьте к `configure` параметры
+`--transport yandex --wire-codec batch-zstd-v2`, новый выходной файл и неиспользуемый
+документ старого редактора. На обеих сторонах должны совпадать codec; для batch
+нужна поддержка wrapper 6 или совместимой более новой версии. Автоматического
+перехода к legacy нет. Обновление бинарника само по себе codec не меняет, а
+значение по умолчанию не добавляется в создаваемый JSON, сохраняя старый формат.
+
+Wrapper 5 с транспортом Volga прошёл ограниченные проверки реального трафика
+упакованного Windows-клиента и точного релизного APK в эмуляторе Android API 35.
+См. [отчёт Volga](../../docs/testing/openflux-volga-2026092406.md) и
+[примечания к релизу](../../docs/releases/0.0.14-build.2026092406.md).
+[Отчёт wrapper 4](../../docs/testing/openflux-runtime-2026092405.md) описывает
+прежнее ограничение Android, а не актуальный результат Volga.
 Поддерживается только Яндекс Документы и обязательное шифрование AES-256-GCM.
-Новый L4-сервер сохраняет прежний защищённый протокол, LZ4 и формат профиля;
+По умолчанию L4-сервер сохраняет прежний защищённый протокол, LZ4 и формат профиля;
 существующим клиентам не нужна замена ссылки или ключа. Обе стороны используют
 одинаковую ссылку на документ и один случайный 32-байтовый ключ. Обычный
-upstream-бинарник не подходит. Raw-сокеты, NET_RAW, NET_ADMIN и правила подавления
+upstream-бинарник не подходит. Результаты wrapper 5 не подтверждают новый batch
+codec: перед установкой нужны отдельные проверки handshake и реального трафика.
+Raw-сокеты, NET_RAW, NET_ADMIN и правила подавления
 RST новому контейнеру не нужны.
 
-Сначала проверяйте на отдельной временной VM. Эти изменения wrapper 4 на рабочем
-сервере ещё не применялись. Скрипт не подключается по SSH, не ставит
+Сначала проверяйте на отдельной временной VM. Обычный manage.py не подключается
+по SSH, не ставит
 Docker, не перезапускает службы и не меняет напрямую host firewall, маршруты,
 DNS или прокси. Однако создание Docker bridge добавляет собственные правила
 NAT и маршрут через Docker. Полное отсутствие влияния на работающие VPN не

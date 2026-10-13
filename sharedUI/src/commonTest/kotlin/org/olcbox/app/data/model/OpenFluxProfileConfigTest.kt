@@ -14,6 +14,53 @@ import kotlin.test.assertTrue
 
 class OpenFluxProfileConfigTest {
     @Test
+    fun legacyCodecIsNotSerializedForStrictOlderClientsOrServers() {
+        val parsed = assertNotNull(OpenFluxProfileConfig.parse(CONFIG.toJson()))
+        assertEquals(OpenFluxProfileConfig.CODEC_LEGACY, parsed.wireCodec)
+        assertFalse("wire_codec" in parsed.toJson())
+        assertFalse("wire_codec" in parsed.toEngineJson())
+        assertFalse("wire_codec" in parsed.toEngineJson(mode = "server"))
+        val explicit = assertNotNull(OpenFluxProfileConfig.parse(
+            CONFIG.toJson().dropLast(1) + ",\"wire_codec\":\"legacy-lz4-v1\"}"
+        ))
+        assertEquals(CONFIG, explicit)
+        assertEquals(CONFIG.toJson(), explicit.toJson())
+    }
+
+    @Test
+    fun batchCodecSurvivesImportExportAndBothRuntimeRoles() {
+        val batch = CONFIG.copy(wireCodec = OpenFluxProfileConfig.CODEC_BATCH)
+        assertTrue(batch.isValid())
+        assertEquals(batch, OpenFluxProfileConfig.parse(batch.toJson()))
+        assertEquals(batch, OpenFluxProfileConfig.parse(batch.toUri()))
+        assertEquals(batch, batch.copy(wireCodec = " BaTcH-ZsTd-V2 ").normalized())
+        listOf("client", "server").forEach { mode ->
+            val runtime = Json.parseToJsonElement(batch.toEngineJson(mode = mode)).jsonObject
+            assertEquals("batch-zstd-v2", runtime.getValue("wire_codec").jsonPrimitive.content)
+            assertEquals(KEY, runtime.getValue("encryption_key").jsonPrimitive.content)
+            assertFailsWith<IllegalArgumentException> {
+                batch.copy(encryptionKey = "").toEngineJson(mode = mode)
+            }
+        }
+    }
+
+    @Test
+    fun invalidCodecAndBatchVolgaCombinationNeverStartOrSilentlyDowngrade() {
+        listOf(
+            CONFIG.copy(wireCodec = ""),
+            CONFIG.copy(wireCodec = "unknown"),
+            CONFIG.copy(wireCodec = OpenFluxProfileConfig.CODEC_BATCH, transport = "vyandex")
+        ).forEach { invalid ->
+            assertFalse(invalid.isValid())
+            assertFalse(invalid.hasValidWireCodec())
+            assertEquals(invalid, OpenFluxProfileConfig.parse(invalid.toJson()))
+            assertFailsWith<IllegalArgumentException> { invalid.toUri() }
+            assertFailsWith<IllegalArgumentException> { invalid.toEngineJson() }
+        }
+        assertNull(OpenFluxProfileConfig.parse(CONFIG.toJson().dropLast(1) + ",\"wire_codec\":null}"))
+    }
+
+    @Test
     fun profilesWithoutTransportKeepTheClassicDefault() {
         val parsed = assertNotNull(OpenFluxProfileConfig.parse(
             """{"document_url":"$DOCUMENT_URL","encryption_key":"$KEY"}"""
@@ -34,7 +81,8 @@ class OpenFluxProfileConfigTest {
         assertEquals(config, OpenFluxProfileConfig.parse(raw.toJson()))
         assertEquals(config, OpenFluxProfileConfig.parse(raw.toUri()))
         assertEquals("yandex", CONFIG.transport)
-        assertEquals(listOf("yandex", "vyandex"), OpenFluxProfileConfig.supportedTransports)
+        assertEquals(listOf("yandex", "vyandex"), OpenFluxProfileConfig.classicTransports)
+        assertEquals(listOf("yandex", "vyandex", "telemost", "mailru"), OpenFluxProfileConfig.supportedTransports)
     }
 
     @Test
