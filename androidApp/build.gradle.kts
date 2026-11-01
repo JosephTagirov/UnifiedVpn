@@ -464,6 +464,7 @@ android {
     buildFeatures { buildConfig = true }
     namespace = "org.olcbox.app"
     compileSdk = 37
+    testBuildType = providers.gradleProperty("uiQaTestBuildType").orElse("debug").get()
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
@@ -493,6 +494,17 @@ android {
     }
 
     buildTypes {
+        create("releaseQa") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            applicationIdSuffix = ".shadeqa"
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName(if (hasReleaseKeystore) "release" else "debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles("src/androidTest/proguard-qa.pro")
+        }
         getByName("debug") {
             applicationIdSuffix = providers.gradleProperty("uiQaApplicationIdSuffix").orNull
         }
@@ -561,6 +573,7 @@ val olcrtcAndroidAar = files(
 
 dependencies {
     androidTestImplementation(libs.compose.ui.test)
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     androidTestImplementation("androidx.test:runner:1.5.0")
     androidTestImplementation("androidx.test:core:1.5.0")
     androidTestImplementation("junit:junit:4.13.2")

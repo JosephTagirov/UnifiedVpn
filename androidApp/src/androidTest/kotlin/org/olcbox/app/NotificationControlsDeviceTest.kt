@@ -47,8 +47,8 @@ class NotificationControlsDeviceTest {
     @Test fun notificationChooserReconnectAndSwitchKeepWorking() {
         assertTrue("Only the disposable QA package may run this test", context.packageName.endsWith(".shadeqa"))
         val ids = runBlocking { AndroidLocationsRepository.get(context).getBundle().locations.map { it.storageId }.toSet() }
-        assertEquals(setOf("shade011-a", "shade011-b"), ids)
-        runBlocking { AndroidLocationsRepository.get(context).setActiveLocationId("shade011-a") }
+        assertEquals(setOf("shade012-a", "shade012-b"), ids)
+        runBlocking { AndroidLocationsRepository.get(context).setActiveLocationId("shade012-a") }
         instrumentation.startActivitySync(Intent(Intent.ACTION_MAIN)
             .setComponent(ComponentName(context.packageName, "org.olcbox.app.AppActivity"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -77,13 +77,13 @@ class NotificationControlsDeviceTest {
             originalChooser.send()
             eventually("old notification tap is still valid") { resumedChooser() != null }
             val beforeSwitch = OlcboxVpnState.logs.value.count { it.contains("Notification profile switch connected") }
-            service(OlcboxVpnActions.ACTION_APPLY_SELECTED_PROFILE, "shade011-b")
+            service(OlcboxVpnActions.ACTION_APPLY_SELECTED_PROFILE, "shade012-b")
             eventually("second profile connected") {
                 OlcboxVpnState.status.value is VpnStatus.Connected &&
                     OlcboxVpnState.logs.value.count { it.contains("Notification profile switch connected") } > beforeSwitch
             }
             val selected = runBlocking { AndroidLocationsRepository.get(context).getBundle().activeLocationId }
-            assertEquals("shade011-b", selected)
+            assertEquals("shade012-b", selected)
             probe()
             originalChooser.send()
             eventually("chooser stays usable after switching profiles") { resumedChooser() != null }

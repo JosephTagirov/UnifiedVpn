@@ -403,7 +403,10 @@ class OlcboxVpnService : VpnService() {
             }
 
             OlcboxVpnActions.ACTION_RECONNECT_PROFILE -> {
-                if (!requestNotificationSelectedProfileSwitch(activeProfileStorageId, reconnect = true)) {
+                if (!requestNotificationSelectedProfileSwitch(
+                        intent.getStringExtra(OlcboxVpnActions.EXTRA_PROFILE_STORAGE_ID) ?: activeProfileStorageId,
+                        reconnect = true
+                    )) {
                     finishRejectedServiceStart(startId)
                 }
                 return START_NOT_STICKY
@@ -2652,7 +2655,7 @@ class OlcboxVpnService : VpnService() {
                 )
             )
 
-        if (verification == null) {
+        run {
             builder.addAction(authenticatedNotificationAction(
                 icon = android.R.drawable.ic_popup_sync,
                 label = "Reconnect",
