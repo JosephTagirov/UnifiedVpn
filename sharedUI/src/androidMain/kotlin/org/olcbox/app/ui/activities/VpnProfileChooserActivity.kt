@@ -56,7 +56,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
+import org.olcbox.app.ui.components.UnifiedBrandMark
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -151,11 +153,11 @@ class VpnProfileChooserActivity : ComponentActivity() {
                 val retryProfile = profiles?.firstOrNull {
                     it.storageId == session.failedProfileStorageId
                 }
-                val requestProfile: (NotificationProfileChoice, Boolean) -> Unit = { profile, retry ->
+                val requestProfile: (NotificationProfileChoice, Boolean, Boolean) -> Unit = { profile, retry, reconnect ->
                     if (pendingProfileId == null &&
                         !notificationProfileRequestBusy(OlcboxVpnState.status.value) &&
                         OlcboxVpnState.status.value !is VpnStatus.Disconnected &&
-                        (retry || profile.storageId != activeProfileId)
+                        (retry || reconnect || profile.storageId != activeProfileId)
                     ) {
                         pendingProfileId = profile.storageId
                         stopRequested = false
@@ -165,8 +167,11 @@ class VpnProfileChooserActivity : ComponentActivity() {
                                 startService(
                                     Intent(this@VpnProfileChooserActivity, OlcboxVpnService::class.java)
                                         .setAction(
-                                            if (retry) OlcboxVpnActions.ACTION_RETRY_PROFILE
-                                            else OlcboxVpnActions.ACTION_APPLY_SELECTED_PROFILE
+                                            when {
+                                                reconnect -> OlcboxVpnActions.ACTION_RECONNECT_PROFILE
+                                                retry -> OlcboxVpnActions.ACTION_RETRY_PROFILE
+                                                else -> OlcboxVpnActions.ACTION_APPLY_SELECTED_PROFILE
+                                            }
                                         )
                                         .putExtra(OlcboxVpnActions.EXTRA_PROFILE_STORAGE_ID, profile.storageId)
                                 )
@@ -206,7 +211,6 @@ class VpnProfileChooserActivity : ComponentActivity() {
                     switchingProfileId = switchingProfileId,
                     retryProfile = retryProfile,
                     requestInProgress = busy,
-                    appIconResource = applicationInfo.icon,
                     onOpenApp = ::openMainApp,
                     onDismiss = ::finish,
                     onStop = {
@@ -216,8 +220,11 @@ class VpnProfileChooserActivity : ComponentActivity() {
                                 .setAction(OlcboxVpnActions.ACTION_STOP_VPN)
                         )
                     },
-                    onProfileSelected = { requestProfile(it, false) },
-                    onReconnect = { retryProfile?.let { requestProfile(it, true) } }
+                    onProfileSelected = { requestProfile(it, false, false) },
+                    onReconnect = {
+                        val target = retryProfile ?: profiles?.firstOrNull { it.storageId == activeProfileId }
+                        target?.let { requestProfile(it, retryProfile != null, retryProfile == null) }
+                    }
                 )
             }
         }
@@ -323,7 +330,6 @@ private fun VpnProfileChooserContent(
     switchingProfileId: String?,
     retryProfile: NotificationProfileChoice?,
     requestInProgress: Boolean,
-    appIconResource: Int,
     onOpenApp: () -> Unit,
     onDismiss: () -> Unit,
     onStop: () -> Unit,
@@ -359,13 +365,9 @@ private fun VpnProfileChooserContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onOpenApp, modifier = Modifier.size(48.dp)) {
-                    Image(
-                        painter = painterResource(appIconResource),
-                        contentDescription = openAppDescription,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                    )
+                    UnifiedBrandMark(Modifier.size(38.dp).semantics {
+                        contentDescription = openAppDescription
+                    })
                 }
                 Column(
                     modifier = Modifier
@@ -443,20 +445,20 @@ private fun VpnProfileChooserContent(
                 modifier = Modifier.padding(top = 4.dp),
                 color = MaterialTheme.colorScheme.outlineVariant
             )
-            if (retryProfile != null) {
+            if (retryProfile != null || profiles?.any { it.storageId == activeProfileId } == true) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
+                    if (retryProfile != null) Text(
                         text = "Connection failed",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.error
                     )
                     MaterialText(
-                        text = retryProfile.name,
+                        text = (retryProfile ?: profiles?.firstOrNull { it.storageId == activeProfileId })?.name.orEmpty(),
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis

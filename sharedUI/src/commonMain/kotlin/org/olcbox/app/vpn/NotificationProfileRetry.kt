@@ -10,11 +10,14 @@ internal fun canRetryNotificationProfile(
     targetProfileId: String?,
     activeProfileId: String?,
     failedProfileId: String?,
-    lifecycleStopping: Boolean = false
+    lifecycleStopping: Boolean = false,
+    reconnect: Boolean = false
 ): Boolean {
     if (lifecycleStopping || !foregroundStarted || requestPending || notificationProfileRequestBusy(status) ||
         status is VpnStatus.Disconnected || targetProfileId.isNullOrBlank()
     ) return false
+    if (reconnect) return targetProfileId == activeProfileId &&
+        (status is VpnStatus.Connected || status is VpnStatus.Error)
     return if (failedProfileId != null) targetProfileId == failedProfileId
     else status is VpnStatus.Error && targetProfileId == activeProfileId
 }

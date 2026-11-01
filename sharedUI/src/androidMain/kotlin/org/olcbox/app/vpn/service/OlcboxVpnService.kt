@@ -402,6 +402,13 @@ class OlcboxVpnService : VpnService() {
                 return START_NOT_STICKY
             }
 
+            OlcboxVpnActions.ACTION_RECONNECT_PROFILE -> {
+                if (!requestNotificationSelectedProfileSwitch(activeProfileStorageId, reconnect = true)) {
+                    finishRejectedServiceStart(startId)
+                }
+                return START_NOT_STICKY
+            }
+
             OlcboxVpnActions.ACTION_RETRY_PROFILE -> {
                 if (!requestNotificationSelectedProfileSwitch(
                         intent.getStringExtra(OlcboxVpnActions.EXTRA_PROFILE_STORAGE_ID),
@@ -581,6 +588,7 @@ class OlcboxVpnService : VpnService() {
         expectedGeneration: Long? = null,
         expectedNotificationRequestId: Long? = null,
         retryProfileId: String? = null,
+        reconnectProfile: Boolean = false,
         onGenerationClaimed: ((Long) -> Unit)? = null
     ): Long? {
         var claimedStartupJob: Job? = null
@@ -602,7 +610,8 @@ class OlcboxVpnService : VpnService() {
                     lifecycleStopping = lifecycleStopping,
                     targetProfileId = retryProfileId,
                     activeProfileId = activeProfileStorageId,
-                    failedProfileId = failedProfileStorageId
+                    failedProfileId = failedProfileStorageId,
+                    reconnect = reconnectProfile
                 )
             ) return@synchronized null
             if (expectedGeneration == null && expectedNotificationRequestId == null) {
@@ -940,7 +949,8 @@ class OlcboxVpnService : VpnService() {
 
     private fun requestNotificationSelectedProfileSwitch(
         targetProfileId: String?,
-        retry: Boolean = false
+        retry: Boolean = false,
+        reconnect: Boolean = false
     ): Boolean {
         val sanitizedTargetId = targetProfileId?.trim()?.takeIf { it.isNotEmpty() }
             ?: return false
@@ -949,14 +959,15 @@ class OlcboxVpnService : VpnService() {
             if (pendingNotificationSelectedRequestId != null ||
                 notificationProfileRequestBusy(OlcboxVpnState.status.value)
             ) return false
-            if (retry && !canRetryNotificationProfile(
+            if ((retry || reconnect) && !canRetryNotificationProfile(
                     status = OlcboxVpnState.status.value,
                     foregroundStarted = notificationForegroundStarted,
                     requestPending = false,
                     lifecycleStopping = lifecycleStopping,
                     targetProfileId = sanitizedTargetId,
                     activeProfileId = activeProfileStorageId,
-                    failedProfileId = failedProfileStorageId
+                    failedProfileId = failedProfileStorageId,
+                    reconnect = reconnect
                 )
             ) return false
             synchronized(notificationProfileInputLock) {
@@ -974,7 +985,8 @@ class OlcboxVpnService : VpnService() {
                     steps = null,
                     requestId = requestId,
                     selectedTargetId = sanitizedTargetId,
-                    retry = retry
+                    retry = retry,
+                    reconnect = reconnect
                 )
             } finally {
                 synchronized(lifecycleTransitionLock) {
@@ -1002,7 +1014,8 @@ class OlcboxVpnService : VpnService() {
         steps: Int?,
         requestId: Long,
         selectedTargetId: String? = null,
-        retry: Boolean = false
+        retry: Boolean = false,
+        reconnect: Boolean = false
     ) {
         notificationProfileSwitchMutex.withLock {
             var previousProfileId: String? = null
@@ -1016,7 +1029,7 @@ class OlcboxVpnService : VpnService() {
                 val orderedProfileIds = selectableProfiles.map { it.storageId }
                 targetId = if (steps == null) {
                     selectedTargetId?.takeIf {
-                        it in orderedProfileIds && (retry || it != activeProfileStorageId)
+                        it in orderedProfileIds && (retry || reconnect || it != activeProfileStorageId)
                     }
                 } else {
                     notificationProfileTargetId(
@@ -1047,18 +1060,19 @@ class OlcboxVpnService : VpnService() {
                     if (steps != null && !commitNotificationProfileSteps(requestId, steps)) {
                         return@selection null
                     }
-                    if (retry && !canRetryNotificationProfile(
+                    if ((retry || reconnect) && !canRetryNotificationProfile(
                             status = OlcboxVpnState.status.value,
                             foregroundStarted = notificationForegroundStarted,
                             requestPending = false,
                             lifecycleStopping = lifecycleStopping,
                             targetProfileId = latestTarget.storageId,
                             activeProfileId = activeProfileStorageId,
-                            failedProfileId = failedProfileStorageId
+                            failedProfileId = failedProfileStorageId,
+                            reconnect = reconnect
                         )
                     ) return@selection null
 
-                    val retrySelectionRevision = if (retry) {
+                    val retrySelectionRevision = if (retry || reconnect) {
                         repository.compareAndSetActiveLocationId(selectionRevision, latestTarget.storageId)
                             ?: return@selection null
                     } else {
@@ -1069,7 +1083,8 @@ class OlcboxVpnService : VpnService() {
                         isMigration = false,
                         isRestart = true,
                         expectedNotificationRequestId = requestId,
-                        retryProfileId = latestTarget.storageId.takeIf { retry },
+                        retryProfileId = latestTarget.storageId.takeIf { retry || reconnect },
+                        reconnectProfile = reconnect,
                         onGenerationClaimed = {
                             clearFailedNotificationProfile()
                             sessionConnectedAtElapsedRealtimeMs = null
@@ -1077,9 +1092,9 @@ class OlcboxVpnService : VpnService() {
                             activeProfileStorageId = latestTarget.storageId
                             activeProfileType = latestTarget.profile.normalizedType
                             setStatus(VpnStatus.Reconnecting)
-                            updateNotification(if (retry) "Reconnecting..." else "Switching profile...")
+                            updateNotification(if (retry || reconnect) "Reconnecting..." else "Switching profile...")
                             addLog(
-                                if (retry) "Retrying ${latestTarget.profile.typeLabel()} from notification"
+                                if (retry || reconnect) "Reconnecting ${latestTarget.profile.typeLabel()} from notification"
                                 else "Switching to ${latestTarget.profile.typeLabel()} from notification"
                             )
                         }
@@ -1242,6 +1257,7 @@ class OlcboxVpnService : VpnService() {
         OlcboxVpnActions.ACTION_SWITCH_PREVIOUS_PROFILE,
         OlcboxVpnActions.ACTION_SWITCH_NEXT_PROFILE,
         OlcboxVpnActions.ACTION_RETRY_PROFILE,
+        OlcboxVpnActions.ACTION_RECONNECT_PROFILE,
         OlcboxVpnActions.ACTION_APPLY_SELECTED_PROFILE -> true
         else -> false
     }
@@ -2616,17 +2632,12 @@ class OlcboxVpnService : VpnService() {
                     pendingIntent = verification.pendingIntent
                 )
             )
-        } else if (notificationProfileCount > 1) {
-            builder.addAction(
-                authenticatedNotificationAction(
-                    icon = android.R.drawable.ic_media_previous,
-                    label = "Previous",
-                    pendingIntent = getServiceActionPendingIntent(
-                        OlcboxVpnActions.ACTION_SWITCH_PREVIOUS_PROFILE,
-                        NOTIFICATION_PREVIOUS_REQUEST_CODE
-                    )
-                )
-            )
+        } else {
+            builder.addAction(authenticatedNotificationAction(
+                icon = android.R.drawable.ic_menu_manage,
+                label = "Profiles",
+                pendingIntent = getProfileChooserPendingIntent()
+            ))
         }
 
         builder
@@ -2641,17 +2652,15 @@ class OlcboxVpnService : VpnService() {
                 )
             )
 
-        if (verification == null && notificationProfileCount > 1) {
-            builder.addAction(
-                authenticatedNotificationAction(
-                    icon = android.R.drawable.ic_media_next,
-                    label = "Next",
-                    pendingIntent = getServiceActionPendingIntent(
-                        OlcboxVpnActions.ACTION_SWITCH_NEXT_PROFILE,
-                        NOTIFICATION_NEXT_REQUEST_CODE
-                    )
+        if (verification == null) {
+            builder.addAction(authenticatedNotificationAction(
+                icon = android.R.drawable.ic_popup_sync,
+                label = "Reconnect",
+                pendingIntent = getServiceActionPendingIntent(
+                    OlcboxVpnActions.ACTION_RECONNECT_PROFILE,
+                    NOTIFICATION_RECONNECT_REQUEST_CODE
                 )
-            )
+            ))
         }
 
         return builder
@@ -2711,7 +2720,7 @@ class OlcboxVpnService : VpnService() {
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
             },
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_CANCEL_CURRENT
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }
 
@@ -3070,6 +3079,7 @@ class OlcboxVpnService : VpnService() {
         private const val NOTIFICATION_STOP_REQUEST_CODE = 101
         private const val NOTIFICATION_PREVIOUS_REQUEST_CODE = 102
         private const val NOTIFICATION_NEXT_REQUEST_CODE = 103
+        private const val NOTIFICATION_RECONNECT_REQUEST_CODE = 104
         private const val ANDROID_APP_RESOURCE_PACKAGE = "org.olcbox.app"
         private const val NOTIFICATION_SMALL_ICON_METADATA =
             "org.olcbox.app.NOTIFICATION_SMALL_ICON"

@@ -34,7 +34,7 @@ fun OlcboxAppContent(
     onShareOpenFluxRequested: (OpenFluxProfileConfig, String) -> Unit = { _, _ -> },
     onSaveLogsRequested: (onSaved: (String) -> Unit, onError: (String) -> Unit) -> Unit,
     showAppSettingsButton: Boolean,
-    showAddOlcRtcButton: Boolean = true,
+    showAddOlcRtcButton: Boolean = false,
     protocolSummary: String = "olcRTC, VLESS, Amnezia",
     showSplitTunnelingButton: Boolean = false,
     canScanQr: Boolean = false,

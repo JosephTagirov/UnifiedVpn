@@ -47,6 +47,9 @@ import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
 import java.security.SecureRandom
+import android.os.SystemClock
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 
 class AndroidVpnManager(private val context: Context) : VpnManager {
     private val appContext = context.applicationContext
@@ -57,6 +60,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     private val _splitTunnelProfile = MutableStateFlow(AndroidSplitTunnelProfile.OlcRtc)
     private val _splitTunnelSettings = MutableStateFlow(AndroidSplitTunnelSettings())
     private val _dynamicThemeEnabled = MutableStateFlow(false)
+    private var installedAppsRefreshJob: Job? = null
+    @Volatile private var installedAppsLoadedAt = 0L
     private val _installedApps = MutableStateFlow<List<AndroidInstalledApp>>(emptyList())
     private val deviceIdentityProvider = PersistentDeviceIdentityProvider(
         LocationsDataSourceImpl(appContext)
@@ -213,9 +218,16 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         updateProxyPassword(generateProxyPassword())
     }
 
+    @Synchronized
     fun refreshInstalledApps() {
-        scope.launch {
-            _installedApps.value = loadInstalledApps()
+        if (installedAppsRefreshJob?.isActive == true) return
+        if (installedAppsLoadedAt > 0 && SystemClock.elapsedRealtime() - installedAppsLoadedAt < 60_000L) return
+        installedAppsRefreshJob = scope.launch {
+            try {
+                _installedApps.value = loadInstalledApps()
+                installedAppsLoadedAt = SystemClock.elapsedRealtime()
+            } catch (error: CancellationException) { throw error }
+            catch (_: Exception) { /* Retain the last usable catalog. */ }
         }
     }
 

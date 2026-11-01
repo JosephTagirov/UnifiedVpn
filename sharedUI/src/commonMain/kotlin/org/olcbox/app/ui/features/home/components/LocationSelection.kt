@@ -57,7 +57,7 @@ import org.olcbox.app.ui.features.locations.reorderGroupKey
 @Composable
 fun LocationSelectorScreen(
     modifier: Modifier = Modifier,
-    showAddOlcRtcButton: Boolean = true,
+    showAddOlcRtcButton: Boolean = false,
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,

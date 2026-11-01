@@ -474,6 +474,7 @@ android {
         applicationId = "app.unifiedvpn.local"
         versionCode = olcboxVersionCode.get()
         versionName = olcboxVersion.get()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += androidAbiFilters
@@ -492,6 +493,9 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = providers.gradleProperty("uiQaApplicationIdSuffix").orNull
+        }
         debug {
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
@@ -556,6 +560,10 @@ val olcrtcAndroidAar = files(
 )
 
 dependencies {
+    androidTestImplementation(libs.compose.ui.test)
+    androidTestImplementation("androidx.test:runner:1.5.0")
+    androidTestImplementation("androidx.test:core:1.5.0")
+    androidTestImplementation("junit:junit:4.13.2")
     implementation(project(":sharedUI"))
     implementation(olcrtcAndroidAar)
     implementation(libs.androidx.activityCompose)

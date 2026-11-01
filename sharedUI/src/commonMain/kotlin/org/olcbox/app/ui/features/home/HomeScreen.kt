@@ -68,7 +68,7 @@ fun HomeScreen(
     onCopyConfigRequested: () -> Unit = { viewModel.onCopyFullConfigClicked() },
     onSaveLogsRequested: (onSaved: (String) -> Unit, onError: (String) -> Unit) -> Unit = { _, _ -> },
     showAppSettingsButton: Boolean = false,
-    showAddOlcRtcButton: Boolean = true,
+    showAddOlcRtcButton: Boolean = false,
     protocolSummary: String = "olcRTC, VLESS, Amnezia",
     canScanQr: Boolean = false,
     onSelfHostedRequested: (() -> Unit)? = null,

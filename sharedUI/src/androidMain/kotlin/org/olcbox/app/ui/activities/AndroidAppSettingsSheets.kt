@@ -1,5 +1,8 @@
 package org.olcbox.app.ui.activities
 
+import android.util.LruCache
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
@@ -168,12 +171,15 @@ internal fun AppSettingsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
+    var dismissing by remember { mutableStateOf(false) }
     var route by remember(initialRoute) { mutableStateOf(initialRoute.toRoute()) }
     var autoBypassPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var russianBypassPresetEnabled by remember { mutableStateOf(false) }
     var refreshingSubscriptionUrl by remember { mutableStateOf<String?>(null) }
 
     fun closeSheet(afterClose: () -> Unit = {}) {
+        if (dismissing) return
+        dismissing = true
         scope.launch {
             sheetState.hide()
             onDismiss()
@@ -199,7 +205,9 @@ internal fun AppSettingsSheet(
     }
 
     ModalBottomSheet(
-        onDismissRequest = { closeSheet() },
+        onDismissRequest = {
+            if (!dismissing) { dismissing = true; onDismiss() }
+        },
         sheetState = sheetState,
         dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
@@ -2719,27 +2727,30 @@ private fun EmptyAppsState(
     }
 }
 
+private object SplitTunnelIconCache {
+    val icons = LruCache<String, ImageBitmap>(64)
+    val decoding = Semaphore(2)
+}
+
 @Composable
 private fun rememberAppIcon(packageName: String): ImageBitmap? {
     val context = LocalContext.current.applicationContext
-    val iconState = produceState<ImageBitmap?>(initialValue = null, packageName, context) {
-        value = withContext(Dispatchers.Default) {
-            runCatching {
-                context.packageManager
-                    .getApplicationIcon(packageName)
-                    .toImageBitmap(sizePx = 96)
-            }.getOrNull()
+    val iconState = produceState(SplitTunnelIconCache.icons.get(packageName), packageName, context) {
+        value = withContext(Dispatchers.IO) {
+            SplitTunnelIconCache.decoding.withPermit {
+                SplitTunnelIconCache.icons.get(packageName) ?: runCatching {
+                    context.packageManager.getApplicationIcon(packageName).mutate().toImageBitmap(96)
+                }.getOrNull()?.also { SplitTunnelIconCache.icons.put(packageName, it) }
+            }
         }
     }
     return iconState.value
 }
 
 private fun Drawable.toImageBitmap(sizePx: Int): ImageBitmap {
-    val width = intrinsicWidth.takeIf { it > 0 } ?: sizePx
-    val height = intrinsicHeight.takeIf { it > 0 } ?: sizePx
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-    setBounds(0, 0, canvas.width, canvas.height)
+    setBounds(0, 0, sizePx, sizePx)
     draw(canvas)
     return bitmap.asImageBitmap()
 }
