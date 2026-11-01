@@ -362,6 +362,8 @@ private const val PROFILE_DRAG_LONG_PRESS_TIMEOUT_MS = 200L
 internal val PROFILE_ROW_HEIGHT = 84.dp
 internal fun profileBadge(location: LocationItem): String = when {
     location.profile.isOlcRtc() && location.config?.bypassProvider == "vkcalls" -> "VK"
+    location.profile.isOlcRtc() && location.config?.bypassProvider == "salutejazz" -> "SJ"
+    location.profile.isOlcRtc() && location.config?.bypassProvider == "mtslink" -> "MTS"
     location.profile.isOlcRtc() -> "RTC"
     location.profile.isOpenFlux() -> "OF"
     location.profile.normalizedType == "vless" -> "V"

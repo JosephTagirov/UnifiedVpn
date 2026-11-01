@@ -19,4 +19,9 @@ class ClientAccessTest {
  @Test fun vkBadgeUsesProviderRatherThanInternalTransportName(){
   assertEquals("VK",profileBadge(LocationItem("x","VK",config=LocationConfig(bypassProvider="vkcalls"))))
  }
+ @Test fun newCarriersHaveDistinctBadges() {
+  assertEquals("SJ",profileBadge(LocationItem("j","Jazz",config=LocationConfig(bypassProvider="salutejazz"))))
+  assertEquals("MTS",profileBadge(LocationItem("m","MTS",config=LocationConfig(bypassProvider="mtslink"))))
+ }
+
 }

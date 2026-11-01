@@ -156,12 +156,14 @@ class DesktopVpnManager private constructor(
     ): Long? {
         val connected = connectedLatencySession?.takeIf { _status.value is VpnStatus.Connected && it.matches(profile,locationConfig) }
         if (connected != null) return ProfileLatency.connected(connected,{ connectedLatencySession })
-        if (profile.isOlcRtc() && !locationConfig.isVkCalls()) return OlcRtcConnectionChecker.ping(locationConfig,locationsRepository.getDeviceIdentity())
+        if (profile.isOlcRtc() && !locationConfig.usesModernRtcEngine()) return OlcRtcConnectionChecker.ping(locationConfig,locationsRepository.getDeviceIdentity())
         ExternalAwgGuard.requireNotConnected(profile)
         return DesktopProfileLatency.ping(locationsRepository,locationConfig,profile)
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
+        if (locationConfig.usesModernRtcEngine()) return DesktopProfileLatency.ping(
+            locationsRepository, locationConfig, org.olcbox.app.data.model.LocationEntry.from("rtc-check", locationConfig).profile)
         return OlcRtcConnectionChecker.check(
             locationConfig = locationConfig,
             deviceId = locationsRepository.getDeviceIdentity()
@@ -527,7 +529,7 @@ class DesktopVpnManager private constructor(
                 socksPort = socksSettings.port,
                 requestGeneration = requestGeneration
             )
-            if (location.isVkCalls()) {
+            if (location.usesModernRtcEngine()) {
                 check(VkCallsRuntimeConfig.probeSocks(socksSettings.port, socksSettings.username, socksSettings.password)) {
                     "VK Calls SOCKS authentication failed"
                 }
@@ -552,7 +554,7 @@ class DesktopVpnManager private constructor(
         logOutput: Boolean,
         privileged: Boolean
     ): Process {
-        val binaries = if (location.isVkCalls()) listOf(DesktopNativeAssets.resolveVkCallsBinary())
+        val binaries = if (location.usesModernRtcEngine()) listOf(DesktopNativeAssets.resolveVkCallsBinary())
             else DesktopNativeAssets.resolveOlcRtcBinaryCandidates()
         val dnsServer = normalizeOlcRtcDnsEndpoint(
             location.dnsServer.ifBlank { DesktopDnsResolver.current() }
@@ -691,7 +693,7 @@ class DesktopVpnManager private constructor(
             dnsServer = dnsServer,
             dataDir = dataDir
         )
-        val configPath = if (config.isVkCalls()) {
+        val configPath = if (config.usesModernRtcEngine()) {
             require(socksSettings.host == "127.0.0.1") { "VK Calls requires loopback SOCKS" }
             writeEngineClientConfig("vkcalls", VkCallsRuntimeConfig.build(
                 config, socksSettings.port, socksSettings.username, socksSettings.password, dnsServer
@@ -714,7 +716,7 @@ class DesktopVpnManager private constructor(
 
         processBuilder.environment()["NO_PROXY"] = "127.0.0.1,localhost"
         processBuilder.environment()["no_proxy"] = "127.0.0.1,localhost"
-        if (config.isVkCalls()) {
+        if (config.usesModernRtcEngine()) {
             listOf("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
                 .forEach { processBuilder.environment().remove(it) }
             vkCallsBootstrap?.let { support ->
@@ -738,11 +740,11 @@ class DesktopVpnManager private constructor(
                     for (line in lines) {
                         if (!isActive) break
 
-                        val diagnosticLine = if (config.isVkCalls()) VkCallsRuntimeConfig.sanitizedOutput(
+                        val diagnosticLine = if (config.usesModernRtcEngine()) VkCallsRuntimeConfig.sanitizedOutput(
                             vkCallsBootstrap?.sanitize(line) ?: line, config, socksSettings.username, socksSettings.password
                         ) else line
                         if (logOutput) {
-                            val safeLine = if (config.isVkCalls()) diagnosticLine
+                            val safeLine = if (config.usesModernRtcEngine()) diagnosticLine
                                 else sanitizeOlcRtcDiagnosticOutput(line, config.id)
                             val message = "rtc: $safeLine"
                             addLog(message)

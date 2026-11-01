@@ -37,7 +37,9 @@ internal fun profileRequiresTunSocksBridge(profileType: String): Boolean = when 
     VpnProfileConfig.TYPE_OLCRTC,
     VpnProfileConfig.TYPE_VLESS,
     VpnProfileConfig.TYPE_OPENFLUX -> true
-    VkCallsRuntimeConfig.ENGINE_TYPE -> true
+    VkCallsRuntimeConfig.ENGINE_TYPE,
+    LocationConfig.PROVIDER_SALUTE_JAZZ,
+    LocationConfig.PROVIDER_MTS_LINK -> true
     else -> false
 }
 
@@ -52,7 +54,7 @@ internal fun createSocksBackedVpnEngine(
     location: LocationConfig? = null
 ): SocksBackedVpnEngine {
     val normalized = profile.normalized()
-    if (normalized.isOlcRtc() && location?.isVkCalls() == true) {
+    if (normalized.isOlcRtc() && location?.usesModernRtcEngine() == true) {
         return createVkCallsVpnEngine(context, location, defaultSocksPort, username, password, log)
     }
     val localSocksPort = existingProfileSocksPort(normalized)

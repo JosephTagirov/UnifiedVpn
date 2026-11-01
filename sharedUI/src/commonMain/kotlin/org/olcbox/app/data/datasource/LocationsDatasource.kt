@@ -973,9 +973,10 @@ class LocationsRepositoryImpl(
         // The selected-set envelope is additive and deliberately distinct from backups.
         val decodedSelection = text.tryDecodeBase64Utf8()?.trim()?.takeIf { it.startsWith("{") }
         val selectedRoot = runCatching { json.parseToJsonElement(decodedSelection ?: text).jsonObject }.getOrNull()
-        if (selectedRoot?.string("format") == "unifiedvpn-selection-v1") {
+        if (selectedRoot?.string("format")?.startsWith("unifiedvpn-selection-") == true) {
+            if (selectedRoot.string("format") !in setOf("unifiedvpn-selection-v1", "unifiedvpn-selection-v2")) return null
             val profiles = selectedRoot["profiles"]?.let { runCatching { it.jsonArray }.getOrNull() } ?: return null
-            if (profiles.isEmpty() || profiles.size > 4) return null
+            if (profiles.isEmpty() || profiles.size > 6) return null
             val selected = parseBundle(JsonObject(mapOf("version" to JsonPrimitive(5), "locations" to profiles)), subscriptionUrl, updateIntervalMs) ?: return null
             if (selected.locations.size != profiles.size) return null
             return ParsedImport(selected, ImportMode.Additive, preserveActiveSelection = true)

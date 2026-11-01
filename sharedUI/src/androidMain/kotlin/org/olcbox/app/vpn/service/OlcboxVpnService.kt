@@ -73,7 +73,7 @@ import org.olcbox.app.vpn.notificationProfileTargetId
 import org.olcbox.app.vpn.canRetryNotificationProfile
 import org.olcbox.app.vpn.notificationProfileRequestBusy
 import org.olcbox.app.vpn.notificationSafeProfileName
-import org.olcbox.app.vpn.selectOlcRtcDnsEndpoint
+import org.olcbox.app.vpn.androidRtcDnsEndpoint
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_HOST
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PASSWORD
@@ -715,7 +715,7 @@ class OlcboxVpnService : VpnService() {
                             splitTunnelProfiles[AndroidSplitTunnelProfile.fromProfileType(profile.normalizedType)]
                         )
                     }
-                    if (!profile.isOlcRtc() || active.location.isVkCalls()) {
+                    if (!profile.isOlcRtc() || active.location.usesModernRtcEngine()) {
                         startExternalProfile(
                             profile = profile,
                             requestedGeneration = requestedGeneration,
@@ -1366,7 +1366,7 @@ class OlcboxVpnService : VpnService() {
             upstream,
             "Bound ${profile.typeLabel()} transport to ${getNetName(upstream)}"
         )
-        activeProfileType = if (location?.isVkCalls() == true) VkCallsRuntimeConfig.ENGINE_TYPE else profile.normalizedType
+        activeProfileType = if (location?.usesModernRtcEngine() == true) VkCallsRuntimeConfig.engineType(location) else profile.normalizedType
 
         val existingSocksPort = existingProfileSocksPort(profile)
         val targetSocksPort = existingSocksPort ?: allocateLocalSocksPort()
@@ -2114,11 +2114,8 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun resolveOlcRtcDnsServer(configuredDnsServer: String): String {
-        val selectedDnsServer = selectOlcRtcDnsEndpoint(
-            configuredValue = configuredDnsServer,
-            fallbackValue = DEFAULT_OLCRTC_DNS_SERVER
-        )
-        val source = if (configuredDnsServer.isBlank()) "default" else "configured"
+        val selectedDnsServer = androidRtcDnsEndpoint(this, configuredDnsServer)
+        val source = if (configuredDnsServer.isBlank()) "automatic network" else "configured"
         addLog("Using $source DNS server $selectedDnsServer for olcRTC signaling")
         return selectedDnsServer
     }
@@ -2833,6 +2830,8 @@ class OlcboxVpnService : VpnService() {
                 VpnProfileConfig.TYPE_AMNEZIA_WG -> "AmneziaWG"
                 VpnProfileConfig.TYPE_AMNEZIA_VPN -> "AmneziaVPN"
                 VkCallsRuntimeConfig.ENGINE_TYPE -> "VK Calls"
+                LocationConfig.PROVIDER_SALUTE_JAZZ -> "Салют Jazz"
+                LocationConfig.PROVIDER_MTS_LINK -> "МТС Линк"
                 else -> "VPN"
             }
         }

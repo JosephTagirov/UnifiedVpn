@@ -49,4 +49,20 @@ class SelectedBundleImportTest {
   assertTrue(repo.importTextDetailed(bad) is LocationImportResult.Failure)
   assertTrue(repo.getAllLocations().isEmpty())
  }
+ @Test fun modernSelectionKeepsDifferentRtcProvidersAndRefreshesWithoutDuplicates()=runTest {
+  val entries=listOf(
+   LocationEntry.from("jazz-id",LocationConfig("Jazz","code:password","a".repeat(64),"salutejazz")),
+   LocationEntry.from("mts-id",LocationConfig("MTS","https://my.mts-link.ru/j/123/456","b".repeat(64),"mtslink")),
+   LocationEntry.from("vk-id",LocationConfig("VK","https://vk.ru/call/join/test","c".repeat(64),"vkcalls")))
+  val body=Base64.encode(buildJsonObject { put("format","unifiedvpn-selection-v2");put("profiles",Json.encodeToJsonElement(entries)) }.toString().encodeToByteArray())
+  val client=HttpClient(MockEngine { respond(body,headers=headersOf(HttpHeaders.ContentType,"text/plain")) })
+  val repo=LocationsRepositoryImpl(Memory(),client,subscriptionHttpClientFactory={_,_->client})
+  val url="https://panel.meesharr.space/vpn-control/bundle/"+"q".repeat(43)
+  repeat(2) {
+   assertTrue(repo.importTextDetailed(url) is LocationImportResult.Success)
+   assertEquals(3,repo.getAllLocations().size)
+   assertEquals(setOf("salutejazz","mtslink","vkcalls"),repo.getAllLocations().map { it.location.bypassProvider }.toSet())
+  }
+ }
+
 }

@@ -327,7 +327,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     ): Long? {
         val connected = OlcboxVpnState.connectedLatencySession()?.takeIf { it.matches(profile,locationConfig) }
         if (connected != null) return ProfileLatency.connected(connected,OlcboxVpnState::connectedLatencySession)
-        return if (profile.isOlcRtc() && !locationConfig.isVkCalls()) {
+        return if (profile.isOlcRtc() && !locationConfig.usesModernRtcEngine()) {
             OlcRtcConnectionChecker.ping(
                 locationConfig = locationConfig,
                 deviceId = deviceIdentityProvider.hwid()
@@ -339,6 +339,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
+        if (locationConfig.usesModernRtcEngine()) return AndroidProfileLatency.ping(
+            appContext, locationConfig, org.olcbox.app.data.model.LocationEntry.from("rtc-check", locationConfig).profile)
         return OlcRtcConnectionChecker.check(
             locationConfig = locationConfig,
             deviceId = deviceIdentityProvider.hwid()
