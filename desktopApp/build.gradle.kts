@@ -523,9 +523,9 @@ val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
     providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026103102")
 )
 val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
-val expectedOpenFluxSessionUpstream = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
+val expectedOpenFluxSessionUpstream = "f492a1a33b7581ad8f88118f97e0b866adda3cdc"
 val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
-val expectedOpenFluxSessionVersion = "unified-openflux-session 2 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 3 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 val singBoxAwgRepoDir = providers.environmentVariable("SING_BOX_AWG_REPO")
     .map { rootProject.file(it) }
     .orElse(rootProject.layout.projectDirectory.dir(".downloads/sing-box-awg/source").asFile)
@@ -962,11 +962,11 @@ if (currentBuildOs.isWindows) {
         from(binary)
         into(generatedNativeResources.map { it.dir("native") })
         inputs.file(manifestFile)
-        inputs.property("revision", "403edd409011dd371796260196ecd17630df0fdd")
+        inputs.property("revision", "5b1e6172a9f620d477624c6575c392e70449d333")
         outputs.file(generatedNativeResources.map { it.file("native/$name") })
         doFirst {
             val manifest = JsonSlurper().parse(manifestFile.asFile) as Map<*, *>
-            check(manifest["revision"] == "403edd409011dd371796260196ecd17630df0fdd") { "VK Calls source revision mismatch" }
+            check(manifest["revision"] == "5b1e6172a9f620d477624c6575c392e70449d333") { "VK Calls source revision mismatch" }
             val hashes = manifest["files"] as Map<*, *>
             val sha = MessageDigest.getInstance("SHA-256").digest(binary.asFile.readBytes()).joinToString("") { "%02x".format(it) }
             check(hashes[name] == sha) { "VK Calls Windows artifact mismatch" }

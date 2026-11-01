@@ -38,9 +38,9 @@ val olcrtcAndroidAar = layout.buildDirectory.file("generated/olcrtc/olcrtc.aar")
 val olcrtcAndroidAarFile = olcrtcAndroidAar.get().asFile
 val olcrtcAndroidBindDir = rootProject.file("tools/olcrtc-android-bind")
 val olcrtcAndroidModule = "github.com/openlibrecommunity/olcrtc"
-val olcrtcAndroidModuleVersion = "v0.0.2-0.20260827214920-d7a00da5242f"
-val olcrtcAndroidModuleCommit = "d7a00da5242f72a48b505ffc4b6aa8246376bf25"
-val olcrtcAndroidModuleSum = "h1:UDWaXHI5nHTo+O1L21T10U3JzB9noORcn2AvUGxPLwQ="
+val olcrtcAndroidModuleVersion = "v0.13.0"
+val olcrtcAndroidModuleCommit = "5b1e6172a9f620d477624c6575c392e70449d333"
+val olcrtcAndroidModuleSum = "h1:+dCVX0zYfvrPp32o20sDjWIW3qcjepXZ5lwp0KjE1Ko="
 val olcrtcTlsModule = "unified-vpn.local/olcrtc-tls"
 val olcrtcTlsVersion = "v0.0.1"
 val olcrtcTlsSum = "h1:Xm4m6HHAoZt7U2UcePX8Xbo9I2NV6lfkPIinRjqDBkM="
@@ -204,16 +204,24 @@ val buildOlcrtcAndroidAar by tasks.registering(Exec::class) {
         environment("GONOSUMDB", noSumDb)
 
         val manifest = JsonSlurper().parseText(go("mod", "edit", "-json")) as Map<*, *>
-        check((manifest["Replace"] as? List<*>).isNullOrEmpty()) {
-            "The Android bind module must not contain local or version replacements."
-        }
+        val replacements = (manifest["Replace"] as? List<*>).orEmpty()
+        check(replacements.size == 1) { "Only the audited remote olcRTC fork may replace a module" }
+        val replacement = replacements.single() as Map<*, *>
+        val oldModule = replacement["Old"] as Map<*, *>
+        val newModule = replacement["New"] as Map<*, *>
+        check(oldModule["Path"] == olcrtcAndroidModule &&
+            newModule["Path"] == "github.com/ghostlane-project/olcrtc" &&
+            newModule["Version"] == olcrtcAndroidModuleVersion) { "Unexpected or local olcRTC replacement" }
         val module = JsonSlurper().parseText(
             go("list", "-mod=readonly", "-m", "-json", olcrtcAndroidModule)
         ) as Map<*, *>
-        check(module["Version"] == olcrtcAndroidModuleVersion && module["Replace"] == null) {
+        val selectedFork = module["Replace"] as? Map<*, *>
+        check(module["Version"] == olcrtcAndroidModuleVersion &&
+            selectedFork?.get("Path") == "github.com/ghostlane-project/olcrtc" &&
+            selectedFork?.get("Version") == olcrtcAndroidModuleVersion) {
             "The Android bind module does not select the pinned olcRTC version."
         }
-        check(module["Sum"] == olcrtcAndroidModuleSum) {
+        check(selectedFork?.get("Sum") == olcrtcAndroidModuleSum) {
             "The Android olcRTC module checksum does not match the verified pin."
         }
         val tlsModule = JsonSlurper().parseText(

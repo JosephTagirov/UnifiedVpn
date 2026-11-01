@@ -10,7 +10,7 @@ import java.net.Socket
 import java.net.InetSocketAddress
 
 internal object VkCallsRuntimeConfig {
-    const val CORE_REVISION = "403edd409011dd371796260196ecd17630df0fdd"
+    const val CORE_REVISION = "5b1e6172a9f620d477624c6575c392e70449d333"
     const val ENGINE_TYPE = "vkcalls"
     const val DTLS_PROFILE = "chrome-linux-138-compat-v1"
     const val READY_MARKER = "SOCKS5 server listening"

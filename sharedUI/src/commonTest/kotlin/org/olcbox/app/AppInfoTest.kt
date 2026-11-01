@@ -21,7 +21,7 @@ class AppInfoTest {
                 "awg/${info.awgCoreSha.take(12)} xray/${info.xrayVersion}/${info.xraySha.take(12)} " +
                 "openflux/${info.openFluxSha.take(12)} " +
                 "openflux-session/${OpenFluxSessionProfileConfig.CORE_REVISION.take(12)} " +
-                "vkcalls/403edd409011",
+                "vkcalls/5b1e6172a9f6",
             CurrentAppInfo.diagnosticVersion
         )
     }

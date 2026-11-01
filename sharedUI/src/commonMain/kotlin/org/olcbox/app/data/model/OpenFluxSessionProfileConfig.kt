@@ -67,8 +67,8 @@ data class OpenFluxSessionProfileConfig(
         const val TRANSPORT_MAILRU = "mailru"
         const val TRANSPORT_DIRECT = "direct"
         const val LINK_PREFIX = "openflux://v1/"
-        const val CORE_VERSION = "0.5.0"
-        const val CORE_REVISION = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
+        const val CORE_VERSION = "0.17.1"
+        const val CORE_REVISION = "f492a1a33b7581ad8f88118f97e0b866adda3cdc"
         private val SECRET_PATTERN = Regex("[0-9a-fA-F]{64}")
         private val json = Json
 

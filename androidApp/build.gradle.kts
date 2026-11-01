@@ -298,7 +298,7 @@ val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
 val vkCallsArtifactDirectory = rootProject.layout.projectDirectory.dir(
     providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts")
 )
-val vkCallsRevision = "403edd409011dd371796260196ecd17630df0fdd"
+val vkCallsRevision = "5b1e6172a9f620d477624c6575c392e70449d333"
 val stageVkCallsAndroidLibraries = tasks.register<StageOpenFluxAndroidLibrariesTask>("stageVkCallsAndroidLibraries") {
     val manifestFile = vkCallsArtifactDirectory.file("manifest.json")
     inputs.file(manifestFile)
@@ -333,9 +333,9 @@ val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
     providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026103102")
 )
 val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
-val expectedOpenFluxSessionUpstream = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
+val expectedOpenFluxSessionUpstream = "f492a1a33b7581ad8f88118f97e0b866adda3cdc"
 val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
-val expectedOpenFluxSessionVersion = "unified-openflux-session 2 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 3 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 
 fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFile: File, abi: String, session: Boolean = false) {
     check(binary.isFile && binary.length() > 0L && !Files.isSymbolicLink(binary.toPath())) {

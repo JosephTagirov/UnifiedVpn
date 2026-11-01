@@ -241,6 +241,21 @@ class DesktopXrayConfigTest {
         val publicKey = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { 1 })
         val reality = "security=reality&sni=reality.example.com&fp=chrome&pbk=$publicKey&sid=0123456789abcdef"
         val configPath = Files.createTempFile("unified-vpn-xray-synthetic-test-", ".json")
+        val diagnosticPath = Files.createTempFile("unified-vpn-xray-synthetic-output-", ".txt")
+        fun validate(query: String, endpoint: String): Pair<Int, String> {
+            Files.writeString(configPath, DesktopXrayConfig.build(
+                profile(query), DesktopSocksProxySettings(port = 10920, username = "test", password = "test"),
+                endpointAddress = endpoint
+            ))
+            val process = ProcessBuilder(xrayPath, "run", "-test", "-config", configPath.toString())
+                .redirectErrorStream(true).redirectOutput(diagnosticPath.toFile()).start()
+            try {
+                assertTrue(process.waitFor(20, TimeUnit.SECONDS), "Xray synthetic config validation timed out")
+                return process.exitValue() to Files.readString(diagnosticPath)
+            } finally {
+                if (process.isAlive) process.destroyForcibly()
+            }
+        }
         try {
             for (query in listOf(
                 "", "type=tcp&security=tls", "type=raw", "type=ws&security=tls&path=%2Fws",
@@ -250,21 +265,19 @@ class DesktopXrayConfigTest {
                 "type=splithttp&path=%2Fsplit", "type=tcp&$reality&flow=xtls-rprx-vision",
                 "type=grpc&$reality&serviceName=test"
             )) {
-                Files.writeString(configPath, DesktopXrayConfig.build(
-                    profile(query), DesktopSocksProxySettings(port = 10920, username = "test", password = "test"),
-                    endpointAddress = "203.0.113.42"
-                ))
-                val process = ProcessBuilder(xrayPath, "run", "-test", "-config", configPath.toString())
-                    .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
-                try {
-                    assertTrue(process.waitFor(20, TimeUnit.SECONDS), "Xray synthetic config validation timed out")
-                    assertEquals(0, process.exitValue(), "Xray rejected synthetic config: $query")
-                } finally {
-                    if (process.isAlive) process.destroyForcibly()
+                val encrypted = query.contains("security=tls") || query.contains("security=reality")
+                // Xray 26.10.31 permits unencrypted VLESS only on private endpoints.
+                val (code, output) = validate(query, if (encrypted) "203.0.113.42" else "10.0.0.42")
+                assertEquals(0, code, "Xray rejected synthetic config: $query: $output")
+                if (!encrypted) {
+                    val (publicCode, publicOutput) = validate(query, "203.0.113.42")
+                    assertTrue(publicCode != 0, "Xray must reject public VLESS without encryption")
+                    assertTrue(publicOutput.contains("without TLS or other encryption is prohibited"))
                 }
             }
         } finally {
             Files.deleteIfExists(configPath)
+            Files.deleteIfExists(diagnosticPath)
         }
     }
 

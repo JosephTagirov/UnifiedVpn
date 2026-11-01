@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const versionText = "unified-openflux-session 2 upstream=7336e1b9d940fc09d00bbf545d15b9437487aa10 protocol=upstream-openflux-session"
+const versionText = "unified-openflux-session 3 upstream=f492a1a33b7581ad8f88118f97e0b866adda3cdc protocol=upstream-openflux-session"
 
 type configuration struct {
 	Version                 int    `json:"version"`

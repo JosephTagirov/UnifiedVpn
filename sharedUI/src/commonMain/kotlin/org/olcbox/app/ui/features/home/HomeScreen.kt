@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.width
 import org.olcbox.app.ui.components.HomeScrollIndicator
 import org.olcbox.app.ui.components.ownerCabinetEnabled
 import org.olcbox.app.ui.components.safePortalUrl
+import androidx.compose.runtime.SideEffect
+import org.olcbox.app.data.logging.SupportLogs
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -91,6 +93,10 @@ fun HomeScreen(
     val locations = locationViewModel.locations.toList()
     val hasSubscriptions = locations.any { !it.subscriptionUrl.isNullOrBlank() }
 
+    SideEffect {
+        val selected = locations.firstOrNull { it.storageId==locationViewModel.selectedLocationId }
+        SupportLogs.selectTarget(selected?.subscriptionUrl ?: locations.firstOrNull { it.subscriptionUrl?.startsWith("https://panel.meesharr.space/vpn-control/")==true }?.subscriptionUrl)
+    }
     val uriHandler = LocalUriHandler.current
     val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading
 
