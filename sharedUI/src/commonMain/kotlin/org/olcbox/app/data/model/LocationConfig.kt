@@ -338,6 +338,10 @@ data class LocationEndpointConfig(
 
 @Serializable
 data class SubscriptionMetadata(
+    @SerialName("access_expires")
+    val accessExpires: Long? = null,
+    @SerialName("client_portal_url")
+    val clientPortalUrl: String? = null,
     val name: String? = null,
     val update: String? = null,
     val refresh: String? = null,
@@ -364,6 +368,8 @@ data class SubscriptionMetadata(
         val migratedInterval = updateIntervalMs
             ?: updateIntervalHours?.toLong()?.times(HOUR_MS)
         return copy(
+            accessExpires = accessExpires?.takeIf { it >= 0 },
+            clientPortalUrl = clientPortalUrl.cleanMetadataValue(),
             name = name.cleanMetadataValue(),
             update = update.cleanMetadataValue(),
             refresh = refresh.cleanMetadataValue(),
@@ -406,7 +412,8 @@ data class SubscriptionMetadata(
     }
 
     fun isEmpty(): Boolean {
-        return name.isNullOrBlank() &&
+        return accessExpires == null && clientPortalUrl.isNullOrBlank() &&
+                name.isNullOrBlank() &&
                 update.isNullOrBlank() &&
                 refresh.isNullOrBlank() &&
                 color.isNullOrBlank() &&

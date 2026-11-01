@@ -82,7 +82,7 @@ class OpenFluxProfileConfigTest {
         assertEquals(config, OpenFluxProfileConfig.parse(raw.toUri()))
         assertEquals("yandex", CONFIG.transport)
         assertEquals(listOf("yandex", "vyandex"), OpenFluxProfileConfig.classicTransports)
-        assertEquals(listOf("yandex", "vyandex", "telemost", "mailru"), OpenFluxProfileConfig.supportedTransports)
+        assertEquals(listOf("yandex", "vyandex", "telemost", "mailru", "direct"), OpenFluxProfileConfig.supportedTransports)
     }
 
     @Test

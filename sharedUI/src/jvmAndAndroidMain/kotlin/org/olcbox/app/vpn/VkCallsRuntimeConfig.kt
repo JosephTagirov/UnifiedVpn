@@ -21,9 +21,11 @@ internal object VkCallsRuntimeConfig {
             socket.soTimeout = 500
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
-            output.write(byteArrayOf(5, 1, 2))
+            val authenticated = user.isNotBlank()
+            output.write(byteArrayOf(5, 1, if (authenticated) 2 else 0))
             output.flush()
-            if (input.read() != 5 || input.read() != 2) return@use false
+            if (input.read() != 5 || input.read() != (if (authenticated) 2 else 0)) return@use false
+            if (!authenticated) return@use password.isBlank()
             val username = user.toByteArray(Charsets.UTF_8)
             val pass = password.toByteArray(Charsets.UTF_8)
             if (username.size !in 1..255 || pass.size !in 1..255) return@use false
@@ -49,7 +51,7 @@ internal object VkCallsRuntimeConfig {
         require(config.isVkCalls() && validRoom(config.id)) { "Use an HTTPS VK Calls join link" }
         require(config.hasValidCryptoKey()) { "VK Calls key must be 64 hexadecimal characters" }
         require(port in 1..65535) { "Invalid VK Calls SOCKS port" }
-        require(user.isNotBlank() && password.isNotBlank()) { "VK Calls requires SOCKS credentials" }
+        require(user.isBlank() == password.isBlank()) { "VK Calls SOCKS authentication requires both username and password" }
         require(user.toByteArray().size <= 255 && password.toByteArray().size <= 255) {
             "VK Calls SOCKS credentials are too long"
         }

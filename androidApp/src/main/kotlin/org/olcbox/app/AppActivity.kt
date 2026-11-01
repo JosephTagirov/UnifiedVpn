@@ -1,6 +1,10 @@
 package org.olcbox.app
 
 import android.Manifest
+import android.content.Intent
+import android.widget.Toast
+import androidx.compose.runtime.LaunchedEffect
+import org.olcbox.app.data.share.SelectionImportLink
 import android.content.Context
 import android.os.Build
 import android.os.Bundle
@@ -31,6 +35,12 @@ import org.olcbox.app.update.AppUpdateService
 import org.olcbox.app.vpn.AndroidVpnManager
 
 class AppActivity : ComponentActivity() {
+    private var importLink by mutableStateOf<String?>(null)
+    override fun onNewIntent(intent:Intent){
+        super.onNewIntent(intent);setIntent(intent)
+        SelectionImportLink.parse(intent.dataString)?.let { importLink=it }
+    }
+
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -40,6 +50,10 @@ class AppActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val ownerPreferences=getSharedPreferences("owner-edition",Context.MODE_PRIVATE)
+        if(BuildConfig.OWNER_EDITION)ownerPreferences.edit().putBoolean("enabled",true).apply()
+        System.setProperty("unifiedvpn.ownerCabinet",ownerPreferences.getBoolean("enabled",false).toString())
+        importLink=SelectionImportLink.parse(intent?.dataString)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
 
         // Request notification permission for Android 13+
@@ -76,6 +90,14 @@ class AppActivity : ComponentActivity() {
             var appearanceSettings by remember { mutableStateOf(initialAppearanceSettings) }
             val scope = rememberCoroutineScope()
 
+            LaunchedEffect(importLink) {
+                val source=importLink ?: return@LaunchedEffect
+                importLink=null
+                viewModel.onImportFullConfig(source,onComplete={
+                    locationViewModel.loadLocations { }
+                    Toast.makeText(this@AppActivity,"Профили добавлены",Toast.LENGTH_LONG).show()
+                },onError={Toast.makeText(this@AppActivity,it,Toast.LENGTH_LONG).show()})
+            }
             SyncAppSystemBars(appearanceSettings.theme)
 
             AppTheme(

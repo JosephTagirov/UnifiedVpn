@@ -30,6 +30,7 @@ import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
+import org.olcbox.app.vpn.desktop.VkCallsBootstrap
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopDnsResolver
 import org.olcbox.app.vpn.desktop.DesktopOpenFluxConfig
@@ -57,7 +58,8 @@ import java.util.concurrent.TimeUnit
 class DesktopVpnManager private constructor(
     private val locationsRepository: LocationsRepository,
     private val proxyController: DesktopProxyController = DesktopProxyController.current(),
-    private val pacServer: PacServer = PacServer()
+    private val pacServer: PacServer = PacServer(),
+    private val probeOnly: Boolean = false
 ) : VpnManager {
 
     constructor(locationsRepository: LocationsRepository) : this(
@@ -66,6 +68,8 @@ class DesktopVpnManager private constructor(
         pacServer = PacServer()
     )
 
+
+    @Volatile private var connectedLatencySession: ProfileLatencySession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
 
@@ -88,6 +92,8 @@ class DesktopVpnManager private constructor(
     private var tunProcessWatchJob: Job? = null
     private var process: Process? = null
     private var sessionControlProcess: Process? = null
+    private var vkCallsBootstrap: VkCallsBootstrap? = null
+    private var bootstrapWatchJob: Job? = null
     private var tunProcess: Process? = null
     private var olcRtcConfigPath: Path? = null
     private var activeDesktopMode: DesktopMode? = null
@@ -98,6 +104,15 @@ class DesktopVpnManager private constructor(
     private var generation = 0L
     private val linuxTunController = LinuxTunController(::addLog)
     private val windowsTunController = WindowsTunController(::addLog)
+
+    init {
+        scope.launch {
+            mutex.withLock {
+                runCatching { if (!probeOnly) proxyController.recover() }
+                    .onFailure { addLog("Proxy recovery failed: ${it.message}") }
+            }
+        }
+    }
 
     override fun needsPermission(): Boolean = false
 
@@ -139,18 +154,11 @@ class DesktopVpnManager private constructor(
         locationConfig: LocationConfig,
         profile: VpnProfileConfig
     ): Long? {
-        return if (profile.isOpenFlux()) {
-            OpenFluxTunnelPing.ping(profile, connectedTunnel = {
-                openFluxPingTunnel.takeIf { _status.value is VpnStatus.Connected }
-            })
-        } else if (profile.isOlcRtc()) {
-            OlcRtcConnectionChecker.ping(
-                locationConfig = locationConfig,
-                deviceId = locationsRepository.getDeviceIdentity()
-            )
-        } else {
-            VpnProfileReachability.ping(profile)
-        }
+        val connected = connectedLatencySession?.takeIf { _status.value is VpnStatus.Connected && it.matches(profile,locationConfig) }
+        if (connected != null) return ProfileLatency.connected(connected,{ connectedLatencySession })
+        if (profile.isOlcRtc() && !locationConfig.isVkCalls()) return OlcRtcConnectionChecker.ping(locationConfig,locationsRepository.getDeviceIdentity())
+        ExternalAwgGuard.requireNotConnected(profile)
+        return DesktopProfileLatency.ping(locationsRepository,locationConfig,profile)
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
@@ -216,6 +224,7 @@ class DesktopVpnManager private constructor(
     }
 
     private suspend fun startDesktopMode(requestGeneration: Long, isRestart: Boolean) {
+        connectedLatencySession = null
         openFluxPingTunnel = null
         setStatus(if (isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
 
@@ -273,7 +282,23 @@ class DesktopVpnManager private constructor(
                 mode = socksSettings.routingModeFor(profile.usesProxyRoutingSettings()),
                 usesProxySettings = profile.usesProxyRoutingSettings()
             )
+            check(!probeOnly || desktopMode == DesktopMode.LocalSocks) { "Latency probe requires loopback mode" }
             activeDesktopMode = desktopMode
+
+            if (DesktopPaths.os == DesktopOs.Windows && profile.isOlcRtc() && location.isVkCalls()) {
+                VkCallsBootstrap.findProfile(active.subscriptionUrl,locationsRepository.getAllLocations())?.let { supportProfile ->
+                    addLog("VK Calls: preparing secure support channel")
+                    vkCallsBootstrap = try {
+                        VkCallsBootstrap.start(supportProfile,setOf(selectedSocksPort,PacServer.PAC_PORT))
+                    } catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) {
+                        addLog("VK Calls support is unavailable; trying direct signaling")
+                        null
+                    }
+                    vkCallsBootstrap?.let { addLog("VK Calls support SOCKS: 127.0.0.1:${it.port}") }
+                    if (requestGeneration != generation) throw CancellationException("Desktop start superseded")
+                }
+            }
 
             // Pin the exact endpoint before adding capture routes. Resolving it
             // again inside the engine could select another address and loop.
@@ -366,6 +391,8 @@ class DesktopVpnManager private constructor(
                     password = socksSettings.password
                 )
             )
+            connectedLatencySession = ProfileLatencySession(profile,location,
+                SubscriptionFetchProxy(socksSettings.host,socksSettings.port,socksSettings.username,socksSettings.password))
             setStatus(VpnStatus.Connected)
             addLog(
                 when (desktopMode) {
@@ -559,7 +586,10 @@ class DesktopVpnManager private constructor(
     }
 
     private suspend fun stopDesktopMode(finalStatus: Boolean) {
+        connectedLatencySession = null
         openFluxPingTunnel = null
+        vkCallsBootstrap?.close()
+        vkCallsBootstrap = null
         if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null) {
             cancelProcessJobs()
             activeSocksProxySettings = null
@@ -623,6 +653,8 @@ class DesktopVpnManager private constructor(
     }
 
     private fun cancelProcessJobs() {
+        bootstrapWatchJob?.cancel()
+        bootstrapWatchJob = null
         processWatchJob?.cancel()
         processWatchJob = null
 
@@ -685,6 +717,10 @@ class DesktopVpnManager private constructor(
         if (config.isVkCalls()) {
             listOf("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
                 .forEach { processBuilder.environment().remove(it) }
+            vkCallsBootstrap?.let { support ->
+                processBuilder.environment()["HTTPS_PROXY"] = support.proxyUrl
+                processBuilder.environment()["HTTP_PROXY"] = support.proxyUrl
+            }
         }
         val startedProcess = try {
             processBuilder.start()
@@ -703,7 +739,7 @@ class DesktopVpnManager private constructor(
                         if (!isActive) break
 
                         val diagnosticLine = if (config.isVkCalls()) VkCallsRuntimeConfig.sanitizedOutput(
-                            line, config, socksSettings.username, socksSettings.password
+                            vkCallsBootstrap?.sanitize(line) ?: line, config, socksSettings.username, socksSettings.password
                         ) else line
                         if (logOutput) {
                             val safeLine = if (config.isVkCalls()) diagnosticLine
@@ -957,6 +993,21 @@ class DesktopVpnManager private constructor(
     ) {
         startEngineExitWatcher(engineProcess, engineName, requestGeneration)
 
+        vkCallsBootstrap?.let { support ->
+            bootstrapWatchJob?.cancel()
+            bootstrapWatchJob = scope.launch {
+                val exitCode = waitForProcessExit(support.process) ?: return@launch
+                if (!isActive) return@launch
+                scope.launch {
+                    mutex.withLock {
+                        if (requestGeneration != generation || vkCallsBootstrap !== support) return@withLock
+                        handleUnexpectedProcessExit("VK Calls support channel stopped (code $exitCode)",
+                            "VK Calls support channel is unavailable",requestGeneration)
+                    }
+                }
+            }
+        }
+
         when (desktopMode) {
             DesktopMode.LinuxTun,
             DesktopMode.WindowsTun -> startTunExitWatcher(
@@ -1167,13 +1218,19 @@ class DesktopVpnManager private constructor(
     }
 
     private fun addLog(message: String) {
-        val sanitized = sanitizeDiagnosticLogLine(message)
+        val sanitized = org.olcbox.app.data.logging.LogPresentation.entry(message)
         _logs.update {
             (it + sanitized).takeLast(MAX_LOG_ENTRIES)
         }
     }
 
-    private companion object {
+    companion object {
+        internal fun latencyProbe(repository: LocationsRepository) = DesktopVpnManager(repository,
+            proxyController=object : DesktopProxyController {
+                override suspend fun enable(pacUrl: String) = error("Latency probe cannot change system proxy")
+                override suspend fun restore() = Unit
+            },probeOnly=true)
+
         const val MAX_LOG_ENTRIES = 5_000
         const val OLC_READY_TIMEOUT_MS = 25_000L
         const val OPENFLUX_READY_TIMEOUT_MS = 120_000L

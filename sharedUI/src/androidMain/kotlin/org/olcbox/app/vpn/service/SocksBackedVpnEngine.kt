@@ -324,6 +324,7 @@ private class SingBoxVlessEngine(
     override val isRunning: Boolean
         get() = process?.isAlive == true && canConnect(socksHost, socksPort)
 
+    private var runtimeConfig: File? = null
     private var process: Process? = null
     private var logThread: Thread? = null
     private var activeEngineName: String = "sing-box"
@@ -352,6 +353,7 @@ private class SingBoxVlessEngine(
         }
 
         stop()
+        runtimeConfig = configFile
         activeEngineName = engineName
         val command = if (useXray) {
             listOf(executable.absolutePath, "run", "-config", configFile.absolutePath)
@@ -376,8 +378,16 @@ private class SingBoxVlessEngine(
     }
 
     override fun stop() {
-        process?.destroy()
+        process?.let { running ->
+            running.destroy()
+            if (!running.waitFor(1500, TimeUnit.MILLISECONDS)) {
+                running.destroyForcibly()
+                running.waitFor(1000, TimeUnit.MILLISECONDS)
+            }
+        }
         process = null
+        runtimeConfig?.delete()
+        runtimeConfig = null
         logThread?.interrupt()
         logThread = null
     }
@@ -421,7 +431,7 @@ private class SingBoxVlessEngine(
             .put("encryption", outbound.encryption ?: "none")
         outbound.flow?.let { user.put("flow", it) }
         val streamSettings = JSONObject()
-            .put("network", "xhttp")
+            .put("network", if(outbound.transport == "ws") "ws" else "xhttp")
             .put("security", outbound.security ?: "none")
             .put(
                 "sockopt",
@@ -436,6 +446,13 @@ private class SingBoxVlessEngine(
                         outbound.mode?.let { settings.put("mode", it) }
                     }
             )
+
+        if (outbound.transport == "ws") {
+            streamSettings.remove("xhttpSettings")
+            streamSettings.put("wsSettings",JSONObject().put("path",outbound.path ?: "/").also { ws ->
+                outbound.hostHeader?.let { ws.put("headers",JSONObject().put("Host",it)) }
+            })
+        }
 
         when (outbound.security) {
             "reality" -> streamSettings.put(
@@ -534,6 +551,7 @@ private class SingBoxVlessEngine(
         if (outbound.security == "tls" || outbound.security == "reality") {
             val tls = JSONObject().put("enabled", true)
             outbound.sni?.let { tls.put("server_name", it) }
+            outbound.alpn?.takeIf { it.isNotEmpty() }?.let { tls.put("alpn", JSONArray(it)) }
             outbound.fingerprint?.let {
                 tls.put(
                     "utls",
@@ -651,6 +669,7 @@ private class SingBoxWireGuardEngine(
     override val isRunning: Boolean
         get() = process?.isAlive == true && canConnect(socksHost, socksPort)
 
+    private var runtimeConfig: File? = null
     private var process: Process? = null
     private var logThread: Thread? = null
 
@@ -674,6 +693,7 @@ private class SingBoxWireGuardEngine(
         }
 
         stop()
+        runtimeConfig = configFile
         process = ProcessBuilder(
             executable.absolutePath,
             "run",
@@ -692,8 +712,16 @@ private class SingBoxWireGuardEngine(
     }
 
     override fun stop() {
-        process?.destroy()
+        process?.let { running ->
+            running.destroy()
+            if (!running.waitFor(1500, TimeUnit.MILLISECONDS)) {
+                running.destroyForcibly()
+                running.waitFor(1000, TimeUnit.MILLISECONDS)
+            }
+        }
         process = null
+        runtimeConfig?.delete()
+        runtimeConfig = null
         logThread?.interrupt()
         logThread = null
     }
@@ -1314,7 +1342,7 @@ private const val SOCKS_READY_POLL_MS = 150L
 private const val ENGINE_STOP_TIMEOUT_MS = 1_500L
 private const val ENGINE_FORCE_STOP_TIMEOUT_MS = 1_000L
 private const val MAX_DECOMPRESSED_PROFILE_SIZE = 4 * 1024 * 1024
-private val XRAY_VLESS_TRANSPORTS = setOf("xhttp", "splithttp")
+private val XRAY_VLESS_TRANSPORTS = setOf("xhttp", "splithttp", "ws")
 private val XRAY_BOOTSTRAP_DNS_SERVERS = listOf("1.1.1.1", "8.8.8.8")
 private const val XRAY_BOOTSTRAP_DNS_STRATEGY = "UseIPv4"
 private const val PRIMARY_DNS = "\$PRIMARY_DNS"

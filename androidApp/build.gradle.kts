@@ -330,12 +330,12 @@ val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
 val expectedOpenFluxWrapper = 8
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
 val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026101102")
+    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026103102")
 )
 val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
 val expectedOpenFluxSessionUpstream = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
 val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
-val expectedOpenFluxSessionVersion = "unified-openflux-session 1 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 2 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 
 fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFile: File, abi: String, session: Boolean = false) {
     check(binary.isFile && binary.length() > 0L && !Files.isSymbolicLink(binary.toPath())) {
@@ -461,11 +461,13 @@ require(androidAbiFilters.isNotEmpty()) {
 }
 
 android {
+    buildFeatures { buildConfig = true }
     namespace = "org.olcbox.app"
     compileSdk = 37
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
+        buildConfigField("boolean", "OWNER_EDITION", providers.gradleProperty("ownerEdition").orElse("false").get())
         minSdk = 23
         targetSdk = 35
 

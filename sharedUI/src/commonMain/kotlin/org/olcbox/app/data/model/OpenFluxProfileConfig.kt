@@ -37,7 +37,7 @@ data class OpenFluxProfileConfig(
         return OpenFluxSessionProfileConfig(
             name = name, negotiate = true, codec = "batched", secret = config.encryptionKey,
             context = config.documentUrl,
-            transports = listOf(OpenFluxSessionTransport(type = config.transport, url = config.documentUrl, priority = 50))
+            transports = listOf(if (config.transport == TRANSPORT_DIRECT) OpenFluxSessionTransport(type = TRANSPORT_DIRECT, dial = config.documentUrl.removePrefix("tcp://"), priority = 50) else OpenFluxSessionTransport(type = config.transport, url = config.documentUrl, priority = 50))
         )
     }
 
@@ -112,10 +112,11 @@ data class OpenFluxProfileConfig(
         const val TRANSPORT_VYANDEX = "vyandex"
         const val TRANSPORT_TELEMOST = "telemost"
         const val TRANSPORT_MAILRU = "mailru"
+        const val TRANSPORT_DIRECT = "direct"
         const val CODEC_LEGACY = "legacy-lz4-v1"
         const val CODEC_BATCH = "batch-zstd-v2"
         const val CODEC_SESSION = "upstream-session-v1"
-        val sessionTransports: List<String> = listOf(TRANSPORT_TELEMOST, TRANSPORT_MAILRU)
+        val sessionTransports: List<String> = listOf(TRANSPORT_TELEMOST, TRANSPORT_MAILRU, TRANSPORT_DIRECT)
         val classicTransports: List<String> = listOf(TRANSPORT_YANDEX, TRANSPORT_VYANDEX)
         val supportedTransports: List<String> = classicTransports + sessionTransports
         val classicWireCodecs: List<String> = listOf(CODEC_LEGACY, CODEC_BATCH)
@@ -129,7 +130,7 @@ data class OpenFluxProfileConfig(
             if (value.startsWith(OpenFluxSessionProfileConfig.LINK_PREFIX)) {
                 val session = OpenFluxSessionProfileConfig.parseLink(value) ?: return null
                 return OpenFluxProfileConfig(
-                    documentUrl = session.transports.single().url, encryptionKey = session.secret,
+                    documentUrl = if (session.transports.single().type == TRANSPORT_DIRECT) session.context else session.transports.single().url, encryptionKey = session.secret,
                     version = 2, transport = session.transports.single().type, wireCodec = CODEC_SESSION
                 )
             }

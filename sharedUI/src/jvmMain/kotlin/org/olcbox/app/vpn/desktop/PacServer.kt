@@ -32,6 +32,9 @@ class PacServer(
         socksUsername: String = "",
         socksPassword: String = ""
     ) {
+        require(socksUsername.isBlank() && socksPassword.isBlank()) {
+            "Chrome system proxy does not support SOCKS authentication; use local SOCKS mode with credentials"
+        }
         updateSocksTarget(socksHost, socksPort, socksUsername, socksPassword)
         if (server != null) return
         executor = Executors.newSingleThreadExecutor { runnable ->
@@ -112,47 +115,43 @@ class PacServer(
             socksUsername: String = "",
             socksPassword: String = ""
         ): String {
+            require(socksUsername.isBlank() && socksPassword.isBlank()) {
+                "Chrome system proxy does not support SOCKS authentication. Use local SOCKS mode with credentials, or an unauthenticated loopback proxy."
+            }
             val target = socksProxyTarget(socksHost, socksPort, socksUsername, socksPassword)
             return """
-                function hostEqOrSub(host, domain) {
-  host = host.toLowerCase();
-  domain = domain.toLowerCase();
-  return host === domain || host.endsWith("." + domain);
+function hostEqOrSub(host, domain) {
+  return host === domain || host.slice(-(domain.length + 1)) === "." + domain;
 }
-
-function FindProxyForURL(url, host) {
-  host = host.toLowerCase();
-
-  // Локальные адреса всегда напрямую
-  if (isPlainHostName(host)) return "DIRECT";
-  if (host === "localhost" || host === "127.0.0.1" || host === "::1") return "DIRECT";
-  if (shExpMatch(host, "127.*")) return "DIRECT";
-  if (shExpMatch(host, "10.*")) return "DIRECT";
-  if (shExpMatch(host, "192.168.*")) return "DIRECT";
-  if (shExpMatch(host, "172.16.*") || shExpMatch(host, "172.17.*") || shExpMatch(host, "172.18.*") || shExpMatch(host, "172.19.*")) return "DIRECT";
-
-  // Российские и необходимые сервисы напрямую
-  if (
-    dnsDomainIs(host, ".ru") ||
-    dnsDomainIs(host, ".рф") ||
-    hostEqOrSub(host, "yandex.ru") ||
-    hostEqOrSub(host, "yandex.com") ||
-    hostEqOrSub(host, "ya.ru") ||
-    hostEqOrSub(host, "gosuslugi.ru") ||
-    hostEqOrSub(host, "sberbank.ru") ||
-    hostEqOrSub(host, "tbank.ru") ||
-    hostEqOrSub(host, "mts.ru") ||
-    hostEqOrSub(host, "payment.mts.ru") ||
-	hostEqOrSub(host, "megafon.ru") ||
-    hostEqOrSub(host, "oplata.info") ||
-    hostEqOrSub(host, "matreshka.tv") ||
-	hostEqOrSub(host, "vk.com")
-  ) {
-    return "DIRECT";
+function localAddress(host) {
+  if (host === "localhost" || host === "::1") return true;
+  if (host.indexOf(":") !== -1) {
+    return /^(fc|fd)[0-9a-f]{2}:/.test(host) || /^fe[89ab][0-9a-f]:/.test(host);
   }
-
-  // Всё остальное через Olcbox
-	return "$target";
+  var p = host.split(".");
+  if (p.length !== 4) return false;
+  for (var i = 0; i < 4; i++) {
+    if (!/^[0-9]{1,3}$/.test(p[i]) || +p[i] > 255) return false;
+    p[i] = +p[i];
+  }
+  return p[0] === 127 || p[0] === 10 ||
+    (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
+    (p[0] === 192 && p[1] === 168) ||
+    (p[0] === 169 && p[1] === 254) ||
+    (p[0] === 100 && p[1] >= 64 && p[1] <= 127);
+}
+function FindProxyForURL(url, host) {
+  host = host.toLowerCase().replace(/\.$/, "");
+  if (host.charAt(0) === "[" && host.slice(-1) === "]") host = host.slice(1, -1);
+  if ((host.indexOf(":") === -1 && isPlainHostName(host)) || localAddress(host)) return "DIRECT";
+  var direct = ["ru", "su", "xn--p1ai", "рф", "yandex.com", "yandex.net",
+    "yastatic.net", "kinopoisk.com", "vk.com", "vk.me", "vk-portal.net", "userapi.com",
+    "mycdn.me", "ok.live", "tbank.com", "tinkoff.com", "otpbank.ru", "psbank.ru",
+    "max.ru", "oplata.info", "matreshka.tv"];
+  for (var i = 0; i < direct.length; i++) {
+    if (hostEqOrSub(host, direct[i])) return "DIRECT";
+  }
+  return "$target";
 }
             """.trimIndent()
         }
@@ -165,7 +164,7 @@ function FindProxyForURL(url, host) {
         ): String {
             val target = socksProxyUri(socksHost, socksPort, socksUsername, socksPassword)
 
-            return "SOCKS5 $target; SOCKS $target"
+            return "SOCKS5 $target"
         }
 
         internal fun socksProxyUri(

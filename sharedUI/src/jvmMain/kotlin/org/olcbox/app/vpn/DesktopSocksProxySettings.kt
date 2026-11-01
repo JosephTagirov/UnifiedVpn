@@ -28,7 +28,7 @@ enum class DesktopRoutingMode {
     }
 
     fun description(): String = when (this) {
-        Auto -> "Use local SOCKS for olcRTC / OpenFlux on Windows and the recommended mode for other profiles"
+        Auto -> "Use system proxy on Windows and the recommended mode for other profiles"
         Tun -> "Route all traffic through a virtual adapter"
         SystemProxy -> "Configure the operating system proxy automatically"
         LocalSocks -> "Expose SOCKS5 without changing system routing"
@@ -54,7 +54,7 @@ enum class DesktopRoutingMode {
         if (this != Auto) {
             return if (this == Tun && os == DesktopOs.Windows && usesProxySettings) LocalSocks else this
         }
-        if (usesProxySettings) return LocalSocks
+        if (usesProxySettings) return if (os == DesktopOs.Windows) SystemProxy else LocalSocks
         return when (os) {
             DesktopOs.Linux -> Tun
             DesktopOs.Windows -> SystemProxy

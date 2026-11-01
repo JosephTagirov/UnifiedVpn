@@ -1,5 +1,6 @@
 package org.olcbox.app.ui.features.locations.components
 
+import org.olcbox.app.ui.components.accessTerm
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.LinearEasing
@@ -78,12 +79,12 @@ fun LocationRow(
     onDragEnd: () -> Unit = {},
     onClick: () -> Unit
 ) {
-    val rowShape = RoundedCornerShape(16.dp)
+    val rowShape = RoundedCornerShape(20.dp)
     val bgColor by animateColorAsState(
         targetValue = when {
             isDragging -> MaterialTheme.colorScheme.tertiaryContainer
             isSelected -> MaterialTheme.colorScheme.surfaceContainerHigh
-            else -> MaterialTheme.colorScheme.surfaceContainer
+            else -> MaterialTheme.colorScheme.surfaceContainerLow
         },
         label = "locationRowContainer"
     )
@@ -128,7 +129,7 @@ fun LocationRow(
         verticalAlignment = Alignment.CenterVertically,
         modifier = modifier
             .fillMaxWidth()
-            .height(76.dp)
+            .height(PROFILE_ROW_HEIGHT)
             .zIndex(if (isDragging) 1f else 0f)
             .graphicsLayer {
                 translationY = dragOffsetY
@@ -140,19 +141,22 @@ fun LocationRow(
             .background(bgColor)
             .border(borderWidth, borderColor, rowShape)
             .clickable(enabled = !isDragging, onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
-        if (emoji.isNotEmpty()) {
-            Text(text = emoji, fontSize = 20.sp)
-            Spacer(modifier = Modifier.width(8.dp))
+        Surface(modifier=Modifier.size(38.dp),shape=RoundedCornerShape(12.dp),color=MaterialTheme.colorScheme.secondaryContainer){
+            Box(contentAlignment=Alignment.Center){
+                if(emoji.isNotEmpty())Text(text=emoji,fontSize=18.sp)
+                else Text(text=profileBadge(location),fontWeight=FontWeight.SemiBold,color=MaterialTheme.colorScheme.onSecondaryContainer)
+            }
         }
+        Spacer(Modifier.width(10.dp))
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = cleanName,
                 color = textColor,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -166,6 +170,9 @@ fun LocationRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            location.metadata?.subscription?.accessTerm()?.let { term ->
+                Text(text=term,fontSize=10.sp,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1)
+            }
         }
 
         when {
@@ -192,7 +199,7 @@ fun LocationRow(
             }
         }
 
-        Spacer(modifier = Modifier.width(12.dp))
+        Spacer(modifier = Modifier.width(4.dp))
 
         CompositionLocalProvider(LocalViewConfiguration provides dragViewConfiguration) {
             Box(
@@ -254,7 +261,7 @@ fun LocationRow(
             }
         }
 
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(4.dp))
 
         LocationSelectionIndicator(isSelected = isSelected)
     }
@@ -351,3 +358,12 @@ private fun ShimmeringPingSkeleton() {
 }
 
 private const val PROFILE_DRAG_LONG_PRESS_TIMEOUT_MS = 200L
+
+internal val PROFILE_ROW_HEIGHT = 84.dp
+internal fun profileBadge(location: LocationItem): String = when {
+    location.profile.isOlcRtc() && location.config?.bypassProvider == "vkcalls" -> "VK"
+    location.profile.isOlcRtc() -> "RTC"
+    location.profile.isOpenFlux() -> "OF"
+    location.profile.normalizedType == "vless" -> "V"
+    else -> "A"
+}

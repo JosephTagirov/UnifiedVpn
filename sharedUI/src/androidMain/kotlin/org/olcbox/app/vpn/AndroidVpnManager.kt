@@ -313,15 +313,16 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         locationConfig: LocationConfig,
         profile: VpnProfileConfig
     ): Long? {
-        return if (profile.isOpenFlux()) {
-            OpenFluxTunnelPing.ping(profile, OlcboxVpnState::connectedOpenFluxTunnel)
-        } else if (profile.isOlcRtc()) {
+        val connected = OlcboxVpnState.connectedLatencySession()?.takeIf { it.matches(profile,locationConfig) }
+        if (connected != null) return ProfileLatency.connected(connected,OlcboxVpnState::connectedLatencySession)
+        return if (profile.isOlcRtc() && !locationConfig.isVkCalls()) {
             OlcRtcConnectionChecker.ping(
                 locationConfig = locationConfig,
                 deviceId = deviceIdentityProvider.hwid()
             )
         } else {
-            VpnProfileReachability.ping(profile)
+            ExternalAwgGuard.requireNotConnected(profile)
+            AndroidProfileLatency.ping(appContext,locationConfig,profile)
         }
     }
 

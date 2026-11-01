@@ -792,9 +792,9 @@ class LocationViewModel(
 
     private companion object {
         const val LOCATION_PING_ATTEMPTS = 1
-        const val LOCATION_PING_TIMEOUT_MS = 12_000L
+        const val LOCATION_PING_TIMEOUT_MS = 220_000L
         const val LOCATION_PING_RETRY_DELAY_MS = 0L
-        const val LOCATION_PING_PARALLELISM = 4
+        const val LOCATION_PING_PARALLELISM = 2
     }
 
     private data class ProviderDraft(

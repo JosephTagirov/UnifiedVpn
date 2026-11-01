@@ -25,6 +25,11 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.TextButton
 import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import org.olcbox.app.data.logging.LogPresentation
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
@@ -93,11 +98,9 @@ fun LogsContent(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "Application Logs",
-                style = MaterialTheme.typography.headlineSmall,
-            )
-
+            Text(text = "Application Logs",style = MaterialTheme.typography.headlineSmall)
+        }
+        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(
                     enabled = logs.isNotEmpty(),
@@ -122,6 +125,7 @@ fun LogsContent(
             }
         }
 
+        LogControls(logs)
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -145,10 +149,11 @@ fun LogLines(
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
     val listState = rememberLazyListState()
-
-    LaunchedEffect(logs.size) {
-        if (logs.isNotEmpty()) {
-            listState.scrollToItem(logs.lastIndex)
+    val options by LogPresentation.selection.collectAsState()
+    val shown = LogPresentation.lines(logs,options)
+    LaunchedEffect(shown.lastOrNull(),shown.size) {
+        if (shown.isNotEmpty()) {
+            listState.scrollToItem(shown.lastIndex)
         }
     }
 
@@ -158,15 +163,16 @@ fun LogLines(
         contentPadding = contentPadding
     ) {
         itemsIndexed(
-            items = logs,
+            items = shown,
             key = { index, log -> "$index:$log" }
         ) { _, log ->
-            Text(
+            SelectionContainer { Text(
                 text = log,
                 fontSize = 12.sp,
+                fontFamily = FontFamily.Monospace,
                 color = getLogColor(log),
-                modifier = Modifier.padding(vertical = 2.dp)
-            )
+                modifier = Modifier.padding(vertical = 4.dp)
+            ) }
         }
     }
 }
@@ -174,9 +180,9 @@ fun LogLines(
 @Composable
 private fun getLogColor(log: String): Color {
     return when {
-        log.contains("❌") || log.contains("Error") -> Color.Red
+        LogPresentation.severity(log) == "ERROR" -> Color.Red
         log.contains("✅") || log.contains("OK") -> Color(0xFF4CAF50)
-        log.contains("⚠️") -> Color(0xFFFFA000)
+        LogPresentation.severity(log) == "WARN" -> Color(0xFFFFA000)
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 }

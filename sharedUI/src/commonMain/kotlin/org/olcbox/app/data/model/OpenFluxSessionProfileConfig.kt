@@ -31,7 +31,7 @@ data class OpenFluxSessionProfileConfig(
         if (!carrier.isValid()) return false
         // This first integration accepts the context used by our separately provisioned peers.
         // Never trim or lowercase the secret or silently infer a different KDF context.
-        return context == carrier.url
+        return if (carrier.type == TRANSPORT_DIRECT) context == "tcp://${carrier.dial}" else context == carrier.url
     }
 
     fun toEngineConf(keyFile: String, cookieStore: String, socksPort: Int): String {
@@ -55,7 +55,8 @@ data class OpenFluxSessionProfileConfig(
             appendLine("[Transport \"${carrier.type}\"]")
             appendLine("Type = ${carrier.type}")
             appendLine("Priority = 50")
-            appendLine("URL = ${carrier.url}")
+            if (carrier.type == TRANSPORT_DIRECT) appendLine("Dial = ${carrier.dial}")
+            else appendLine("URL = ${carrier.url}")
         }
     }
 
@@ -64,6 +65,7 @@ data class OpenFluxSessionProfileConfig(
     companion object {
         const val TRANSPORT_TELEMOST = "telemost"
         const val TRANSPORT_MAILRU = "mailru"
+        const val TRANSPORT_DIRECT = "direct"
         const val LINK_PREFIX = "openflux://v1/"
         const val CORE_VERSION = "0.5.0"
         const val CORE_REVISION = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
@@ -110,7 +112,11 @@ data class OpenFluxSessionTransport(
 ) {
     fun isValid(): Boolean {
         if (name.isNotEmpty() && name != type) return false
-        if (priority !in 0..100 || dial.isNotEmpty()) return false
+        if (priority !in 0..100) return false
+        if (type == OpenFluxSessionProfileConfig.TRANSPORT_DIRECT) {
+            return url.isEmpty() && validPublicDirectEndpoint(dial)
+        }
+        if (dial.isNotEmpty()) return false
         if (url.length !in 1..8192 || url.any { it.isWhitespace() || it.code < 32 || it.code == 127 }) return false
         val parsed = runCatching { Url(url) }.getOrNull() ?: return false
         if (parsed.protocol.name != "https" || parsed.port != 443 ||
@@ -127,4 +133,16 @@ data class OpenFluxSessionTransport(
     }
 
     override fun toString(): String = "OpenFluxSessionTransport(secrets=[redacted])"
+}
+
+
+internal fun validPublicDirectEndpoint(value: String): Boolean {
+    val match = Regex("^([0-9]{1,3}(?:\\.[0-9]{1,3}){3}):([0-9]{1,5})$").matchEntire(value) ?: return false
+    val octets = match.groupValues[1].split('.').map { it.toIntOrNull() ?: return false }
+    if (octets.any { it !in 0..255 } || octets.joinToString(".") != match.groupValues[1]) return false
+    if (match.groupValues[2].toIntOrNull() !in 1024..65535) return false
+    val (a,b,c,_) = octets
+    if (a in setOf(0,10,127) || a >= 224 || a == 169 && b == 254 || a == 172 && b in 16..31 || a == 192 && b == 168) return false
+    if (a == 100 && b in 64..127 || a == 192 && b == 0 && c in setOf(0,2) || a == 198 && b in 18..19 || a == 198 && b == 51 && c == 100 || a == 203 && b == 0 && c == 113) return false
+    return true
 }

@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+    "net/url"
 	"sync"
 	"syscall"
 	"time"
@@ -82,7 +83,12 @@ func run(ctx context.Context, c configuration) error {
 	if err != nil {
 		return errors.New("Session initialization failed")
 	}
-	carrier, err := registry.New(c.Transport, c.DocumentURL, nil, registry.Options{Base: transport.DefaultConfig()})
+	var params map[string]interface{}
+    if c.Transport == "direct" {
+        endpoint, _ := url.Parse(c.DocumentURL)
+        params = map[string]interface{}{"dial": endpoint.Host}
+    }
+    carrier, err := registry.New(c.Transport, c.DocumentURL, params, registry.Options{Base: transport.DefaultConfig(), StrictDirect: true})
 	if err != nil {
 		return errors.New("Session carrier initialization failed")
 	}

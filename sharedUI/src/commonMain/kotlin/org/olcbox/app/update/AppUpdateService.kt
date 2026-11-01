@@ -1,5 +1,8 @@
 package org.olcbox.app.update
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
 import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
@@ -41,7 +44,8 @@ data class AppUpdateAsset(
     val downloadUrl: String,
     val sizeBytes: Long?,
     val updatedAt: String? = null,
-    val digest: String? = null
+    val digest: String? = null,
+    val fallbackUrls: List<String> = emptyList()
 )
 
 data class AppUpdateInfo(
@@ -66,8 +70,18 @@ class AppUpdateService(
         channel: ReleaseChannel,
         proxy: SubscriptionFetchProxy? = null
     ): Result<AppUpdateInfo> = runCatching {
-        val release = fetchRelease(channel, proxy)
-        val asset = selectAsset(release.assets, platform)
+        val releases = coroutineScope {
+            val server = async { runCatching { fetchServerRelease(channel, proxy) }.also { if(it.exceptionOrNull() is CancellationException) throw it.exceptionOrNull()!! } }
+            val github = async { runCatching { fetchRelease(channel, proxy) }.also { if(it.exceptionOrNull() is CancellationException) throw it.exceptionOrNull()!! } }
+            listOfNotNull(server.await().getOrNull(),github.await().getOrNull())
+        }
+        val release = releases.filter { selectAsset(it.assets,platform)!=null }.sortedWith { a,b ->
+            val versionDifference=compareVersions(b.tagName.removePrefix("v"),a.tagName.removePrefix("v"))
+            if(versionDifference!=0)versionDifference else
+                (assetBuildNumber(selectAsset(b.assets,platform)!!.name) ?: 0).compareTo(assetBuildNumber(selectAsset(a.assets,platform)!!.name) ?: 0)
+        }.firstOrNull()
+            ?: error("Не удалось проверить обновления ни на сервере, ни в GitHub")
+        val primary = selectAsset(release.assets, platform)
             ?: error(
                 "No ${platform.assetToken.joinToString(" + ")} update asset in ${release.tagName}. " +
                         "Expected asset name containing ${platform.assetToken.joinToString(", ")}" +
@@ -76,6 +90,10 @@ class AppUpdateService(
                             .orEmpty()
             )
 
+        val alternatives = releases.filter { it.tagName==release.tagName }.flatMap { it.assets }
+            .filter { it.name==primary.name && it.digest!=null && it.digest==primary.digest && it.browserDownloadUrl!=primary.downloadUrl }
+            .map { it.browserDownloadUrl }.distinct()
+        val asset = primary.copy(fallbackUrls=alternatives)
         val version = updateVersion(channel, release.tagName, asset)
         val build = assetBuildNumber(asset.name)
         val windowsInstallerAsset = if (platform.os == "windows") {
@@ -103,6 +121,18 @@ class AppUpdateService(
             build = build,
             windowsInstallerAsset = windowsInstallerAsset
         )
+    }
+
+    private suspend fun fetchServerRelease(channel: ReleaseChannel, proxy: SubscriptionFetchProxy?): GithubRelease {
+        require(channel==ReleaseChannel.Stable) { "Server publishes stable updates" }
+        val client=if(proxy==null) httpClient else createUpdateHttpClient(proxy)
+        return try {
+            withProxyAuthentication(proxy) {
+                val response=client.get("https://panel.meesharr.space/vpn-control/updates/stable.json")
+                require(response.status.value in 200..299) { "Server update request failed" }
+                json.decodeFromString(GithubRelease.serializer(),response.bodyAsText())
+            }
+        } finally { if(client!==httpClient)client.close() }
     }
 
     suspend fun fetchRelease(

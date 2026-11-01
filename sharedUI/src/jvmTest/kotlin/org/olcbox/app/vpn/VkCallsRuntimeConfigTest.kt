@@ -58,7 +58,9 @@ class VkCallsRuntimeConfigTest {
             assertFalse(VkCallsRuntimeConfig.validRoom(room), room)
             assertFailsWith<IllegalArgumentException> { VkCallsRuntimeConfig.build(location.copy(id = room), 19871, "u", "p", "1.1.1.1:53") }
         }
-        assertFailsWith<IllegalArgumentException> { VkCallsRuntimeConfig.build(location, 19871, "", "", "1.1.1.1:53") }
+        assertFailsWith<IllegalArgumentException> { VkCallsRuntimeConfig.build(location, 19871, "user", "", "1.1.1.1:53") }
+        val loopback = Json.parseToJsonElement(VkCallsRuntimeConfig.build(location, 19871, "", "", "1.1.1.1:53")).jsonObject
+        assertEquals("127.0.0.1", loopback.getValue("socks").jsonObject.getValue("host").jsonPrimitive.content)
         assertFailsWith<IllegalArgumentException> { VkCallsRuntimeConfig.build(location, 0, "u", "p", "1.1.1.1:53") }
         assertFailsWith<IllegalArgumentException> { VkCallsRuntimeConfig.build(location, 19871, "u", "p", "") }
     }

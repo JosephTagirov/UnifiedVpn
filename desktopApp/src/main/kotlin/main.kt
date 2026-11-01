@@ -78,6 +78,7 @@ import com.google.zxing.MultiFormatWriter
 import com.google.zxing.common.BitMatrix
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.desktop.WindowsProcessSecurity
+import org.olcbox.app.desktop.DesktopImportBridge
 import org.olcbox.app.data.datasource.JvmLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.JvmLogExporter
@@ -214,10 +215,11 @@ fun main(args: Array<String>) {
         )
         return
     }
-    runDesktopApplication()
+    val importBridge=DesktopImportBridge.open(args) ?: return
+    try { runDesktopApplication(importBridge) } finally { importBridge.close() }
 }
 
-private fun runDesktopApplication() = application {
+private fun runDesktopApplication(importBridge:DesktopImportBridge) = application {
     // Configure JNA to find native libraries in resources
     System.setProperty(
         "jna.library.path",
@@ -242,6 +244,22 @@ private fun runDesktopApplication() = application {
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var sharePayload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var desktopNotice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(importBridge) {
+        while(true){
+            val pending=withContext(Dispatchers.IO){importBridge.take()}
+            pending.forEach { source ->
+                isWindowVisible=true
+                if(source!="show") {
+                    desktopNotice="Importing selected profiles..."
+                    dependencies.homeViewModel.onImportFullConfig(source,onComplete={
+                        dependencies.locationViewModel.loadLocations { currentScreen=AppScreen.Home;desktopNotice="Profiles added" }
+                    },onError={desktopNotice=it})
+                }
+            }
+            delay(350)
+        }
+    }
+
     var isTrayReady by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val trayHomeState by dependencies.homeViewModel.state.collectAsState()

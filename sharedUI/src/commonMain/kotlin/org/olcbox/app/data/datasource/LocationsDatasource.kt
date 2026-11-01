@@ -91,7 +91,8 @@ class LocationsRepositoryImpl(
 
     private data class ParsedImport(
         val bundle: LocationBundleV4,
-        val mode: ImportMode
+        val mode: ImportMode,
+        val preserveActiveSelection: Boolean = false
     )
 
     private data class ResolvedImport(
@@ -243,7 +244,11 @@ class LocationsRepositoryImpl(
                     replaceMatchingStorageIds = resolved.parsed.mode == ImportMode.Restore
                 )
             }
-            saveBundleUnlocked(merged)
+            val preserved = if (resolved.parsed.preserveActiveSelection && current.activeLocationId != null &&
+                merged.locations.any { it.storageId == current.activeLocationId }) {
+                merged.copy(activeLocationId = current.activeLocationId)
+            } else merged
+            saveBundleUnlocked(preserved)
         }
         return LocationImportResult.Success(
             importedLocations = importedBundle.locations.size,
@@ -641,7 +646,7 @@ class LocationsRepositoryImpl(
         subscriptionProxy: SubscriptionFetchProxy? = null,
         allowInsecureRequests: Boolean = false
     ): ResolvedImportResult {
-        val input = text.normalizedImportText()
+        val input = (org.olcbox.app.data.share.SelectionImportLink.parse(text) ?: text).normalizedImportText()
         if (input.isBlank()) {
             return ResolvedImportResult.Failure(
                 LocationImportFailureKind.EmptyInput,
@@ -965,6 +970,16 @@ class LocationsRepositoryImpl(
         subscriptionUrl: String? = null,
         updateIntervalMs: Long? = null
     ): ParsedImport? {
+        // The selected-set envelope is additive and deliberately distinct from backups.
+        val decodedSelection = text.tryDecodeBase64Utf8()?.trim()?.takeIf { it.startsWith("{") }
+        val selectedRoot = runCatching { json.parseToJsonElement(decodedSelection ?: text).jsonObject }.getOrNull()
+        if (selectedRoot?.string("format") == "unifiedvpn-selection-v1") {
+            val profiles = selectedRoot["profiles"]?.let { runCatching { it.jsonArray }.getOrNull() } ?: return null
+            if (profiles.isEmpty() || profiles.size > 4) return null
+            val selected = parseBundle(JsonObject(mapOf("version" to JsonPrimitive(5), "locations" to profiles)), subscriptionUrl, updateIntervalMs) ?: return null
+            if (selected.locations.size != profiles.size) return null
+            return ParsedImport(selected, ImportMode.Additive, preserveActiveSelection = true)
+        }
         if (text.startsWith("{") && text.endsWith("}")) {
             val root = runCatching {
                 json.parseToJsonElement(text).jsonObject
@@ -1011,11 +1026,30 @@ class LocationsRepositoryImpl(
         }
 
         candidates.forEach { candidate ->
-            parseOpenFluxProfiles(candidate, subscriptionUrl, updateIntervalMs)?.let {
-                return it
-            }
-            parseVlessProfiles(candidate, subscriptionUrl, updateIntervalMs)?.let {
-                return it
+            val vless = parseVlessProfiles(candidate, subscriptionUrl, updateIntervalMs)
+            val openFlux = parseOpenFluxProfiles(candidate, subscriptionUrl, updateIntervalMs)
+            val rtc = parseOlcRtcText(candidate, subscriptionUrl, updateIntervalMs)
+            val bundles = listOfNotNull(vless, rtc, openFlux)
+            if (bundles.isNotEmpty()) {
+                if (bundles.size == 1) return bundles.single()
+                // A subscription may contain several engine types. Returning
+                // the first recognized engine silently removed its companions
+                // during refresh (including the VK Calls support profile).
+                val sharedSubscription = if (subscriptionUrl != null) {
+                    rtc?.locations?.firstNotNullOfOrNull { it.metadata?.subscription }
+                        ?: SubscriptionMetadata(name = "VPN subscription")
+                            .withSubscriptionInterval(updateIntervalMs)
+                } else null
+                val usedIds = mutableSetOf<String>()
+                val entries = bundles.flatMap { it.locations }.map { entry ->
+                    entry.copy(
+                        storageId = uniqueStorageId(entry.storageId, usedIds),
+                        metadata = if (sharedSubscription != null) {
+                            (entry.metadata ?: LocationMetadata()).copy(subscription = sharedSubscription)
+                        } else entry.metadata
+                    ).normalized()
+                }
+                return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
             }
         }
 

@@ -35,7 +35,7 @@ try {
         $files[$name] = (Get-FileHash -LiteralPath $output -Algorithm SHA256).Hash.ToLowerInvariant()
     }
     $version = & (Join-Path $ArtifactsPath 'openflux-session-windows-amd64.exe') --version
-    $expectedVersion = 'unified-openflux-session 1 upstream=7336e1b9d940fc09d00bbf545d15b9437487aa10 protocol=upstream-openflux-session'
+    $expectedVersion = 'unified-openflux-session 2 upstream=7336e1b9d940fc09d00bbf545d15b9437487aa10 protocol=upstream-openflux-session'
     if ($LASTEXITCODE -ne 0 -or $version.Trim() -ne $expectedVersion) { throw 'Session wrapper provenance mismatch.' }
     if (-not $SkipAndroid) {
         if (-not $AndroidNdk) {

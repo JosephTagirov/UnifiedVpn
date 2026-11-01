@@ -54,6 +54,7 @@ actual fun AppTheme(
     ) {
         MaterialTheme(
             colorScheme = if (isDark) OlcboxDarkColorScheme else OlcboxLightColorScheme,
+            shapes = UnifiedShapes,
             typography = typography
         ) {
             AppThemeContent(content)

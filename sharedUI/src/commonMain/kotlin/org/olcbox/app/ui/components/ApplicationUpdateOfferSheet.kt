@@ -23,6 +23,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,6 +40,7 @@ fun ApplicationUpdateOfferSheet(
     onLater: () -> Unit,
     onDownload: () -> Unit
 ) {
+    val uriHandler = LocalUriHandler.current
     val isDownloading by rememberUpdatedState(downloadProgress != null)
     val sheetState = rememberModalBottomSheetState(
         skipPartiallyExpanded = true,
@@ -100,6 +103,8 @@ fun ApplicationUpdateOfferSheet(
                 }
             }
 
+            Text("Основной источник — сервер. GitHub — резерв для того же файла и описания изменений.",style=MaterialTheme.typography.bodySmall)
+            TextButton(onClick={runCatching {uriHandler.openUri(info.htmlUrl)}}) { Text("Что нового ↗") }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(
                     onClick = onLater,

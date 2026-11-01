@@ -1,5 +1,6 @@
 package org.olcbox.app
 
+import kotlinx.coroutines.launch
 import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -13,6 +14,25 @@ import org.olcbox.app.vpn.service.OlcboxVpnActions
 class DebugVpnControlReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (!context.isDebuggableApp()) return
+
+        if (intent.action == "org.olcbox.app.DEBUG_PING_PROFILES") {
+            val pending = goAsync()
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                val manager = org.olcbox.app.vpn.AndroidVpnManager(context.applicationContext)
+                val results = org.json.JSONArray()
+                try {
+                    val repo = org.olcbox.app.data.datasource.AndroidLocationsRepository.get(context.applicationContext)
+                    for (entry in repo.getAllLocations()) {
+                        val row=org.json.JSONObject().put("protocol",if(entry.location.isVkCalls()) "vkcalls" else entry.profile.normalizedType)
+                        try { row.put("ms",manager.ping(entry.location,entry.profile) ?: org.json.JSONObject.NULL) }
+                        catch (_: Exception) { row.put("error","probe failed") }
+                        results.put(row)
+                        java.io.File(context.noBackupFilesDir,"latency-qa.json").writeText(results.toString())
+                    }
+                } finally { manager.closeUi();pending.finish() }
+            }
+            return
+        }
 
         val serviceAction = when (intent.action) {
             ACTION_DEBUG_START_VPN -> OlcboxVpnActions.ACTION_START_VPN

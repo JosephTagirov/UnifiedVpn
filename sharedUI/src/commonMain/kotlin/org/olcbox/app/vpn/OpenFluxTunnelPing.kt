@@ -31,7 +31,7 @@ internal class OpenFluxConnectedTunnel private constructor(
 }
 
 /** An unavailable measurement is not evidence that the remote server is offline. */
-class VpnPingUnavailableException : Exception("Connect to this profile to check latency")
+class VpnPingUnavailableException(message: String = "Connect to this profile to check latency") : Exception(message)
 
 internal object OpenFluxTunnelPing {
     suspend fun ping(

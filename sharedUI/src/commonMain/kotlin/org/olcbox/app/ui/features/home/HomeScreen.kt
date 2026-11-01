@@ -1,9 +1,19 @@
 package org.olcbox.app.ui.features.home
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import org.olcbox.app.ui.components.HomeScrollIndicator
+import org.olcbox.app.ui.components.ownerCabinetEnabled
+import org.olcbox.app.ui.components.safePortalUrl
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.platform.LocalUriHandler
+import org.olcbox.app.ui.features.home.components.BrandHomeIntro
+import org.olcbox.app.ui.features.home.components.BrandHomeNavigation
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,6 +35,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,12 +77,12 @@ fun HomeScreen(
     onAddOpenFluxLocation: () -> Unit,
     onAddLocation: () -> Unit
 ) {
-    var isLogsSheetOpen by remember { mutableStateOf(false) }
-    var isAddSheetOpen by remember { mutableStateOf(false) }
-    var isManualImportOpen by remember { mutableStateOf(false) }
-    var manualImportText by remember { mutableStateOf("") }
-    var manualSubscriptionRefresh by remember { mutableStateOf("") }
-    var manualSubscriptionAllowInsecure by remember { mutableStateOf(false) }
+    var isLogsSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var isAddSheetOpen by rememberSaveable { mutableStateOf(false) }
+    var isManualImportOpen by rememberSaveable { mutableStateOf(false) }
+    var manualImportText by rememberSaveable { mutableStateOf("") }
+    var manualSubscriptionRefresh by rememberSaveable { mutableStateOf("") }
+    var manualSubscriptionAllowInsecure by rememberSaveable { mutableStateOf(false) }
 
     val state by viewModel.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -80,6 +91,7 @@ fun HomeScreen(
     val locations = locationViewModel.locations.toList()
     val hasSubscriptions = locations.any { !it.subscriptionUrl.isNullOrBlank() }
 
+    val uriHandler = LocalUriHandler.current
     val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
@@ -87,9 +99,10 @@ fun HomeScreen(
     }
 
     val primaryActionLabel = when {
-        requiresSetup -> "SETUP"
-        state.isVpnLoading || state.isVpnConnected -> "STOP"
-        else -> "START"
+        requiresSetup -> "Add profile"
+        state.isVpnLoading -> "Cancel connection"
+        state.isVpnConnected -> "Disconnect"
+        else -> "Connect"
     }
 
     fun refreshSubscriptions() {
@@ -135,18 +148,21 @@ fun HomeScreen(
             )
         }
     ) { innerPadding ->
+        Box(Modifier.fillMaxSize().padding(innerPadding)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
                 .verticalScroll(scrollState)
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(horizontal = 20.dp, vertical = 18.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Column(Modifier.widthIn(max=780.dp).fillMaxWidth()) {
+            BrandHomeIntro()
             RelayStatus(
                 isActive = state.isVpnConnected,
                 isLoading = state.isVpnLoading,
-                requiresSetup = requiresSetup
+                requiresSetup = requiresSetup,
+                profileCount = locations.size
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -168,6 +184,14 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            val owner = ownerCabinetEnabled()
+            val portal = locations.firstOrNull { it.storageId == locationViewModel.selectedLocationId }
+                ?.metadata?.subscription?.safePortalUrl()
+                ?: locations.firstNotNullOfOrNull { it.metadata?.subscription?.safePortalUrl() }
+            BrandHomeNavigation(showCabinet=owner || portal!=null,owner=owner,onLogs={isLogsSheetOpen=true},onCabinet={
+                runCatching { uriHandler.openUri(if(owner) "https://panel.meesharr.space/vpn-control/admin/" else portal!!) }
+                    .onFailure { scope.launch { snackbarHostState.showSnackbar("Could not open the browser") } }
+            })
             LocationSelectorScreen(
                 showAddOlcRtcButton = showAddOlcRtcButton,
                 onRefreshClick = { targetIds ->
@@ -197,6 +221,10 @@ fun HomeScreen(
             )
 
             Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+
+        HomeScrollIndicator(state=scrollState,modifier=Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(10.dp))
         }
 
         if (isLogsSheetOpen) {

@@ -21,10 +21,13 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -298,21 +301,19 @@ private fun QrScannerScreen(
             QrScannerTopBar(onClose = onClose)
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 32.dp, vertical = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize().padding(innerPadding)
+                .padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
-            QrScannerPreview(
-                onPreviewReady = onPreviewReady,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            QrScannerStatusPanel(modifier = Modifier.fillMaxWidth())
+            val previewSize = minOf(maxWidth, (maxHeight - 160.dp).coerceAtLeast(120.dp), 440.dp)
+            Column(
+                modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                QrScannerPreview(onPreviewReady = onPreviewReady, modifier = Modifier.size(previewSize))
+                Spacer(modifier = Modifier.height(16.dp))
+                QrScannerStatusPanel(modifier = Modifier.fillMaxWidth())
+            }
         }
     }
 }

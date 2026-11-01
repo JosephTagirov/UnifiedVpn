@@ -206,6 +206,7 @@ class OlcboxVpnService : VpnService() {
     private var tunSocksBridge: SocksBackedVpnEngine? = null
     private var activeProfileType = VpnProfileConfig.TYPE_OLCRTC
     private var activePingProfile: VpnProfileConfig? = null
+    private var activePingLocation = LocationConfig()
 
     private data class StartOptions(
         val connectionMode: AndroidConnectionMode,
@@ -672,6 +673,7 @@ class OlcboxVpnService : VpnService() {
                     activeProfileStorageId = active.storageId
                     activeProfileType = profile.normalizedType
                     activePingProfile = profile
+                    activePingLocation = active.location
                     updateNotification(lastNotificationStatus)
                     if (profile.isOlcRtc() && !active.location.hasValidCryptoKey()) {
                         val message = "olcRTC key must be 64 hexadecimal characters"
@@ -2734,7 +2736,7 @@ class OlcboxVpnService : VpnService() {
         } else {
             null
         }
-        OlcboxVpnState.setStatus(status, connectedProxy, activePingProfile)
+        OlcboxVpnState.setStatus(status, connectedProxy, activePingProfile,activePingLocation)
         if (status !is VpnStatus.Connecting && status !is VpnStatus.Reconnecting) {
             OlcboxVpnState.setOpenFluxVerification(null)
         }

@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class AppAppearanceSettings(
     val language: AppLanguagePreference = AppLanguagePreference.System,
-    val theme: AppThemePreference = AppThemePreference.System
+    val theme: AppThemePreference = AppThemePreference.Light
 )
 
 @Serializable
@@ -58,7 +58,7 @@ enum class AppThemePreference {
 
     companion object {
         fun fromStored(value: String?): AppThemePreference {
-            return entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: System
+            return entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: if (value == null) Light else System
         }
     }
 }

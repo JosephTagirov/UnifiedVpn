@@ -24,6 +24,7 @@
 
     <application
         android:allowBackup="false"
+        android:resizeableActivity="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
         android:name=".App"
@@ -39,7 +40,7 @@
 
         <activity
             android:name=".AppActivity"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden"
             android:launchMode="singleInstance"
             android:windowSoftInputMode="adjustResize"
             android:exported="true">
@@ -47,11 +48,16 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="unifiedvpn" android:host="import" />
+            </intent-filter>
         </activity>
 
         <activity
             android:name="org.olcbox.app.ui.activities.QrScannerActivity"
-            android:screenOrientation="portrait"
             android:exported="false" />
 
         <activity
@@ -83,7 +89,7 @@
 
         <activity
             android:name="org.olcbox.app.vpn.service.OpenFluxBrowserVerificationActivity"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden"
             android:excludeFromRecents="true"
             android:exported="false"
             android:noHistory="true"

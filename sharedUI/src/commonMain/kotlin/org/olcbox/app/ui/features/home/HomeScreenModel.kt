@@ -460,17 +460,8 @@ class HomeScreenViewModel(
         }
     }
 
-    private fun buildLogsExport(logs: List<String>): String {
-        return buildString {
-            appendLine("Unified VPN application logs")
-            appendLine("Build: ${org.olcbox.app.CurrentAppInfo.diagnosticVersion}")
-            appendLine("Entries: ${logs.size}")
-            appendLine()
-            logs.forEachIndexed { index, line ->
-                appendLine("${index + 1}. ${sanitizeDiagnosticLogLine(line)}")
-            }
-        }
-    }
+    private fun buildLogsExport(logs: List<String>): String = org.olcbox.app.data.logging.LogPresentation.export(logs)
+
 }
 
 data class HomeScreenState(

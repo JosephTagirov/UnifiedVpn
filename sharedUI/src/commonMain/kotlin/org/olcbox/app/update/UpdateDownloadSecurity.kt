@@ -51,3 +51,14 @@ internal object UpdateDownloadSecurity {
 
     private val SHA256_PATTERN = Regex("[a-f0-9]{64}")
 }
+
+// Fallback URLs refer to the exact same named asset and SHA-256, validated in the feed.
+internal suspend fun <T> withUpdateMirrors(asset: AppUpdateAsset, download: suspend (AppUpdateAsset)->T): T {
+    var failure: Exception? = null
+    for(url in (listOf(asset.downloadUrl)+asset.fallbackUrls).distinct()) {
+        try { return download(asset.copy(downloadUrl=url,fallbackUrls=emptyList())) }
+        catch(e: kotlinx.coroutines.CancellationException) { throw e }
+        catch(e: Exception) { failure=e }
+    }
+    throw failure ?: IllegalStateException("Нет источников обновления")
+}
