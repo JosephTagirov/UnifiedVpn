@@ -1,8 +1,10 @@
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
+import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.OutputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -27,6 +29,10 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val apkDirectory: DirectoryProperty
 
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val adBlockingRulesFile: RegularFileProperty
+
     @get:Input
     abstract val requiredAbis: ListProperty<String>
 
@@ -45,6 +51,18 @@ abstract class VerifyOlcRtcBindingsTask : DefaultTask() {
         }
 
         apkFiles.forEach { apk ->
+            ZipFile(apk).use { archive ->
+                val path = "assets/composeResources/unifiedvpn.sharedui.generated.resources/files/adblocking/hagezi-light.json"
+                val entry = archive.getEntry(path) ?: error("${apk.name} is missing the ad blocking list")
+                listOf("inter_regular.ttf", "inter_medium.ttf", "inter_semi_bold.ttf", "inter_bold.ttf").forEach { font ->
+                    check(archive.getEntry("assets/composeResources/unifiedvpn.sharedui.generated.resources/font/$font") != null) {
+                        "${apk.name} is missing a required UI font: $font"
+                    }
+                }
+                val expected = MessageDigest.getInstance("SHA-256").digest(adBlockingRulesFile.get().asFile.readBytes())
+                val actual = archive.getInputStream(entry).use { MessageDigest.getInstance("SHA-256").digest(it.readBytes()) }
+                check(expected.contentEquals(actual)) { "${apk.name} contains an incorrect ad blocking list" }
+            }
             val expectedNativeLibraries = requiredAbis.get()
                 .flatMap { abi -> EXPECTED_NATIVE_LIBRARIES.map { library -> "lib/$abi/$library" } }
                 .toSet()
@@ -293,12 +311,22 @@ val androidAbiFilters = providers.gradleProperty("olcbox.android.abiFilters")
     }
     .getOrElse(defaultAndroidAbiFilters)
 val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts")
+    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts-wrapper8-20261102-viewer")
 )
+// Android KMP resources are not automatically exposed as app assets by this AGP setup.
+val stageSharedComposeAssets = tasks.register<StageOpenFluxAndroidLibrariesTask>("stageSharedComposeAssets") {
+    from(rootProject.layout.projectDirectory.dir("sharedUI/src/commonMain/composeResources")) {
+        include("files/adblocking/**", "files/Inter-OFL.txt", "font/inter_*.ttf")
+        into("composeResources/unifiedvpn.sharedui.generated.resources")
+    }
+    outputDirectory.set(layout.buildDirectory.dir("generated/sharedComposeAssets"))
+    into(outputDirectory)
+}
+
 val vkCallsArtifactDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts")
+    providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts-5b1e617")
 )
-val vkCallsRevision = "403edd409011dd371796260196ecd17630df0fdd"
+val vkCallsRevision = "5b1e6172a9f620d477624c6575c392e70449d333"
 val stageVkCallsAndroidLibraries = tasks.register<StageOpenFluxAndroidLibrariesTask>("stageVkCallsAndroidLibraries") {
     val manifestFile = vkCallsArtifactDirectory.file("manifest.json")
     inputs.file(manifestFile)
@@ -330,12 +358,12 @@ val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
 val expectedOpenFluxWrapper = 8
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
 val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026101102")
+    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026110105")
 )
 val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
-val expectedOpenFluxSessionUpstream = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
+val expectedOpenFluxSessionUpstream = "f492a1a33b7581ad8f88118f97e0b866adda3cdc"
 val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
-val expectedOpenFluxSessionVersion = "unified-openflux-session 1 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 3 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 
 fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFile: File, abi: String, session: Boolean = false) {
     check(binary.isFile && binary.length() > 0L && !Files.isSymbolicLink(binary.toPath())) {
@@ -461,17 +489,21 @@ require(androidAbiFilters.isNotEmpty()) {
 }
 
 android {
+    buildFeatures { buildConfig = true }
     namespace = "org.olcbox.app"
     compileSdk = 37
+    testBuildType = providers.gradleProperty("uiQaTestBuildType").orElse("debug").get()
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
+        buildConfigField("boolean", "OWNER_EDITION", providers.gradleProperty("ownerEdition").orElse("false").get())
         minSdk = 23
         targetSdk = 35
 
         applicationId = "app.unifiedvpn.local"
         versionCode = olcboxVersionCode.get()
         versionName = olcboxVersion.get()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
             abiFilters += androidAbiFilters
@@ -490,6 +522,20 @@ android {
     }
 
     buildTypes {
+        create("releaseQa") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            applicationIdSuffix = ".shadeqa"
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName(if (hasReleaseKeystore) "release" else "debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles("src/androidTest/proguard-qa.pro")
+        }
+        getByName("debug") {
+            applicationIdSuffix = providers.gradleProperty("uiQaApplicationIdSuffix").orNull
+        }
         debug {
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
@@ -554,6 +600,11 @@ val olcrtcAndroidAar = files(
 )
 
 dependencies {
+    androidTestImplementation(libs.compose.ui.test)
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("androidx.test:runner:1.5.0")
+    androidTestImplementation("androidx.test:core:1.5.0")
+    androidTestImplementation("junit:junit:4.13.2")
     implementation(project(":sharedUI"))
     implementation(olcrtcAndroidAar)
     implementation(libs.androidx.activityCompose)
@@ -564,9 +615,14 @@ tasks.matching { task -> task.name == "preBuild" }.configureEach {
     dependsOn(":sharedUI:buildOlcrtcAndroidAar")
     dependsOn(":verifyAwgAndroidBinaries")
     dependsOn(stageVkCallsNotices)
+    dependsOn(stageSharedComposeAssets)
 }
 
 androidComponents.onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(
+        stageSharedComposeAssets,
+        StageOpenFluxAndroidLibrariesTask::outputDirectory
+    )
     variant.sources.assets?.addGeneratedSourceDirectory(
         stageVkCallsNotices,
         StageOpenFluxAndroidLibrariesTask::outputDirectory
@@ -591,6 +647,7 @@ listOf("debug", "release").forEach { buildType ->
         group = "verification"
         description = "Verifies that the $buildType APK contains the olcRTC gomobile bindings."
         apkDirectory.set(layout.buildDirectory.dir("outputs/apk/$buildType"))
+        adBlockingRulesFile.set(rootProject.layout.projectDirectory.file("sharedUI/src/commonMain/composeResources/files/adblocking/hagezi-light.json"))
         requiredAbis.set(androidAbiFilters)
         forbiddenBuildPathPrefixes.set(forbiddenNativeBuildPathPrefixes)
     }

@@ -33,7 +33,8 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,6 +59,7 @@ fun AddConfigurationSheet(
     onAddCustomLocationClick: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var advanced by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -73,7 +75,7 @@ fun AddConfigurationSheet(
         ) {
             AddSheetHeader(
                 title = "Add connection",
-                subtitle = "Subscription, URI, or config file"
+                subtitle = "Open a config link, scan QR or choose a file"
             )
 
             Spacer(Modifier.height(20.dp))
@@ -89,24 +91,17 @@ fun AddConfigurationSheet(
                 }
 
                 AddSheetAction(
-                    title = "Paste link, URI, or friend package",
-                    value = "unifiedvpn-friend-v2:, VLESS, AWG, olcRTC",
+                    title = "Paste a config link",
+                    value = "One link adds the selected profiles",
                     icon = Icons.AutoMirrored.Outlined.Input,
                     onClick = onPasteLinkClick
                 )
 
                 AddSheetAction(
                     title = "Import from file",
-                    value = "Friend package, subscription, AWG .conf, or JSON",
+                    value = "A config set or an individual VPN file",
                     icon = Icons.Outlined.FileOpen,
                     onClick = onImportFileClick
-                )
-
-                AddSheetAction(
-                    title = "Add OpenFlux",
-                    value = "Document URL and encryption key",
-                    icon = Icons.Outlined.Description,
-                    onClick = onAddOpenFluxClick
                 )
 
                 if (hasSubscriptions) {
@@ -119,6 +114,9 @@ fun AddConfigurationSheet(
                     )
                 }
 
+                TextButton(onClick={advanced=!advanced}){Text(if(advanced)"Hide advanced setup" else "Advanced setup")}
+                if(advanced){
+                AddSheetAction(title="Add OpenFlux",value="Document URL and encryption key",icon=Icons.Outlined.Description,onClick=onAddOpenFluxClick)
                 onSelfHostedClick?.let { onClick ->
                     AddSheetAction(
                         title = "Set up self-hosted server",
@@ -134,6 +132,7 @@ fun AddConfigurationSheet(
                     icon = Icons.Outlined.Add,
                     onClick = onAddCustomLocationClick
                 )
+                }
             }
         }
     }

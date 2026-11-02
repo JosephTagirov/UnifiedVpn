@@ -867,16 +867,18 @@ private fun roomIdPlaceholder(provider: String): String {
         LocationConfig.PROVIDER_WB_STREAM -> "123e4567-e89b-12d3-a456-426614174000"
         LocationConfig.PROVIDER_JITSI -> "https://meet.example.com/room"
         LocationConfig.PROVIDER_VK_CALLS -> "https://vk.ru/call/join/..."
+        LocationConfig.PROVIDER_SALUTE_JAZZ -> "code:password"
+        LocationConfig.PROVIDER_MTS_LINK -> "https://my.mts-link.ru/j/123/456"
         else -> "room id"
     }
 }
 
 private fun roomIdLabel(provider: String): String {
-    return if (isJitsiProvider(provider) || LocationConfig.normalizeProvider(provider) == LocationConfig.PROVIDER_VK_CALLS) "Room URL" else "Room ID"
+    return if (isJitsiProvider(provider) || LocationConfig.normalizeProvider(provider) in setOf(LocationConfig.PROVIDER_VK_CALLS, LocationConfig.PROVIDER_MTS_LINK)) "Room URL" else "Room ID"
 }
 
 private fun roomKeyboardType(provider: String): KeyboardType {
-    return if (isJitsiProvider(provider) || LocationConfig.normalizeProvider(provider) == LocationConfig.PROVIDER_VK_CALLS) KeyboardType.Uri else KeyboardType.Text
+    return if (isJitsiProvider(provider) || LocationConfig.normalizeProvider(provider) in setOf(LocationConfig.PROVIDER_VK_CALLS, LocationConfig.PROVIDER_MTS_LINK)) KeyboardType.Uri else KeyboardType.Text
 }
 
 private fun isJitsiProvider(provider: String): Boolean {

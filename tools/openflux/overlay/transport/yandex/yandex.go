@@ -510,6 +510,9 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 func parseDocumentInfo(body, userID string) (YandexDocsInfo, error) {
 	script, _, err := clientConfigScript(body)
 	if err != nil {
+		if isDocumentViewer(body) {
+			return YandexDocsInfo{}, ErrDocumentViewer
+		}
 		return YandexDocsInfo{}, ErrDocumentAccess
 	}
 	var config struct {

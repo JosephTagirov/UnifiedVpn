@@ -30,8 +30,9 @@ internal object DesktopDnsResolver {
     internal fun windowsDnsCommand(powershellExecutable: String): List<String> {
         require(powershellExecutable.isNotBlank()) { "PowerShell executable path is required" }
         val script = """
+            ${'$'}physical = @(Get-NetAdapter -Physical | Where-Object Status -eq Up | ForEach-Object ifIndex)
             ${'$'}routes = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
-              Where-Object { ${'$'}_.InterfaceAlias -ne '${WindowsTunController.TUN_NAME}' } |
+              Where-Object { ${'$'}_.InterfaceIndex -in ${'$'}physical } |
               Sort-Object RouteMetric, InterfaceMetric
             foreach (${'$'}route in ${'$'}routes) {
               ${'$'}servers = (Get-DnsClientServerAddress -InterfaceIndex ${'$'}route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
@@ -161,5 +162,5 @@ internal object DesktopDnsResolver {
     }
 
     private val DEFAULT_ROUTE_DEVICE = Regex("(?:^|\\s)dev\\s+(\\S+)")
-    private const val COMMAND_TIMEOUT_SECONDS = 2L
+    private const val COMMAND_TIMEOUT_SECONDS = 8L
 }

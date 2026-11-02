@@ -24,6 +24,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DesktopNativeProfileIntegrationTest {
@@ -47,7 +48,17 @@ class DesktopNativeProfileIntegrationTest {
 
     @Test
     fun realWindowsOpenFluxProfileProxiesHttpsAndStops() = runBlocking {
-        if (System.getenv(OPENFLUX_TEST_GATE_ENV) != "1") return@runBlocking
+        runOpenFluxProfile()
+    }
+
+    @Test
+    fun realWindowsOpenFluxViewerHasActionableErrorAndStops() = runBlocking {
+        if (System.getenv("RUN_OPENFLUX_VIEWER_TEST") != "1") return@runBlocking
+        runOpenFluxProfile(OpenFluxConnectionErrors.DOCUMENT_VIEWER)
+    }
+
+    private suspend fun runOpenFluxProfile(expectedStartupError: String? = null) {
+        if (System.getenv(OPENFLUX_TEST_GATE_ENV) != "1") return
         require(System.getProperty("os.name").contains("windows", ignoreCase = true))
         val isolatedRoot = requireIsolatedDesktopTestAppData()
         val protectedRoot = privateProfilePath(OPENFLUX_TEST_ROOT_ENV)
@@ -66,11 +77,17 @@ class DesktopNativeProfileIntegrationTest {
         runProfile(
             rawConfig = Files.readString(profilePath).trim(),
             expectedType = VpnProfileConfig.TYPE_OPENFLUX,
-            protectedDataRoot = protectedRoot
+            protectedDataRoot = protectedRoot,
+            expectedStartupError = expectedStartupError
         )
     }
 
-    private suspend fun runProfile(rawConfig: String, expectedType: String, protectedDataRoot: Path? = null) {
+    private suspend fun runProfile(
+        rawConfig: String,
+        expectedType: String,
+        protectedDataRoot: Path? = null,
+        expectedStartupError: String? = null
+    ) {
         if (!System.getProperty("os.name").contains("windows", ignoreCase = true)) return
         requireIsolatedDesktopTestAppData()
         val isOpenFlux = expectedType == VpnProfileConfig.TYPE_OPENFLUX
@@ -86,15 +103,14 @@ class DesktopNativeProfileIntegrationTest {
             assertTrue(repository.importText(rawConfig), "Private profile import failed")
             val imported = assertNotNull(repository.getActiveLocation())
             assertEquals(expectedType, imported.profile.normalizedType)
-            manager.updateSocksProxySettings(
-                DesktopSocksProxySettings(
+            val settings = DesktopSocksProxySettings(
                     port = if (isOpenFlux) unusedLoopbackPort() else 11920,
                     username = "integration-user",
                     password = "integration-password",
                     routingMode = DesktopRoutingMode.LocalSocks,
                     externalRoutingMode = DesktopRoutingMode.LocalSocks
                 )
-            )
+            manager.updateSocksProxySettings(settings)
 
             manager.startVpn()
             withTimeout(START_TRANSITION_TIMEOUT_MS) {
@@ -107,6 +123,27 @@ class DesktopNativeProfileIntegrationTest {
                 manager.status.first { status ->
                     status is VpnStatus.Connected || status is VpnStatus.Error
                 }
+            }
+            if (expectedStartupError != null) {
+                assertTrue(terminalStatus is VpnStatus.Error, "File viewer must not establish a tunnel")
+                assertTrue(terminalStatus.message.contains(expectedStartupError), "Actionable viewer error was lost")
+                assertTrue(manager.logs.value.none { it.contains("OPENFLUX_READY") }, "False native Ready")
+                manager.stopVpn()
+                withTimeout(STOP_TIMEOUT_MS) {
+                    manager.status.first { it is VpnStatus.Disconnected }
+                }
+                assertNull(ownedOpenFluxProcess(requireNotNull(protectedDataRoot)), "Failed OpenFlux child remains alive")
+                val failure = Socket(Proxy.NO_PROXY).use { socket ->
+                    runCatching { socket.connect(InetSocketAddress("127.0.0.1", settings.port), 1_000) }.exceptionOrNull()
+                }
+                assertTrue(failure is ConnectException, "Failed OpenFlux listener remains open")
+                val runtimeDir = protectedDataRoot.resolve("Roaming/Olcbox/runtime")
+                if (Files.exists(runtimeDir)) {
+                    Files.list(runtimeDir).use { files ->
+                        assertTrue(files.noneMatch { it.fileName.toString().startsWith("openflux-") }, "Failed OpenFlux config remains")
+                    }
+                }
+                return
             }
             assertTrue(
                 terminalStatus is VpnStatus.Connected,

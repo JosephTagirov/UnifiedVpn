@@ -1,0 +1,11 @@
+HaGeZi Multi LIGHT domain rules, GPL-3.0 license (HAGEZI-LICENSE.txt).
+Source: https://github.com/hagezi/dns-blocklists
+Snapshot: 5ca6caa2cd85ee3e21b61eeb410eae021f6ec098
+File: wildcard/light-onlydomains.txt
+Modified 2026-11-02: comments removed, sorted/deduplicated and converted to
+sing-box source rule-set version 1. No domains were added.
+Domain count: 78564
+Converted file SHA-256: 6c62f367faf262b65561199a2e654f34bf491d63ac9c03b1c91d36d86706ba50
+Original list SHA-256: c7c91aa4a0ab678443fd0aae6816ade3b7e15cf7c33844eac655fc5fa2f39482
+The list is separate data; the application license is unchanged.
+No warranty. The list is updated with application releases.

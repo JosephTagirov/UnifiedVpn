@@ -50,13 +50,14 @@ import org.olcbox.app.ui.features.locations.LocationItem
 import org.olcbox.app.ui.features.locations.PingsState
 import org.olcbox.app.ui.features.locations.CUSTOM_PROFILE_REORDER_GROUP
 import org.olcbox.app.ui.features.locations.components.LocationRow
+import org.olcbox.app.ui.features.locations.components.PROFILE_ROW_HEIGHT
 import org.olcbox.app.ui.features.locations.components.RefreshButton
 import org.olcbox.app.ui.features.locations.reorderGroupKey
 
 @Composable
 fun LocationSelectorScreen(
     modifier: Modifier = Modifier,
-    showAddOlcRtcButton: Boolean = true,
+    showAddOlcRtcButton: Boolean = false,
     onRefreshClick: (targetLocationIds: List<String>) -> Unit,
     onAddSubscriptionClick: () -> Unit,
     onAddLocationClick: () -> Unit,
@@ -595,6 +596,5 @@ private fun plural(value: Long, unit: String): String {
 private const val MINUTE_MILLIS = 60_000L
 private const val HOUR_MILLIS = 60 * MINUTE_MILLIS
 private const val DAY_MILLIS = 24 * HOUR_MILLIS
-private val PROFILE_ROW_HEIGHT = 76.dp
 private val PROFILE_ROW_SPACING = 12.dp
 private const val EDGE_DRAG_RESISTANCE = 0.2f

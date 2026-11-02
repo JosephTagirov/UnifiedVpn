@@ -3,7 +3,7 @@ package org.olcbox.app.ui.activities
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
-import android.net.VpnService
+import org.olcbox.app.vpn.prepareUnifiedVpnPermission
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -347,7 +347,7 @@ fun AndroidMainScreen(
             return
         }
         val prepIntent = if (connectionMode == AndroidConnectionMode.Tun) {
-            VpnService.prepare(context)
+            prepareUnifiedVpnPermission(context)
         } else {
             null
         }
@@ -444,7 +444,7 @@ fun AndroidMainScreen(
         onNavigate = navigate,
         onToggleClick = {
             val prepIntent = if (connectionMode == AndroidConnectionMode.Tun) {
-                VpnService.prepare(context)
+                prepareUnifiedVpnPermission(context)
             } else {
                 null
             }
@@ -652,9 +652,9 @@ fun AndroidMainScreen(
             onSubscriptionRefreshClick = { url, onFinished ->
                 viewModel.refreshSubscription(url) { updatedCount ->
                     reloadLocationsAfterImport {
-                        viewModel.restartVpnIfRunning()
                         showLocalizedToast(
-                            if (updatedCount > 0) "Subscription updated" else "Subscription not updated"
+                            viewModel.state.value.subscriptionRefreshMessage
+                                ?: if (updatedCount > 0) "Subscription updated" else "Subscription not updated"
                         )
                         onFinished()
                     }
@@ -687,7 +687,7 @@ fun AndroidMainScreen(
             onModeSelected = { mode ->
                 if (mode != connectionMode && homeState.isVpnConnected) {
                     val prepIntent = if (mode == AndroidConnectionMode.Tun) {
-                        VpnService.prepare(context)
+                        prepareUnifiedVpnPermission(context)
                     } else {
                         null
                     }
@@ -702,6 +702,7 @@ fun AndroidMainScreen(
                     vpnManager.selectConnectionMode(mode)
                 }
             },
+            onAdBlockingChanged = vpnManager::setAdBlockingEnabled,
             onProxySettingsSaved = { host, username, password, port ->
                 vpnManager.updateProxySettings(host, username, password, port)
                 if (homeState.isVpnConnected) {

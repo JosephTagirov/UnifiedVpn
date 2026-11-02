@@ -12,6 +12,7 @@ import java.net.URI
 import java.nio.ByteBuffer
 import java.nio.CharBuffer
 import java.nio.charset.CodingErrorAction
+import org.olcbox.app.vpn.OpenFluxConnectionErrors
 
 internal class OpenFluxBrowserCookie(val name: String, val value: String, val domain: String) {
     override fun toString(): String = "OpenFluxBrowserCookie([redacted])"
@@ -129,6 +130,7 @@ internal fun isOpenFluxBrowserUserAgentValid(value: String): Boolean =
     value.length in 1..1024 && value.trim() == value && value.all { it.code in 0x20..0x7e }
 
 internal enum class OpenFluxBrowserFailure(val diagnostic: String) {
+    DocumentViewer(OpenFluxConnectionErrors.DOCUMENT_VIEWER),
     Unsupported("Browser verification requires Android 9 or newer"),
     Failed("Browser verification failed"),
     Timeout("Browser verification timed out"),
@@ -449,14 +451,24 @@ internal class OpenFluxBrowserRequestLimiter(private val nowMillis: () -> Long) 
 }
 
 // Diagnostics return fixed categories, never document keys, editor tokens or HTML.
-internal enum class OpenFluxBrowserPageState { Unknown, Loading, Config, Verification, Other }
+internal enum class OpenFluxBrowserPageState { Unknown, Loading, Config, Verification, FileViewer, Other }
 
 internal fun openFluxBrowserPageState(result: String?): OpenFluxBrowserPageState = when (result) {
     "\"loading\"" -> OpenFluxBrowserPageState.Loading
     "\"config\"" -> OpenFluxBrowserPageState.Config
     "\"verification\"" -> OpenFluxBrowserPageState.Verification
+    "\"file-viewer\"" -> OpenFluxBrowserPageState.FileViewer
     "\"other\"" -> OpenFluxBrowserPageState.Other
     else -> OpenFluxBrowserPageState.Unknown
+}
+
+internal fun openFluxBrowserTimeoutFailure(
+    state: OpenFluxBrowserPageState,
+    navigationFinished: Boolean
+): OpenFluxBrowserFailure = if (navigationFinished && state == OpenFluxBrowserPageState.FileViewer) {
+    OpenFluxBrowserFailure.DocumentViewer
+} else {
+    OpenFluxBrowserFailure.Timeout
 }
 
 internal val OPENFLUX_BROWSER_PAGE_STATE_SCRIPT = """
@@ -467,6 +479,14 @@ internal val OPENFLUX_BROWSER_PAGE_STATE_SCRIPT = """
         if (text.includes('verify your browser') || text.includes('browser verification') ||
             text.includes('\u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0431\u0440\u0430\u0443\u0437\u0435\u0440\u0430') ||
             text.includes('robot') || text.includes('\u0440\u043e\u0431\u043e\u0442') || text.includes('captcha')) return 'verification';
+        const viewers = document.querySelectorAll('script#store-prefetch');
+        if (document.readyState === 'complete' && viewers.length === 1 &&
+            viewers[0].textContent && viewers[0].textContent.length <= 2097152) {
+          const page = JSON.parse(viewers[0].textContent);
+          const resource = page && typeof page.rootResourceId === 'string' && page.resources &&
+            Object.prototype.hasOwnProperty.call(page.resources, page.rootResourceId) && page.resources[page.rootResourceId];
+          if (resource && resource.type === 'file') return 'file-viewer';
+        }
         return document.readyState === 'loading' ? 'loading' : 'other';
       } catch (_) { return 'unknown'; }
     })()

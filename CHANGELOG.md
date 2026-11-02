@@ -2,6 +2,65 @@
 
 Все существенные изменения Unified VPN / Olcbox фиксируются в этом файле.
 
+## [0.1.5 / 2026110204] - Combined build / Объединённая сборка
+
+### Русский
+
+- В единую версию Android и Windows объединены встроенная блокировка рекламы,
+  обновлённые движки и диагностика OpenFlux, а также кнопка «Обновить подписку»
+  на главном экране. Повторное обновление подписки не запускается параллельно;
+  ошибка загрузки сохраняет существующие конфигурации.
+- Сохранены проверка другого активного VPN перед подключением, автоматический
+  выбор системного прокси или SOCKS, VPN/TUN для AWG и VLESS и исправления XHTTP
+  с отдельным адресом загрузки и параметрами `extra`.
+- На Windows при подключении OpenFlux доступно видимое окно проверки Яндекса.
+  Страница просмотра файла распознаётся отдельно и сопровождается подсказкой
+  обновить подписку или получить рабочую ссылку редактора.
+- Известное ограничение: получение конфигурации старого редактора Яндекса
+  подтверждено в одной живой попытке, повтор завершился тайм-аутом. Устойчивое
+  соединение OpenFlux через новые документы и новый редактор Volga ещё не
+  подтверждено. Подробнее: [проверка OpenFlux](docs/testing/openflux-editor-diagnostics-20260929.md).
+
+### English
+
+- Combined Android and Windows packages include local ad blocking, the updated
+  OpenFlux engines and diagnostics, and the home-screen subscription refresh
+  button. Existing external VPN checks, automatic proxy selection, AWG/VLESS
+  TUN support and XHTTP options/download endpoint fixes are retained.
+- Windows foreground OpenFlux connections can show the Yandex verification
+  window. File viewers produce an actionable editor-link error.
+- Known limitation: one live classic-editor bootstrap succeeded, but a repeat
+  timed out. Stable OpenFlux traffic with the new documents and Volga remains
+  unverified. This build does not imply that the Yandex verification issue is
+  fully resolved.
+
+## [0.1.5 / 2026110203] - Local candidate / Локальная сборка
+
+### Русский
+
+- Добавлен встроенный фильтр рекламных и следящих доменов для Android и Windows.
+  Он включён по умолчанию; выключатель находится в настройках подключения и
+  применяется после переподключения. Используется закреплённый локальный список
+  HaGeZi Multi LIGHT с проверкой SHA-256 и лицензией в ресурсах приложения.
+- Рекламные DNS-запросы получают NXDOMAIN, известные рекламные домены блокируются
+  в локальном SOCKS-мосте. Весь разрешённый трафик использует прежний VPN-движок;
+  разделение маршрутов по странам не добавлялось. HTTPS не расшифровывается.
+- Пройдены JVM/Android host-тесты и проверки настоящего sing-box с подставным
+  upstream: домены, поддомены, похожие разрешённые имена, DNS TCP/UDP и остановка.
+  Старый приватный VLESS fixture возвращает ошибку HTTPS как с фильтром, так и
+  без него; успешная живая передача через него не заявляется. Физический Android
+  ещё не проверен. Подробности: [блокировка рекламы](docs/AD_BLOCKING.md).
+
+### English
+
+- Added opt-out local ad/tracker domain filtering to Android and Windows using
+  a bundled, integrity-checked HaGeZi Multi LIGHT snapshot. DNS blocks return
+  NXDOMAIN; allowed traffic retains the existing VPN upstream. No country split
+  routing, HTTPS interception, or new server configuration is introduced.
+- JVM/Android host checks and real sing-box loopback tests pass. The old private
+  VLESS fixture fails HTTPS with filtering enabled and disabled; no live end-to-end
+  or physical Android pass is claimed for this local candidate.
+
 ## [0.0.14 / 2026101301] - 2026-10-13
 
 ### English

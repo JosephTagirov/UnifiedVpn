@@ -207,7 +207,8 @@ internal class OpenFluxBrowserRequestGate(private val clock: () -> Long = { Syst
 internal class DesktopOpenFluxBrowserBootstrap(
     private val log: (String) -> Unit,
     private val verificationTimeoutMs: Long = 45_000,
-    private val launchHelper: (Path) -> Process = ::launchWindowsBrowserHelper
+    private val interactive: Boolean = false,
+    private val launchHelper: ((Path) -> Process)? = null
 ) {
     suspend fun verify(id: String, documentUrl: String, nativeAlive: () -> Boolean): String = coroutineScope {
         val failure = OpenFluxBrowserProtocol.failure(id)
@@ -215,7 +216,7 @@ internal class DesktopOpenFluxBrowserBootstrap(
         val root = Path.of(System.getProperty("java.io.tmpdir")).toAbsolutePath().normalize()
         val directory = root.resolve("unifiedvpn-browser-${UUID.randomUUID().toString().replace("-", "")}")
         val helper = try {
-            launchHelper(root)
+            launchHelper?.invoke(root) ?: launchWindowsBrowserHelper(root, interactive)
         } catch (_: Exception) {
             log("OpenFlux browser verification helper is unavailable")
             return@coroutineScope failure
@@ -310,8 +311,11 @@ internal class DesktopOpenFluxBrowserBootstrap(
     }
 }
 
-private fun launchWindowsBrowserHelper(root: Path): Process =
-    ProcessBuilder(DesktopNativeAssets.resolveWindowsBrowserHelper().toString())
+internal fun desktopOpenFluxBrowserCommand(helper: Path, interactive: Boolean): List<String> =
+    listOf(helper.toString()) + if (interactive) listOf("--interactive") else emptyList()
+
+private fun launchWindowsBrowserHelper(root: Path, interactive: Boolean): Process =
+    ProcessBuilder(desktopOpenFluxBrowserCommand(DesktopNativeAssets.resolveWindowsBrowserHelper(), interactive))
         .redirectError(ProcessBuilder.Redirect.DISCARD)
         .apply {
             environment().keys.filter { it.startsWith("WEBVIEW2_", ignoreCase = true) }

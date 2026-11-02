@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.update
 import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
+import org.olcbox.app.vpn.ProfileLatencySession
+import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.vpn.OpenFluxConnectedTunnel
 import org.olcbox.app.vpn.VpnStatus
 
@@ -38,6 +40,9 @@ object OlcboxVpnState {
     private var activeProxy: SubscriptionFetchProxy? = null
 
     @Volatile
+    private var latencySession: ProfileLatencySession? = null
+
+    @Volatile
     private var openFluxTunnel: OpenFluxConnectedTunnel? = null
 
     private val _session = MutableStateFlow(VpnSessionSnapshot())
@@ -53,15 +58,19 @@ object OlcboxVpnState {
     fun setStatus(
         status: VpnStatus,
         proxy: SubscriptionFetchProxy? = null,
-        profile: VpnProfileConfig? = null
+        profile: VpnProfileConfig? = null,
+        location: LocationConfig = LocationConfig()
     ) {
         activeProxy = proxy.takeIf { status is VpnStatus.Connected }
         openFluxTunnel = if (status is VpnStatus.Connected && proxy != null && profile != null) {
             OpenFluxConnectedTunnel.from(profile, proxy)
         } else null
+        latencySession = if(status is VpnStatus.Connected && profile != null && proxy != null) ProfileLatencySession(profile,location,proxy) else null
         _status.value = status
         _isConnected.value = status is VpnStatus.Connected
     }
+
+    internal fun connectedLatencySession(): ProfileLatencySession? = latencySession.takeIf { _status.value is VpnStatus.Connected }
 
     internal fun connectedProxy(): SubscriptionFetchProxy? = activeProxy
 
@@ -69,6 +78,7 @@ object OlcboxVpnState {
         openFluxTunnel.takeIf { _status.value is VpnStatus.Connected }
 
     internal fun clearConnectedProxy() {
+        latencySession = null
         activeProxy = null
         openFluxTunnel = null
     }
@@ -82,7 +92,7 @@ object OlcboxVpnState {
     }
 
     fun addLog(msg: String) {
-        val sanitized = sanitizeDiagnosticLogLine(msg)
+        val sanitized = org.olcbox.app.data.logging.LogPresentation.entry(msg)
         Log.d(TAG, sanitized)
         _logs.update { (it + sanitized).takeLast(MAX_LOG_ENTRIES) }
     }

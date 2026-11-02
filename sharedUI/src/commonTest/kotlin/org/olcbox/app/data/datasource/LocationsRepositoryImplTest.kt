@@ -236,6 +236,43 @@ class LocationsRepositoryImplTest {
     )
 
     @Test
+    fun importsMixedVlessVkCallsAndOpenFluxWithoutDroppingCompanions() = runTest {
+        val source = FakeLocationsDataSource()
+        val links = "vless://test@example.invalid:443#VLESS\n" +
+            "olcrtc://vkcalls?vp8channel@room-mixed#${"a".repeat(64)}${'$'}VK Calls\n" +
+            openFluxConfig().toUri() + "#OpenFlux"
+        assertTrue(LocationsRepositoryImpl(source).importText(links))
+        val entries = assertNotNull(source.stored).locations
+        assertEquals(listOf("vless", "olcrtc", "openflux"), entries.map { it.profile.normalizedType })
+        assertEquals(LocationConfig.PROVIDER_VK_CALLS, entries[1].location.bypassProvider)
+        assertTrue(entries.all { it.isComplete() })
+    }
+
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    @Test
+    fun refreshesBase64MixedSubscriptionWithOneGroupAndPreservesOtherProfiles() = runTest {
+        val url = "https://example.test/unified/device"
+        val existing = LocationEntry.fromProfile("manual", VpnProfileConfig(
+            type = "vless", name = "Manual", uri = "vless://manual@example.invalid:443"))
+        val old = LocationEntry.fromProfile("old-openflux", VpnProfileConfig(
+            type = "openflux", rawConfig = openFluxConfig().toJson()), subscriptionUrl = url)
+        val source = FakeLocationsDataSource(LocationBundleV4(activeLocationId = "manual", locations = listOf(existing, old)))
+        val links = "vless://test@example.invalid:443#VLESS\n" +
+            "olcrtc://vkcalls?vp8channel@room-mixed#${"a".repeat(64)}${'$'}VK Calls\n" +
+            openFluxConfig().toUri() + "#OpenFlux"
+        val encoded = kotlin.io.encoding.Base64.Default.encode(links.encodeToByteArray())
+        val repository = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(encoded) }),
+            deviceIdentityProvider = StaticIdentityProvider("hwid-test"))
+        assertEquals(1, repository.refreshSubscription(url))
+        val bundle = assertNotNull(source.stored)
+        assertEquals(existing, bundle.locations.first())
+        assertEquals("manual", bundle.activeLocationId)
+        val updated = bundle.locations.filter { it.subscriptionUrl == url }
+        assertEquals(listOf("vless", "olcrtc", "openflux"), updated.map { it.profile.normalizedType })
+        assertEquals(1, updated.map { it.metadata?.subscription?.name }.distinct().size)
+    }
+
+    @Test
     fun exportsAndImportsBundleV5WithActiveLocation() = runTest {
         val first = LocationEntry.from(
             "amsterdam",

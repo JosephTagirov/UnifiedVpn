@@ -1,21 +1,16 @@
 package org.olcbox.app.ui.activities
 
+import android.util.LruCache
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -26,6 +21,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -80,6 +80,7 @@ import androidx.compose.material3.TextButton
 import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
@@ -98,6 +99,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.dismiss
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -164,16 +167,20 @@ internal fun AppSettingsSheet(
     onSplitTunnelProfileSelected: (AndroidSplitTunnelProfile) -> Unit,
     onSplitTunnelModeSelected: (AndroidSplitTunnelMode) -> Unit,
     onSplitTunnelAppToggled: (AndroidSplitTunnelList, String) -> Unit,
-    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit
+    onSplitTunnelAppsSelected: (AndroidSplitTunnelList, Set<String>) -> Unit,
+    onAdBlockingChanged: (Boolean) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
+    var dismissing by remember { mutableStateOf(false) }
     var route by remember(initialRoute) { mutableStateOf(initialRoute.toRoute()) }
     var autoBypassPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var russianBypassPresetEnabled by remember { mutableStateOf(false) }
     var refreshingSubscriptionUrl by remember { mutableStateOf<String?>(null) }
 
     fun closeSheet(afterClose: () -> Unit = {}) {
+        if (dismissing) return
+        dismissing = true
         scope.launch {
             sheetState.hide()
             onDismiss()
@@ -198,175 +205,167 @@ internal fun AppSettingsSheet(
         }
     }
 
+    val sheetDragModifier = rememberSettingsSheetDragModifier {
+        if (!dismissing) { dismissing = true; onDismiss() }
+    }
     ModalBottomSheet(
-        onDismissRequest = { closeSheet() },
+        onDismissRequest = {
+            if (!dismissing) { dismissing = true; onDismiss() }
+        },
+        // Stable window insets and one gesture controller for the handle and nested body.
+        // The controller measures motion before translating any scrollable children.
+        modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+            .then(sheetDragModifier),
+        sheetGesturesEnabled = false,
         sheetState = sheetState,
-        dragHandle = { BottomSheetDefaults.DragHandle() }
+        contentWindowInsets = {
+            WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+        },
+        dragHandle = {
+            BottomSheetDefaults.DragHandle(Modifier.semantics {
+                dismiss { closeSheet(); true }
+            })
+        }
     ) {
-        AnimatedContent(
-            targetState = route,
-            transitionSpec = {
-                fadeIn(
-                    animationSpec = tween(
-                        durationMillis = 180,
-                        delayMillis = 60,
-                        easing = LinearOutSlowInEasing
-                    )
-                ).togetherWith(
-                    fadeOut(
-                        animationSpec = tween(
-                            durationMillis = 90,
-                            easing = FastOutLinearInEasing
-                        )
-                    )
-                ).using(
-                    SizeTransform(
-                        clip = false,
-                        sizeAnimationSpec = { _, _ ->
-                            tween(
-                                durationMillis = 320,
-                                easing = FastOutSlowInEasing
-                            )
+        // A child stretch effect competes with the sheet for the same boundary drag.
+        // Keep nested scrolling enabled, but let the sheet consume the remaining drag.
+        CompositionLocalProvider(LocalOverscrollFactory provides null) {
+        val currentRoute = route
+        when (currentRoute) {
+            AppSettingsRoute.Hub -> AppSettingsHubContent(
+                selectedMode = selectedMode,
+                updateSettings = updateSettings,
+                subscriptionsCount = subscriptions.size,
+                enabled = enabled,
+                onAppearanceClick = { route = AppSettingsRoute.Appearance },
+                onConnectionSettingsClick = { route = AppSettingsRoute.ConnectionSettings },
+                onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
+                onUpdatesClick = { route = AppSettingsRoute.Updates },
+                onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs }
+            )
+
+            AppSettingsRoute.Appearance -> AppearanceSettingsContent(
+                settings = appearanceSettings,
+                onSettingsChanged = onAppearanceSettingsChanged,
+                onBack = { route = AppSettingsRoute.Hub }
+            )
+
+            AppSettingsRoute.ConnectionSettings -> ConnectionSettingsContent(
+                selectedMode = selectedMode,
+                proxySettings = proxySettings,
+                splitTunnelSettings = splitTunnelSettings,
+                enabled = enabled,
+                onBack = { route = AppSettingsRoute.Hub },
+                onConnectionModeClick = { route = AppSettingsRoute.ConnectionMode },
+                onProxySettingsClick = { route = AppSettingsRoute.SocksProxy },
+                onSplitTunnelingClick = { route = AppSettingsRoute.SplitTunneling },
+                onAdBlockingChanged = onAdBlockingChanged
+            )
+
+            AppSettingsRoute.ConnectionMode -> ConnectionModeSettingsContent(
+                selectedMode = selectedMode,
+                enabled = enabled,
+                onBack = { route = AppSettingsRoute.ConnectionSettings },
+                onModeSelected = onModeSelected
+            )
+
+            AppSettingsRoute.SocksProxy -> SocksProxySettingsContent(
+                proxySettings = proxySettings,
+                enabled = enabled,
+                isConnectionActive = isConnectionActive,
+                onBack = { route = AppSettingsRoute.ConnectionSettings },
+                onProxySettingsSaved = onProxySettingsSaved,
+                onProxyPasswordRegenerated = onProxyPasswordRegenerated
+            )
+
+            AppSettingsRoute.SplitTunneling -> SplitTunnelingSettingsContent(
+                settings = splitTunnelSettings,
+                profile = splitTunnelProfile,
+                enabled = enabled,
+                isConnectionActive = isConnectionActive,
+                selectedMode = selectedMode,
+                onBack = { route = AppSettingsRoute.ConnectionSettings },
+                onProfileSelected = onSplitTunnelProfileSelected,
+                onModeSelected = onSplitTunnelModeSelected,
+                onAppListClick = { list -> route = AppSettingsRoute.AppList(list) }
+            )
+
+            is AppSettingsRoute.AppList -> SplitTunnelingAppListContent(
+                list = currentRoute.list,
+                settings = splitTunnelSettings,
+                installedApps = installedApps,
+                enabled = enabled,
+                onBack = { route = AppSettingsRoute.SplitTunneling },
+                onAppToggled = onSplitTunnelAppToggled,
+                onAppsSelected = onSplitTunnelAppsSelected,
+                autoBypassPackages = autoBypassPackages,
+                onAutoBypassPackagesChanged = { autoBypassPackages = it },
+                russianBypassPresetEnabled = russianBypassPresetEnabled,
+                onRussianBypassPresetEnabledChanged = { russianBypassPresetEnabled = it }
+            )
+
+            AppSettingsRoute.ApplicationLogs -> ApplicationLogsSettingsContent(
+                logs = logs,
+                onBack = { route = AppSettingsRoute.Hub },
+                onSaveClick = onSaveLogsClick,
+                onShareClick = onShareLogsClick
+            )
+
+            AppSettingsRoute.SubscriptionsSharing -> SubscriptionsSharingSettingsContent(
+                subscriptions = subscriptions,
+                onBack = { route = AppSettingsRoute.Hub },
+                onCopyConfigClick = onCopyConfigClick,
+                onCreateFriendPackageClick = onCreateFriendPackageClick,
+                onSubscriptionClick = { item ->
+                    route = AppSettingsRoute.SubscriptionDetails(item.url)
+                }
+            )
+
+            is AppSettingsRoute.SubscriptionDetails -> {
+                val item = subscriptions.firstOrNull { it.url == currentRoute.subscriptionUrl }
+                if (item == null) {
+                    SubscriptionsSharingSettingsContent(
+                        subscriptions = subscriptions,
+                        onBack = { route = AppSettingsRoute.Hub },
+                        onCopyConfigClick = onCopyConfigClick,
+                        onCreateFriendPackageClick = onCreateFriendPackageClick,
+                        onSubscriptionClick = { selected ->
+                            route = AppSettingsRoute.SubscriptionDetails(selected.url)
                         }
                     )
-                )
-            },
-            label = "appSettingsRoute"
-        ) { currentRoute ->
-            when (currentRoute) {
-                AppSettingsRoute.Hub -> AppSettingsHubContent(
-                    selectedMode = selectedMode,
-                    updateSettings = updateSettings,
-                    subscriptionsCount = subscriptions.size,
-                    enabled = enabled,
-                    onAppearanceClick = { route = AppSettingsRoute.Appearance },
-                    onConnectionSettingsClick = { route = AppSettingsRoute.ConnectionSettings },
-                    onSubscriptionsSharingClick = { route = AppSettingsRoute.SubscriptionsSharing },
-                    onUpdatesClick = { route = AppSettingsRoute.Updates },
-                    onApplicationLogsClick = { route = AppSettingsRoute.ApplicationLogs }
-                )
-
-                AppSettingsRoute.Appearance -> AppearanceSettingsContent(
-                    settings = appearanceSettings,
-                    onSettingsChanged = onAppearanceSettingsChanged,
-                    onBack = { route = AppSettingsRoute.Hub }
-                )
-
-                AppSettingsRoute.ConnectionSettings -> ConnectionSettingsContent(
-                    selectedMode = selectedMode,
-                    proxySettings = proxySettings,
-                    splitTunnelSettings = splitTunnelSettings,
-                    enabled = enabled,
-                    onBack = { route = AppSettingsRoute.Hub },
-                    onConnectionModeClick = { route = AppSettingsRoute.ConnectionMode },
-                    onProxySettingsClick = { route = AppSettingsRoute.SocksProxy },
-                    onSplitTunnelingClick = { route = AppSettingsRoute.SplitTunneling }
-                )
-
-                AppSettingsRoute.ConnectionMode -> ConnectionModeSettingsContent(
-                    selectedMode = selectedMode,
-                    enabled = enabled,
-                    onBack = { route = AppSettingsRoute.ConnectionSettings },
-                    onModeSelected = onModeSelected
-                )
-
-                AppSettingsRoute.SocksProxy -> SocksProxySettingsContent(
-                    proxySettings = proxySettings,
-                    enabled = enabled,
-                    isConnectionActive = isConnectionActive,
-                    onBack = { route = AppSettingsRoute.ConnectionSettings },
-                    onProxySettingsSaved = onProxySettingsSaved,
-                    onProxyPasswordRegenerated = onProxyPasswordRegenerated
-                )
-
-                AppSettingsRoute.SplitTunneling -> SplitTunnelingSettingsContent(
-                    settings = splitTunnelSettings,
-                    profile = splitTunnelProfile,
-                    enabled = enabled,
-                    isConnectionActive = isConnectionActive,
-                    selectedMode = selectedMode,
-                    onBack = { route = AppSettingsRoute.ConnectionSettings },
-                    onProfileSelected = onSplitTunnelProfileSelected,
-                    onModeSelected = onSplitTunnelModeSelected,
-                    onAppListClick = { list -> route = AppSettingsRoute.AppList(list) }
-                )
-
-                is AppSettingsRoute.AppList -> SplitTunnelingAppListContent(
-                    list = currentRoute.list,
-                    settings = splitTunnelSettings,
-                    installedApps = installedApps,
-                    enabled = enabled,
-                    onBack = { route = AppSettingsRoute.SplitTunneling },
-                    onAppToggled = onSplitTunnelAppToggled,
-                    onAppsSelected = onSplitTunnelAppsSelected,
-                    autoBypassPackages = autoBypassPackages,
-                    onAutoBypassPackagesChanged = { autoBypassPackages = it },
-                    russianBypassPresetEnabled = russianBypassPresetEnabled,
-                    onRussianBypassPresetEnabledChanged = { russianBypassPresetEnabled = it }
-                )
-
-                AppSettingsRoute.ApplicationLogs -> ApplicationLogsSettingsContent(
-                    logs = logs,
-                    onBack = { route = AppSettingsRoute.Hub },
-                    onSaveClick = onSaveLogsClick,
-                    onShareClick = onShareLogsClick
-                )
-
-                AppSettingsRoute.SubscriptionsSharing -> SubscriptionsSharingSettingsContent(
-                    subscriptions = subscriptions,
-                    onBack = { route = AppSettingsRoute.Hub },
-                    onCopyConfigClick = onCopyConfigClick,
-                    onCreateFriendPackageClick = onCreateFriendPackageClick,
-                    onSubscriptionClick = { item ->
-                        route = AppSettingsRoute.SubscriptionDetails(item.url)
-                    }
-                )
-
-                is AppSettingsRoute.SubscriptionDetails -> {
-                    val item = subscriptions.firstOrNull { it.url == currentRoute.subscriptionUrl }
-                    if (item == null) {
-                        SubscriptionsSharingSettingsContent(
-                            subscriptions = subscriptions,
-                            onBack = { route = AppSettingsRoute.Hub },
-                            onCopyConfigClick = onCopyConfigClick,
-                            onCreateFriendPackageClick = onCreateFriendPackageClick,
-                            onSubscriptionClick = { selected ->
-                                route = AppSettingsRoute.SubscriptionDetails(selected.url)
+                } else {
+                    SubscriptionDetailsSettingsContent(
+                        item = item,
+                        isRefreshing = refreshingSubscriptionUrl == item.url,
+                        onBack = { route = AppSettingsRoute.SubscriptionsSharing },
+                        onShareClick = { onSubscriptionShareClick(item.url) },
+                        onRefreshClick = {
+                            refreshingSubscriptionUrl = item.url
+                            onSubscriptionRefreshClick(item.url) {
+                                refreshingSubscriptionUrl = null
                             }
-                        )
-                    } else {
-                        SubscriptionDetailsSettingsContent(
-                            item = item,
-                            isRefreshing = refreshingSubscriptionUrl == item.url,
-                            onBack = { route = AppSettingsRoute.SubscriptionsSharing },
-                            onShareClick = { onSubscriptionShareClick(item.url) },
-                            onRefreshClick = {
-                                refreshingSubscriptionUrl = item.url
-                                onSubscriptionRefreshClick(item.url) {
-                                    refreshingSubscriptionUrl = null
-                                }
-                            },
-                            onRefreshIntervalChanged = { intervalMs ->
-                                onSubscriptionRefreshIntervalChanged(item.url, intervalMs)
-                            },
-                            onDeleteClick = {
-                                onSubscriptionDeleteClick(item.url)
-                                route = AppSettingsRoute.SubscriptionsSharing
-                            }
-                        )
-                    }
+                        },
+                        onRefreshIntervalChanged = { intervalMs ->
+                            onSubscriptionRefreshIntervalChanged(item.url, intervalMs)
+                        },
+                        onDeleteClick = {
+                            onSubscriptionDeleteClick(item.url)
+                            route = AppSettingsRoute.SubscriptionsSharing
+                        }
+                    )
                 }
-
-                AppSettingsRoute.Updates -> UpdatesSettingsContent(
-                    settings = updateSettings,
-                    statusText = updateStatusText,
-                    downloadProgress = updateDownloadProgress,
-                    onBack = { route = AppSettingsRoute.Hub },
-                    onIntervalSelected = onUpdateIntervalSelected,
-                    onCheckUpdatesClick = onCheckUpdatesClick
-                )
             }
+
+            AppSettingsRoute.Updates -> UpdatesSettingsContent(
+                settings = updateSettings,
+                statusText = updateStatusText,
+                downloadProgress = updateDownloadProgress,
+                onBack = { route = AppSettingsRoute.Hub },
+                onIntervalSelected = onUpdateIntervalSelected,
+                onCheckUpdatesClick = onCheckUpdatesClick
+            )
         }
+    }
     }
 }
 
@@ -470,7 +469,8 @@ private fun ConnectionSettingsContent(
     onBack: () -> Unit,
     onConnectionModeClick: () -> Unit,
     onProxySettingsClick: () -> Unit,
-    onSplitTunnelingClick: () -> Unit
+    onSplitTunnelingClick: () -> Unit,
+    onAdBlockingChanged: (Boolean) -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -509,6 +509,7 @@ private fun ConnectionSettingsContent(
                 enabled = enabled,
                 onClick = onSplitTunnelingClick
             )
+            org.olcbox.app.ui.components.AdBlockingToggle(proxySettings.blockAds, onAdBlockingChanged)
         }
     }
 }
@@ -2719,27 +2720,30 @@ private fun EmptyAppsState(
     }
 }
 
+private object SplitTunnelIconCache {
+    val icons = LruCache<String, ImageBitmap>(64)
+    val decoding = Semaphore(2)
+}
+
 @Composable
 private fun rememberAppIcon(packageName: String): ImageBitmap? {
     val context = LocalContext.current.applicationContext
-    val iconState = produceState<ImageBitmap?>(initialValue = null, packageName, context) {
-        value = withContext(Dispatchers.Default) {
-            runCatching {
-                context.packageManager
-                    .getApplicationIcon(packageName)
-                    .toImageBitmap(sizePx = 96)
-            }.getOrNull()
+    val iconState = produceState(SplitTunnelIconCache.icons.get(packageName), packageName, context) {
+        value = withContext(Dispatchers.IO) {
+            SplitTunnelIconCache.decoding.withPermit {
+                SplitTunnelIconCache.icons.get(packageName) ?: runCatching {
+                    context.packageManager.getApplicationIcon(packageName).mutate().toImageBitmap(96)
+                }.getOrNull()?.also { SplitTunnelIconCache.icons.put(packageName, it) }
+            }
         }
     }
     return iconState.value
 }
 
 private fun Drawable.toImageBitmap(sizePx: Int): ImageBitmap {
-    val width = intrinsicWidth.takeIf { it > 0 } ?: sizePx
-    val height = intrinsicHeight.takeIf { it > 0 } ?: sizePx
-    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val bitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-    setBounds(0, 0, canvas.width, canvas.height)
+    setBounds(0, 0, sizePx, sizePx)
     draw(canvas)
     return bitmap.asImageBitmap()
 }

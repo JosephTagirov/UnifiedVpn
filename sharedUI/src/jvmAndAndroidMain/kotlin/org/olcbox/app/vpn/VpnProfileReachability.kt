@@ -69,6 +69,8 @@ internal object VpnProfileReachability {
         )
     }
 
+    internal fun wireGuardText(profile: VpnProfileConfig): String? = listOfNotNull(profile.rawConfig,profile.uri).firstNotNullOfOrNull { extractWireGuardConfig(it) }
+
     private fun tcpPing(endpoint: VpnProfileEndpoint): Long? {
         val startedAt = System.nanoTime()
         return runCatching {

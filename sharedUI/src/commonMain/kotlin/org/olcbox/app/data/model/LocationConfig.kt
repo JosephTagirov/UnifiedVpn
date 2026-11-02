@@ -52,6 +52,9 @@ data class LocationConfig(
 
     fun isVkCalls(): Boolean = normalizeProvider(bypassProvider) == PROVIDER_VK_CALLS
 
+    fun usesModernRtcEngine(): Boolean = normalizeProvider(bypassProvider) in
+        setOf(PROVIDER_VK_CALLS, PROVIDER_SALUTE_JAZZ, PROVIDER_MTS_LINK)
+
     fun displayName(): String = name.ifBlank { id }
 
     fun providerName(): String = providerDisplayName(bypassProvider)
@@ -64,6 +67,8 @@ data class LocationConfig(
         const val PROVIDER_WB_STREAM = "wbstream"
         const val PROVIDER_JITSI = "jitsi"
         const val PROVIDER_VK_CALLS = "vkcalls"
+        const val PROVIDER_SALUTE_JAZZ = "salutejazz"
+        const val PROVIDER_MTS_LINK = "mtslink"
         const val DEFAULT_BYPASS_PROVIDER = PROVIDER_WB_STREAM
 
         const val TRANSPORT_DATACHANNEL = "datachannel"
@@ -81,7 +86,9 @@ data class LocationConfig(
             PROVIDER_TELEMOST,
             PROVIDER_WB_STREAM,
             PROVIDER_JITSI,
-            PROVIDER_VK_CALLS
+            PROVIDER_VK_CALLS,
+            PROVIDER_SALUTE_JAZZ,
+            PROVIDER_MTS_LINK
         )
 
         val supportedTransports = listOf(
@@ -94,7 +101,8 @@ data class LocationConfig(
             val providerTransports = when (normalizeProvider(provider)) {
                 PROVIDER_TELEMOST -> listOf(TRANSPORT_VP8CHANNEL, TRANSPORT_SEICHANNEL)
                 PROVIDER_JITSI -> listOf(TRANSPORT_DATACHANNEL, TRANSPORT_VP8CHANNEL)
-                PROVIDER_VK_CALLS -> listOf(TRANSPORT_VP8CHANNEL)
+                PROVIDER_VK_CALLS, PROVIDER_MTS_LINK -> listOf(TRANSPORT_VP8CHANNEL)
+                PROVIDER_SALUTE_JAZZ -> listOf(TRANSPORT_DATACHANNEL)
                 else -> supportedTransports
             }
             return providerTransports.filter(::isTransportSupportedOnCurrentPlatform)
@@ -107,6 +115,8 @@ data class LocationConfig(
                 PROVIDER_WB_STREAM, "wbstream", "wb-stream", "wildberries" -> PROVIDER_WB_STREAM
                 PROVIDER_JITSI, "jitsi-meet", "jitsi_meet", "meet" -> PROVIDER_JITSI
                 PROVIDER_VK_CALLS, "vk", "vk_calls", "vk-calls" -> PROVIDER_VK_CALLS
+                PROVIDER_SALUTE_JAZZ, "salute_jazz", "salute-jazz" -> PROVIDER_SALUTE_JAZZ
+                PROVIDER_MTS_LINK, "mts", "mts_link", "mts-link" -> PROVIDER_MTS_LINK
                 else -> DEFAULT_BYPASS_PROVIDER
             }
         }
@@ -124,7 +134,7 @@ data class LocationConfig(
         }
 
         fun defaultTransportForProvider(provider: String): String {
-            return if (normalizeProvider(provider) == PROVIDER_JITSI) {
+            return if (normalizeProvider(provider) in setOf(PROVIDER_JITSI, PROVIDER_SALUTE_JAZZ)) {
                 TRANSPORT_DATACHANNEL
             } else {
                 DEFAULT_TRANSPORT
@@ -147,6 +157,8 @@ data class LocationConfig(
                 PROVIDER_WB_STREAM -> "WB Stream"
                 PROVIDER_JITSI -> "Jitsi"
                 PROVIDER_VK_CALLS -> "VK Calls"
+                PROVIDER_SALUTE_JAZZ -> "Салют Jazz"
+                PROVIDER_MTS_LINK -> "МТС Линк"
                 else -> "WB Stream"
             }
         }
@@ -154,10 +166,10 @@ data class LocationConfig(
         fun transportDisplayName(transport: String, provider: String? = null): String {
             return when (normalizeTransport(transport, provider ?: DEFAULT_BYPASS_PROVIDER)) {
                 TRANSPORT_DATACHANNEL -> "DataChannel"
-                TRANSPORT_VP8CHANNEL -> if (normalizeProvider(provider.orEmpty()) == PROVIDER_JITSI) {
-                    "VP8 (Experimental)"
-                } else {
-                    "VP8"
+                TRANSPORT_VP8CHANNEL -> when (normalizeProvider(provider.orEmpty())) {
+                    PROVIDER_JITSI -> "VP8 (Experimental)"
+                    PROVIDER_MTS_LINK -> "VP9"
+                    else -> "VP8"
                 }
                 TRANSPORT_SEICHANNEL -> "SEI"
                 else -> "VP8"
@@ -338,6 +350,10 @@ data class LocationEndpointConfig(
 
 @Serializable
 data class SubscriptionMetadata(
+    @SerialName("access_expires")
+    val accessExpires: Long? = null,
+    @SerialName("client_portal_url")
+    val clientPortalUrl: String? = null,
     val name: String? = null,
     val update: String? = null,
     val refresh: String? = null,
@@ -364,6 +380,8 @@ data class SubscriptionMetadata(
         val migratedInterval = updateIntervalMs
             ?: updateIntervalHours?.toLong()?.times(HOUR_MS)
         return copy(
+            accessExpires = accessExpires?.takeIf { it >= 0 },
+            clientPortalUrl = clientPortalUrl.cleanMetadataValue(),
             name = name.cleanMetadataValue(),
             update = update.cleanMetadataValue(),
             refresh = refresh.cleanMetadataValue(),
@@ -406,7 +424,8 @@ data class SubscriptionMetadata(
     }
 
     fun isEmpty(): Boolean {
-        return name.isNullOrBlank() &&
+        return accessExpires == null && clientPortalUrl.isNullOrBlank() &&
+                name.isNullOrBlank() &&
                 update.isNullOrBlank() &&
                 refresh.isNullOrBlank() &&
                 color.isNullOrBlank() &&

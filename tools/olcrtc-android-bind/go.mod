@@ -2,7 +2,7 @@ module unified-vpn.local/olcrtc-bind
 
 go 1.26.3
 
-require github.com/openlibrecommunity/olcrtc v0.0.2-0.20260827214920-d7a00da5242f
+require github.com/openlibrecommunity/olcrtc v0.13.0
 
 require unified-vpn.local/olcrtc-tls v0.0.1
 
@@ -67,6 +67,7 @@ require (
 	github.com/prometheus/procfs v0.20.1 // indirect
 	github.com/puzpuzpuz/xsync/v4 v4.5.0 // indirect
 	github.com/redis/go-redis/v9 v9.20.0 // indirect
+	github.com/theodorsm/covert-dtls v1.5.2-0.20260923053106-38d973a9488c // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
 	github.com/twitchtv/twirp v8.1.3+incompatible // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
@@ -100,3 +101,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
+
+replace github.com/openlibrecommunity/olcrtc => github.com/ghostlane-project/olcrtc v0.13.0

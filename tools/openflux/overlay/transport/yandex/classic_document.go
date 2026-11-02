@@ -299,6 +299,10 @@ func allowedDocumentURL(raw string) bool {
 // Parse HTML with browser quoting/case rules, excluding inert template content.
 // Duplicate matching scripts fail; duplicate attributes use the first value.
 func clientConfigScript(body string) (script string, found bool, err error) {
+	return documentScript(body, "client-config")
+}
+
+func documentScript(body, id string) (script string, found bool, err error) {
 	if len(body) > 4*1024*1024 {
 		return "", false, ErrDocumentAccess
 	}
@@ -315,7 +319,7 @@ func clientConfigScript(body string) (script string, found bool, err error) {
 			match := false
 			for _, attr := range node.Attr {
 				if attr.Namespace == "" && attr.Key == "id" {
-					match = attr.Val == "client-config"
+					match = attr.Val == id
 					break
 				}
 			}
@@ -345,6 +349,30 @@ func clientConfigScript(body string) (script string, found bool, err error) {
 		return "", found, ErrDocumentAccess
 	}
 	return script, true, nil
+}
+
+// A public file viewer can include a generic sign-in link and even write rights.
+// Neither proves that anonymous editor metadata is available. Diagnose this page
+// separately, without treating it as a login challenge or authorizing a tunnel.
+func isDocumentViewer(body string) bool {
+	if _, found, _ := clientConfigScript(body); found {
+		return false
+	}
+	script, _, err := documentScript(body, "store-prefetch")
+	if err != nil {
+		return false
+	}
+	var page struct {
+		RootResourceID string `json:"rootResourceId"`
+		Resources      map[string]struct {
+			Type string `json:"type"`
+		} `json:"resources"`
+	}
+	if json.Unmarshal([]byte(script), &page) != nil || page.RootResourceID == "" {
+		return false
+	}
+	resource, found := page.Resources[page.RootResourceID]
+	return found && resource.Type == "file"
 }
 
 func classicDocumentInfo(value *ClassicDocument, userID string) YandexDocsInfo {

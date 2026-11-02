@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.vpn.DesktopSocksProxySettings
 import java.nio.file.Files
+import java.net.URLEncoder
 import java.nio.file.Path
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -19,6 +20,49 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class DesktopXrayConfigTest {
+    @Test
+    fun preservesXhttpExtraAndFindsBothEndpoints() {
+        val extra = """{"headers":{"X-Test":"yes"},"xmux":{"maxConcurrency":"16-32"},"downloadSettings":{"address":"download.example.com","port":443,"network":"xhttp","security":"tls","xhttpSettings":{"path":"/download"}}}"""
+        val profile = profile("type=xhttp&security=tls&extra=" + URLEncoder.encode(extra, Charsets.UTF_8))
+        val xhttp = streamSettings(profile).getValue("xhttpSettings").jsonObject
+        assertEquals(Json.parseToJsonElement(extra), xhttp.getValue("extra"))
+        assertEquals(listOf("vpn.example.com", "download.example.com"), DesktopXrayConfig.endpointHosts(profile))
+    }
+
+    @Test
+    fun tunPinsBothXhttpEndpointsAndPreservesDownloadIdentity() {
+        for (custom in listOf(false, true)) {
+            val identity = if (custom) "\"tlsSettings\":{\"serverName\":\"tls.example.com\"}," else ""
+            val httpHost = if (custom) ",\"host\":\"http.example.com\"" else ""
+            val extra = """{"downloadSettings":{"address":"download.example.com","port":443,"network":"xhttp","security":"tls",${identity}"xhttpSettings":{"path":"/download"$httpHost}}}"""
+            val profile = profile("type=xhttp&security=tls&extra=" + URLEncoder.encode(extra, Charsets.UTF_8))
+            val root = Json.parseToJsonElement(DesktopXrayConfig.build(profile, DesktopSocksProxySettings(),
+                endpointAddress = "203.0.113.42", downloadEndpointAddress = "198.51.100.42")).jsonObject
+            val stream = root.getValue("outbounds").jsonArray.first().jsonObject.getValue("streamSettings").jsonObject
+            val download = stream.getValue("xhttpSettings").jsonObject.getValue("extra").jsonObject
+                .getValue("downloadSettings").jsonObject
+            assertEquals("198.51.100.42", download.getValue("address").jsonPrimitive.content)
+            assertEquals(if (custom) "tls.example.com" else "download.example.com",
+                download.getValue("tlsSettings").jsonObject.getValue("serverName").jsonPrimitive.content)
+            assertEquals(if (custom) "http.example.com" else "download.example.com",
+                download.getValue("xhttpSettings").jsonObject.getValue("host").jsonPrimitive.content)
+            assertEquals("/download", download.getValue("xhttpSettings").jsonObject.getValue("path").jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun acceptsUppercaseVlessScheme() {
+        val profile = profile("type=xhttp").let { it.copy(uri = it.uri!!.replaceFirst("vless://", "VLESS://")) }
+        assertEquals("vpn.example.com", DesktopXrayConfig.endpointHost(profile))
+    }
+
+    @Test
+    fun rejectsMalformedXhttpExtraBeforeEngineStartup() {
+        assertFailsWith<IllegalArgumentException> {
+            DesktopXrayConfig.build(profile("type=xhttp&extra=%5B1%5D"), DesktopSocksProxySettings())
+        }
+    }
+
     @Test
     fun tunPinsEndpointWithoutChangingTlsIdentityOrHttpHost() {
         for (custom in listOf(false, true)) {
@@ -241,6 +285,23 @@ class DesktopXrayConfigTest {
         val publicKey = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { 1 })
         val reality = "security=reality&sni=reality.example.com&fp=chrome&pbk=$publicKey&sid=0123456789abcdef"
         val configPath = Files.createTempFile("unified-vpn-xray-synthetic-test-", ".json")
+        val diagnosticPath = Files.createTempFile("unified-vpn-xray-synthetic-output-", ".txt")
+        fun validate(query: String, endpoint: String): Pair<Int, String> {
+            val candidate = profile(query)
+            Files.writeString(configPath, DesktopXrayConfig.build(
+                candidate, DesktopSocksProxySettings(port = 10920, username = "test", password = "test"),
+                endpointAddress = endpoint,
+                downloadEndpointAddress = "198.51.100.42".takeIf { DesktopXrayConfig.downloadEndpointHost(candidate) != null }
+            ))
+            val process = ProcessBuilder(xrayPath, "run", "-test", "-config", configPath.toString())
+                .redirectErrorStream(true).redirectOutput(diagnosticPath.toFile()).start()
+            try {
+                assertTrue(process.waitFor(20, TimeUnit.SECONDS), "Xray synthetic config validation timed out")
+                return process.exitValue() to Files.readString(diagnosticPath)
+            } finally {
+                if (process.isAlive) process.destroyForcibly()
+            }
+        }
         try {
             for (query in listOf(
                 "", "type=tcp&security=tls", "type=raw", "type=ws&security=tls&path=%2Fws",
@@ -248,23 +309,23 @@ class DesktopXrayConfigTest {
                 "type=grpc&security=tls&serviceName=test&mode=multi&authority=grpc.example.com",
                 "type=grpc&serviceName=test&mode=gun", "type=xhttp&security=tls&mode=auto",
                 "type=splithttp&path=%2Fsplit", "type=tcp&$reality&flow=xtls-rprx-vision",
-                "type=grpc&$reality&serviceName=test"
+                "type=grpc&$reality&serviceName=test",
+                "type=xhttp&security=tls&extra=" + URLEncoder.encode(
+                    """{"headers":{"X-Test":"yes"},"downloadSettings":{"address":"download.example.com","port":443,"network":"xhttp","security":"tls","xhttpSettings":{"path":"/download"}}}""", Charsets.UTF_8)
             )) {
-                Files.writeString(configPath, DesktopXrayConfig.build(
-                    profile(query), DesktopSocksProxySettings(port = 10920, username = "test", password = "test"),
-                    endpointAddress = "203.0.113.42"
-                ))
-                val process = ProcessBuilder(xrayPath, "run", "-test", "-config", configPath.toString())
-                    .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start()
-                try {
-                    assertTrue(process.waitFor(20, TimeUnit.SECONDS), "Xray synthetic config validation timed out")
-                    assertEquals(0, process.exitValue(), "Xray rejected synthetic config: $query")
-                } finally {
-                    if (process.isAlive) process.destroyForcibly()
+                val encrypted = query.contains("security=tls") || query.contains("security=reality")
+                // Xray 26.10.31 permits unencrypted VLESS only on private endpoints.
+                val (code, output) = validate(query, if (encrypted) "203.0.113.42" else "10.0.0.42")
+                assertEquals(0, code, "Xray rejected synthetic config: $query: $output")
+                if (!encrypted) {
+                    val (publicCode, publicOutput) = validate(query, "203.0.113.42")
+                    assertTrue(publicCode != 0, "Xray must reject public VLESS without encryption")
+                    assertTrue(publicOutput.contains("without TLS or other encryption is prohibited"))
                 }
             }
         } finally {
             Files.deleteIfExists(configPath)
+            Files.deleteIfExists(diagnosticPath)
         }
     }
 

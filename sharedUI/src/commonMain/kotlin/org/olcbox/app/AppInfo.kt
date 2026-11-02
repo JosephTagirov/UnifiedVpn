@@ -32,5 +32,5 @@ object CurrentAppInfo {
             "awg/${value.awgCoreSha.take(12)} xray/${value.xrayVersion}/${value.xraySha.take(12)} " +
             "openflux/${value.openFluxSha.take(12)} " +
             "openflux-session/${OpenFluxSessionProfileConfig.CORE_REVISION.take(12)} " +
-            "vkcalls/403edd409011"
+            "vkcalls/5b1e6172a9f6"
 }

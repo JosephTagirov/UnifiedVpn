@@ -8,6 +8,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeoutOrNull
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.vpn.VkCallsRuntimeConfig
+import org.olcbox.app.vpn.androidRtcDnsEndpoint
 import org.olcbox.app.vpn.retryOlcRtcStartup
 import java.io.File
 import java.io.IOException
@@ -19,16 +20,18 @@ import kotlin.concurrent.thread
 internal fun createVkCallsVpnEngine(
     context: Context, location: LocationConfig, port: Int,
     user: String, password: String, log: (String) -> Unit
-): SocksBackedVpnEngine = VkCallsVpnEngine(location, port, user, password, log, prepareRuntime = {
+): SocksBackedVpnEngine = VkCallsVpnEngine(location, port, user, password, log,
+    dnsServer = androidRtcDnsEndpoint(context, location.dnsServer), prepareRuntime = {
+    val label = location.providerName()
     val executable = File(context.applicationInfo.nativeLibraryDir, "libvkcalls.so")
-    check(executable.isFile && executable.canExecute()) { "VK Calls executable is missing for this Android ABI" }
+    check(executable.isFile && executable.canExecute()) { "$label executable is missing for this Android ABI" }
     val directory = File(context.noBackupFilesDir, "engines/vkcalls")
-    check(directory.isDirectory || directory.mkdirs()) { "VK Calls working directory is unavailable" }
+    check(directory.isDirectory || directory.mkdirs()) { "$label working directory is unavailable" }
     val config = File.createTempFile("client-", ".json", directory)
     try {
         check(config.setReadable(false, false) && config.setWritable(false, false) &&
             config.setReadable(true, true) && config.setWritable(true, true)) {
-            "VK Calls configuration permissions could not be set"
+            "$label configuration permissions could not be set"
         }
         VkCallsRuntimeFiles(executable, directory, config)
     } catch (error: Throwable) {
@@ -59,9 +62,11 @@ internal class VkCallsVpnEngine(
             catch (_: IOException) { /* Closing stdout is part of bounded process shutdown. */ }
         }
     },
-    private val readyTimeoutMillis: Long = 90_000
+    private val readyTimeoutMillis: Long = 90_000,
+    private val dnsServer: String = location.dnsServer.ifBlank { "1.1.1.1:53" }
 ) : SocksBackedVpnEngine {
-    override val profileType = VkCallsRuntimeConfig.ENGINE_TYPE
+    override val profileType = VkCallsRuntimeConfig.engineType(location)
+    private val label = location.providerName()
     override val socksHost = "127.0.0.1"
     private val lock = Any()
     private val generation = AtomicLong()
@@ -72,12 +77,11 @@ internal class VkCallsVpnEngine(
     override suspend fun start() {
         stop()
         val token = generation.incrementAndGet()
-        val config = VkCallsRuntimeConfig.build(
-            location, socksPort, user, password, location.dnsServer.ifBlank { "1.1.1.1:53" }
-        )
+        log("$label: using RTC signaling DNS $dnsServer")
+        val config = VkCallsRuntimeConfig.build(location, socksPort, user, password, dnsServer)
         retryOlcRtcStartup(
             isCurrent = { generation.get() == token },
-            onRetry = { retry, _ -> log("VK Calls temporary start failure; retry $retry/3") }
+            onRetry = { retry, _ -> log("$label temporary start failure; retry $retry/3") }
         ) { startAttempt(token, config) }
     }
 
@@ -104,7 +108,7 @@ internal class VkCallsVpnEngine(
                     val safe = VkCallsRuntimeConfig.sanitizedOutput(line, location, user, password)
                     if (line.contains("unknown authority", ignoreCase = true) ||
                         line.contains("validate config", ignoreCase = true)) started.failure = safe
-                    log("VK Calls: " + safe)
+                    log("$label: " + safe)
                 }
             }
             val ready = withTimeoutOrNull(readyTimeoutMillis) {

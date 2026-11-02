@@ -50,6 +50,22 @@ dependencies {
     implementation(libs.zxing.core)
 }
 
+abstract class CopyNativeBinaryTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val sourceFile: RegularFileProperty
+
+    @get:OutputFile
+    abstract val outputFile: RegularFileProperty
+
+    @TaskAction
+    fun copyBinary() {
+        val target = outputFile.get().asFile.toPath()
+        Files.createDirectories(target.parent)
+        Files.copy(sourceFile.get().asFile.toPath(), target, StandardCopyOption.REPLACE_EXISTING)
+    }
+}
+
 abstract class DownloadFileTask : DefaultTask() {
     @get:Input
     abstract val sourceUrl: Property<String>
@@ -513,19 +529,19 @@ val xrayVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("26.3.27
 val expectedAwgCoreCommit = providers.gradleProperty("olcbox.awgCoreSha")
 val expectedXrayCommit = providers.gradleProperty("olcbox.xraySha")
 val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts")
+    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts-wrapper8-20261102-viewer")
 )
 val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
 val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
 val expectedOpenFluxWrapper = 8
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
 val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026101102")
+    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026110105")
 )
 val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
-val expectedOpenFluxSessionUpstream = "7336e1b9d940fc09d00bbf545d15b9437487aa10"
+val expectedOpenFluxSessionUpstream = "f492a1a33b7581ad8f88118f97e0b866adda3cdc"
 val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
-val expectedOpenFluxSessionVersion = "unified-openflux-session 1 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 3 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 val singBoxAwgRepoDir = providers.environmentVariable("SING_BOX_AWG_REPO")
     .map { rootProject.file(it) }
     .orElse(rootProject.layout.projectDirectory.dir(".downloads/sing-box-awg/source").asFile)
@@ -929,44 +945,39 @@ if (currentBuildOs.isWindows) {
         it.file("native/openflux-windows-amd64.exe")
     }
 
-    val copyOpenFluxWindowsAmd64 = tasks.register<Copy>("copyOpenFluxWindowsAmd64") {
-        from(openFluxWindowsSource)
-        into(openFluxWindowsOutput.map { it.asFile.parentFile })
-        rename { "openflux-windows-amd64.exe" }
-        inputs.file(openFluxWindowsSource)
+    val copyOpenFluxWindowsAmd64 = tasks.register<CopyNativeBinaryTask>("copyOpenFluxWindowsAmd64") {
+        sourceFile.fileProvider(openFluxWindowsSource)
+        outputFile.set(openFluxWindowsOutput)
         inputs.file(openFluxManifest)
         inputs.property("openFluxUpstream", expectedOpenFluxUpstream)
         inputs.property("openFluxWrapper", expectedOpenFluxWrapper)
         inputs.property("openFluxProtocol", expectedOpenFluxProtocol)
-        outputs.file(openFluxWindowsOutput)
         doFirst { verifyOpenFluxWindowsArtifact(openFluxWindowsSource.get()) }
     }
 
-    val copyOpenFluxSessionWindowsAmd64 = tasks.register<Copy>("copyOpenFluxSessionWindowsAmd64") {
+    val copyOpenFluxSessionWindowsAmd64 = tasks.register<CopyNativeBinaryTask>("copyOpenFluxSessionWindowsAmd64") {
         val binary = openFluxSessionDirectory.file("openflux-session-windows-amd64.exe")
-        from(binary)
-        into(generatedNativeResources.map { it.dir("native") })
+        sourceFile.set(binary)
+        outputFile.set(generatedNativeResources.map { it.file("native/openflux-session-windows-amd64.exe") })
         inputs.file(openFluxSessionManifest)
         inputs.property("sessionVersion", expectedOpenFluxSessionVersion)
-        outputs.file(generatedNativeResources.map { it.file("native/openflux-session-windows-amd64.exe") })
         doFirst { verifyOpenFluxWindowsArtifact(binary.asFile, session = true) }
     }
 
-    val copyVkCallsWindowsAmd64 = tasks.register<Copy>("copyVkCallsWindowsAmd64") {
+    val copyVkCallsWindowsAmd64 = tasks.register<CopyNativeBinaryTask>("copyVkCallsWindowsAmd64") {
         val directory = rootProject.layout.projectDirectory.dir(
-            providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts")
+            providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts-5b1e617")
         )
         val name = "olcrtc-vkcalls-windows-amd64.exe"
         val binary = directory.file(name)
         val manifestFile = directory.file("manifest.json")
-        from(binary)
-        into(generatedNativeResources.map { it.dir("native") })
+        sourceFile.set(binary)
+        outputFile.set(generatedNativeResources.map { it.file("native/$name") })
         inputs.file(manifestFile)
-        inputs.property("revision", "403edd409011dd371796260196ecd17630df0fdd")
-        outputs.file(generatedNativeResources.map { it.file("native/$name") })
+        inputs.property("revision", "5b1e6172a9f620d477624c6575c392e70449d333")
         doFirst {
             val manifest = JsonSlurper().parse(manifestFile.asFile) as Map<*, *>
-            check(manifest["revision"] == "403edd409011dd371796260196ecd17630df0fdd") { "VK Calls source revision mismatch" }
+            check(manifest["revision"] == "5b1e6172a9f620d477624c6575c392e70449d333") { "VK Calls source revision mismatch" }
             val hashes = manifest["files"] as Map<*, *>
             val sha = MessageDigest.getInstance("SHA-256").digest(binary.asFile.readBytes()).joinToString("") { "%02x".format(it) }
             check(hashes[name] == sha) { "VK Calls Windows artifact mismatch" }
@@ -974,19 +985,16 @@ if (currentBuildOs.isWindows) {
     }
     val copyVkCallsNotices = tasks.register<Copy>("copyVkCallsNotices") {
         val directory = rootProject.layout.projectDirectory.dir(
-            providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts")
+            providers.gradleProperty("vkcalls.artifactDir").getOrElse(".downloads/vkcalls/artifacts-5b1e617")
         )
         from(directory) { include("LICENSE", "NOTICE") }
         into(generatedNativeResources.map { it.dir("vkcalls") })
     }
 
-    val copySingBoxAwgWindowsAmd64 = tasks.register<Copy>("copySingBoxAwgWindowsAmd64") {
+    val copySingBoxAwgWindowsAmd64 = tasks.register<CopyNativeBinaryTask>("copySingBoxAwgWindowsAmd64") {
         dependsOn(":verifyAwgWindowsBinary")
-        from(singBoxAwgWindowsSource)
-        into(singBoxAwgWindowsOutput.map { it.asFile.parentFile })
-        rename { "sing-box-awg-windows-amd64.exe" }
-        inputs.file(singBoxAwgWindowsSource)
-        outputs.file(singBoxAwgWindowsOutput)
+        sourceFile.fileProvider(singBoxAwgWindowsSource)
+        outputFile.set(singBoxAwgWindowsOutput)
 
         doFirst {
             require(singBoxAwgWindowsSource.get().isFile) {
@@ -996,12 +1004,9 @@ if (currentBuildOs.isWindows) {
         }
     }
 
-    val copyXrayWindowsAmd64 = tasks.register<Copy>("copyXrayWindowsAmd64") {
-        from(xrayWindowsSource)
-        into(xrayWindowsOutput.map { it.asFile.parentFile })
-        rename { "xray-windows-amd64.exe" }
-        inputs.file(xrayWindowsSource)
-        outputs.file(xrayWindowsOutput)
+    val copyXrayWindowsAmd64 = tasks.register<CopyNativeBinaryTask>("copyXrayWindowsAmd64") {
+        sourceFile.fileProvider(xrayWindowsSource)
+        outputFile.set(xrayWindowsOutput)
 
         doFirst {
             require(xrayWindowsSource.get().isFile) {
@@ -1035,8 +1040,6 @@ if (currentBuildOs.isWindows) {
 
     val buildWindowsTunHelper = tasks.register<Exec>("buildWindowsTunHelper") {
         dependsOn(extractTun2SocksWindowsAmd64, extractWintunWindowsAmd64)
-        // Copy tasks declare the shared native directory as their output.
-        mustRunAfter(copyOpenFluxWindowsAmd64, copyOpenFluxSessionWindowsAmd64, copyVkCallsWindowsAmd64, copySingBoxAwgWindowsAmd64, copyXrayWindowsAmd64)
         val helperSource = rootProject.layout.projectDirectory.dir("desktopApp/src/windowsTunHelper")
         val buildScript = rootProject.layout.projectDirectory.file("tools/Build-WindowsTunHelper.ps1")
         val helperOutput = generatedNativeResources.map { it.file("native/unifiedvpn-tun-helper.exe") }
@@ -1056,7 +1059,6 @@ if (currentBuildOs.isWindows) {
     }
 
     val buildWindowsBrowserHelper = tasks.register<Exec>("buildWindowsBrowserHelper") {
-        mustRunAfter(copyOpenFluxWindowsAmd64, copyOpenFluxSessionWindowsAmd64, copyVkCallsWindowsAmd64, copySingBoxAwgWindowsAmd64, copyXrayWindowsAmd64)
         val helperSource = rootProject.layout.projectDirectory.dir("desktopApp/src/windowsBrowserHelper")
         val buildScript = rootProject.layout.projectDirectory.file("tools/Build-WindowsBrowserHelper.ps1")
         val nativeDirectory = generatedNativeResources.map { it.dir("native") }
@@ -1354,6 +1356,9 @@ listOf(
 compose.desktop {
     application {
         mainClass = "MainKt"
+        if (providers.gradleProperty("ownerEdition").orElse("false").get().toBoolean()) {
+            jvmArgs += listOf("-Dunifiedvpn.ownerCabinet=true")
+        }
 
         buildTypes.release.proguard {
             isEnabled.set(false)

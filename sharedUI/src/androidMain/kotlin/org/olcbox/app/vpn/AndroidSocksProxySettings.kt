@@ -4,7 +4,8 @@ data class AndroidSocksProxySettings(
     val host: String = DEFAULT_HOST,
     val port: Int = DEFAULT_PORT,
     val username: String = "",
-    val password: String = ""
+    val password: String = "",
+    val blockAds: Boolean = true
 ) {
     val isConfigured: Boolean
         get() = username.isNotBlank() && password.isNotBlank()

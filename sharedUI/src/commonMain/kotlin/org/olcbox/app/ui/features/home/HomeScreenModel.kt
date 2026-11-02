@@ -14,9 +14,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.olcbox.app.data.exporter.LogExporter
 import org.olcbox.app.data.importer.ConfigImporter
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.repository.LocationImportResult
@@ -46,6 +49,7 @@ class HomeScreenViewModel(
         )
     )
     private val subscriptionRefreshWake = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private val subscriptionRefreshMutex = Mutex()
     private var loadCurrentConfigRequest = 0L
     val state get() = _state.asStateFlow()
     val logs get() = vpnManager.logs
@@ -64,13 +68,14 @@ class HomeScreenViewModel(
         viewModelScope.launch {
             vpnManager.status.collect { status ->
                 _state.update {
+                    val current = it.copy(connectionError = (status as? VpnStatus.Error)?.message?.let(::sanitizeDiagnosticLogLine))
                     when (status) {
-                        VpnStatus.Connected -> it.copy(isVpnConnected = true, isVpnLoading = false)
-                        VpnStatus.Connecting -> it.copy(isVpnConnected = false, isVpnLoading = true)
-                        VpnStatus.Reconnecting -> it.copy(isVpnConnected = true, isVpnLoading = true)
-                        VpnStatus.Stopping -> it.copy(isVpnConnected = false, isVpnLoading = false)
-                        VpnStatus.Disconnected -> it.copy(isVpnConnected = false, isVpnLoading = false)
-                        is VpnStatus.Error -> it.copy(isVpnConnected = false, isVpnLoading = false)
+                        VpnStatus.Connected -> current.copy(isVpnConnected = true, isVpnLoading = false)
+                        VpnStatus.Connecting -> current.copy(isVpnConnected = false, isVpnLoading = true)
+                        VpnStatus.Reconnecting -> current.copy(isVpnConnected = true, isVpnLoading = true)
+                        VpnStatus.Stopping -> current.copy(isVpnConnected = false, isVpnLoading = false)
+                        VpnStatus.Disconnected -> current.copy(isVpnConnected = false, isVpnLoading = false)
+                        is VpnStatus.Error -> current.copy(isVpnConnected = false, isVpnLoading = false)
                     }
                 }
             }
@@ -397,26 +402,52 @@ class HomeScreenViewModel(
 
     fun refreshSubscriptions(
         onComplete: (updatedCount: Int) -> Unit = {}
-    ) {
-        viewModelScope.launch {
-            val updatedCount = locationsRepository.refreshSubscriptions(
-                subscriptionProxy = vpnManager.subscriptionFetchProxy()
-            )
-            loadCurrentConfigNow()
-            onComplete(updatedCount)
-        }
-    }
+    ) = refreshSubscriptionData(null, onComplete)
 
     fun refreshSubscription(
         subscriptionUrl: String,
         onComplete: (updatedCount: Int) -> Unit = {}
-    ) {
+    ) = refreshSubscriptionData(subscriptionUrl.trim(), onComplete)
+
+    private fun refreshSubscriptionData(subscriptionUrl: String?, onComplete: (Int) -> Unit) {
+        if (_state.value.isRefreshingSubscriptions) {
+            onComplete(0)
+            return
+        }
+        _state.update { it.copy(isRefreshingSubscriptions = true, subscriptionRefreshMessage = null, subscriptionRefreshFailed = false) }
         viewModelScope.launch {
-            val updatedCount = locationsRepository.refreshSubscription(
-                subscriptionUrl = subscriptionUrl,
-                subscriptionProxy = vpnManager.subscriptionFetchProxy()
-            )
-            loadCurrentConfigNow()
+            var updatedCount = 0
+            try {
+                subscriptionRefreshMutex.withLock {
+                    val before = locationsRepository.getActiveLocation()
+                    val requestedCount = locationsRepository.getAllLocations()
+                        .mapNotNull { it.subscriptionUrl?.trim()?.takeIf(String::isNotBlank) }
+                        .filter { subscriptionUrl == null || it == subscriptionUrl }.toSet().size
+                    updatedCount = if (subscriptionUrl == null) {
+                        locationsRepository.refreshSubscriptions(vpnManager.subscriptionFetchProxy())
+                    } else {
+                        locationsRepository.refreshSubscription(subscriptionUrl, vpnManager.subscriptionFetchProxy())
+                    }
+                    loadCurrentConfigNow()
+                    if (updatedCount > 0 && subscriptionRefreshChangesActiveProfile(before, locationsRepository.getActiveLocation())) {
+                        restartVpnIfRunning()
+                    }
+                    val failed = updatedCount < requestedCount
+                    val message = when {
+                        requestedCount == 0 -> "No subscriptions to update"
+                        updatedCount == 0 -> "Could not update subscriptions. Saved profiles were kept."
+                        failed -> "Subscriptions updated: $updatedCount. Some subscriptions could not be refreshed."
+                        else -> "Subscriptions updated: $updatedCount"
+                    }
+                    _state.update { it.copy(subscriptionRefreshMessage = message, subscriptionRefreshFailed = failed) }
+                }
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                _state.update { it.copy(subscriptionRefreshMessage = "Could not update subscriptions. Saved profiles were kept.", subscriptionRefreshFailed = true) }
+            } finally {
+                _state.update { it.copy(isRefreshingSubscriptions = false) }
+            }
             onComplete(updatedCount)
         }
     }
@@ -450,6 +481,8 @@ class HomeScreenViewModel(
     }
 
     private suspend fun refreshDueSubscriptionsIfNeeded() {
+      subscriptionRefreshMutex.withLock {
+        val before = locationsRepository.getActiveLocation()
         val updatedCount = withContext(Dispatchers.IO) {
             locationsRepository.refreshDueSubscriptions(
                 subscriptionProxy = vpnManager.subscriptionFetchProxy()
@@ -457,20 +490,15 @@ class HomeScreenViewModel(
         }
         if (updatedCount > 0) {
             loadCurrentConfigNow()
-        }
-    }
-
-    private fun buildLogsExport(logs: List<String>): String {
-        return buildString {
-            appendLine("Unified VPN application logs")
-            appendLine("Build: ${org.olcbox.app.CurrentAppInfo.diagnosticVersion}")
-            appendLine("Entries: ${logs.size}")
-            appendLine()
-            logs.forEachIndexed { index, line ->
-                appendLine("${index + 1}. ${sanitizeDiagnosticLogLine(line)}")
+            if (subscriptionRefreshChangesActiveProfile(before, locationsRepository.getActiveLocation())) {
+                restartVpnIfRunning()
             }
         }
+      }
     }
+
+    private fun buildLogsExport(logs: List<String>): String = org.olcbox.app.data.logging.LogPresentation.export(logs)
+
 }
 
 data class HomeScreenState(
@@ -481,8 +509,23 @@ data class HomeScreenState(
     val activeProfile: VpnProfileConfig?,
     val shouldShowConfigInvalidReminder: Boolean,
     val canStartVpn: Boolean,
-    val startBlockedReason: String?
+    val startBlockedReason: String?,
+    val connectionError: String? = null,
+    val isRefreshingSubscriptions: Boolean = false,
+    val subscriptionRefreshMessage: String? = null,
+    val subscriptionRefreshFailed: Boolean = false
 )
+
+internal fun subscriptionRefreshChangesActiveProfile(before: LocationEntry?, after: LocationEntry?): Boolean {
+    if (before == null || after == null) return before != after
+    if (before.storageId != after.storageId) return true
+    fun connectionProfile(entry: LocationEntry): VpnProfileConfig = entry.profile.normalized().let { profile ->
+        profile.copy(name = null, uri = profile.uri?.substringBefore('#'),
+            rawConfig = profile.rawConfig?.let { if (it.startsWith("vless://", true)) it.substringBefore('#') else it })
+    }
+    return connectionProfile(before) != connectionProfile(after) ||
+        (before.profile.isOlcRtc() && before.location.normalized().copy(name = "") != after.location.normalized().copy(name = ""))
+}
 
 private const val MIN_SUBSCRIPTION_REFRESH_WAIT_MS = 1_000L
 private const val IDLE_SUBSCRIPTION_REFRESH_WAIT_MS = 24L * 60L * 60L * 1_000L

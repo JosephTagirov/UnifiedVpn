@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -60,6 +61,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.TextButton
 import org.olcbox.app.ui.localization.AppText as Text
 import androidx.compose.material3.rememberModalBottomSheetState
+import org.olcbox.app.ui.features.home.components.LogControls
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +69,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -93,7 +96,8 @@ data class ApplicationSocksProxySettings(
     val host: String = "127.0.0.1",
     val port: Int = DEFAULT_PORT,
     val username: String = "",
-    val password: String = ""
+    val password: String = "",
+    val blockAds: Boolean = true
 ) {
     companion object {
         const val DEFAULT_PORT = 10808
@@ -140,6 +144,7 @@ fun ApplicationSettingsSheet(
     onSocksProxySettingsSaved: (String, String, Int) -> Unit = { _, _, _ -> },
     onSocksProxyPasswordRegenerated: () -> Unit = {},
     onRoutingModeSelected: (String) -> Unit = {},
+    onAdBlockingChanged: (Boolean) -> Unit = {},
     onAppearanceSettingsChanged: (AppAppearanceSettings) -> Unit = {},
     onCreateFriendPackageClick: (() -> Unit)? = null
 ) {
@@ -211,6 +216,7 @@ fun ApplicationSettingsSheet(
                         ?: "Proxy",
                     onConnectionModeClick = { route = SharedSettingsRoute.ConnectionMode },
                     onSocksProxyClick = { route = SharedSettingsRoute.SocksProxy },
+                    onAdBlockingChanged = onAdBlockingChanged,
                     onBack = { route = SharedSettingsRoute.Hub }
                 )
 
@@ -300,138 +306,55 @@ fun ApplicationSettingsSheet(
 
 @Composable
 private fun SharedSettingsHubContent(
-    updateSettings: AppUpdateSettings,
-    subscriptionsCount: Int,
-    connectionSummary: String,
-    onAppearanceClick: () -> Unit,
-    onConnectionClick: () -> Unit,
-    onSubscriptionsClick: () -> Unit,
-    onUpdatesClick: () -> Unit,
-    onLogsClick: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        SharedSettingsHeader(
-            icon = Icons.Outlined.Settings,
-            title = "Application Settings",
-            subtitle = connectionSummary
-        )
-
-        Spacer(Modifier.height(8.dp))
-
-        SharedNavigationRow(
-            title = "Appearance",
-            value = "Language and theme",
-            icon = Icons.Outlined.Palette,
-            onClick = onAppearanceClick
-        )
-
-        SharedNavigationRow(
-            title = "Connection Settings",
-            value = connectionSummary,
-            icon = Icons.Rounded.Public,
-            onClick = onConnectionClick
-        )
-
-        SharedNavigationRow(
-            title = "Subscriptions & Sharing",
-            value = subscriptionsCount.subscriptionSummary(),
-            icon = Icons.Outlined.Share,
-            onClick = onSubscriptionsClick
-        )
-
-        SharedNavigationRow(
-            title = "Update Settings",
-            value = "Unified VPN · every ${updateSettings.intervalHours}h",
-            icon = Icons.Outlined.Refresh,
-            onClick = onUpdatesClick
-        )
-
-        SharedNavigationRow(
-            title = "Application Logs",
-            value = "Diagnostics and export",
-            icon = Icons.Outlined.History,
-            onClick = onLogsClick
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "${CurrentAppInfo.value.name} ${CurrentAppInfo.value.version} · " +
-                        "build ${CurrentAppInfo.value.build}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp
-                )
-                Text(
-                    text = CurrentAppInfo.value.sourceAttribution,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp
-                )
-            }
-        }
-    }
+ updateSettings:AppUpdateSettings,subscriptionsCount:Int,connectionSummary:String,
+ onAppearanceClick:()->Unit,onConnectionClick:()->Unit,onSubscriptionsClick:()->Unit,
+ onUpdatesClick:()->Unit,onLogsClick:()->Unit
+){
+ val uriHandler=LocalUriHandler.current
+ var managementOpenFailed by remember { mutableStateOf(false) }
+ val url="https://panel.meesharr.space/vpn-control/admin/"
+ Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=24.dp).padding(bottom=32.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+  SharedSettingsHeader(icon=Icons.Outlined.Settings,title="Application Settings",subtitle="Everything in its place")
+  Spacer(Modifier.height(6.dp))
+  SharedSectionLabel("EVERYDAY")
+  SharedNavigationRow(title="Connection",value="VPN mode and Telegram proxy",icon=Icons.Rounded.Public,onClick=onConnectionClick)
+  SharedNavigationRow(title="Profiles and subscriptions",value=subscriptionsCount.subscriptionSummary(),icon=Icons.Outlined.Share,onClick=onSubscriptionsClick)
+  if(ownerCabinetEnabled()) {
+  SharedSectionLabel("ADMINISTRATION")
+  SharedNavigationRow(title="People and access",value="Create a config set, change expiry or revoke access",icon=Icons.Rounded.Person,onClick={managementOpenFailed=runCatching{uriHandler.openUri(url)}.isFailure})
+  Text("Opens your server's cabinet in the browser. Sign in with your owner login.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+  if(managementOpenFailed){SelectionContainer{Text(url,color=MaterialTheme.colorScheme.error)}}
+  }
+  SharedSectionLabel("PERSONALIZATION")
+  SharedNavigationRow(title="Appearance",value="Language and theme",icon=Icons.Outlined.Palette,onClick=onAppearanceClick)
+  SharedSectionLabel("HELP AND DIAGNOSTICS")
+  SharedNavigationRow(title="Application Logs",value="Recent lines, errors, copy and export",icon=Icons.Outlined.History,onClick=onLogsClick)
+  SharedNavigationRow(title="App updates",value="Check for a new version",icon=Icons.Outlined.Refresh,onClick=onUpdatesClick)
+  Text("${CurrentAppInfo.value.name} ${CurrentAppInfo.value.version}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(top=16.dp))
+  Text(CurrentAppInfo.value.sourceAttribution,style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+ }
 }
 
 @Composable
 private fun SharedConnectionSettingsContent(
-    summary: String,
-    details: List<Pair<String, String>>,
-    socksProxySettings: ApplicationSocksProxySettings?,
-    routingModeTitle: String,
-    onConnectionModeClick: () -> Unit,
-    onSocksProxyClick: () -> Unit,
-    onBack: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(top = 16.dp, bottom = 32.dp)
-    ) {
-        SharedDetailHeader(
-            title = "Connection Settings",
-            subtitle = summary,
-            onBack = onBack
-        )
-
-        Spacer(Modifier.height(20.dp))
-
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SharedNavigationRow(
-                title = "Connection Mode",
-                value = routingModeTitle,
-                icon = Icons.Rounded.Public,
-                onClick = onConnectionModeClick
-            )
-
-            if (socksProxySettings != null) {
-                SharedNavigationRow(
-                    title = "SOCKS5 Proxy",
-                    value = "${socksProxySettings.host}:${socksProxySettings.port}",
-                    icon = Icons.Rounded.Public,
-                    onClick = onSocksProxyClick
-                )
-            }
-
-            details
-                .filterNot { (title, _) -> title.equals("Mode", ignoreCase = true) }
-                .forEach { (title, value) ->
-                    SharedInfoRow(title = title, value = value)
-                }
-        }
-    }
+ summary:String,details:List<Pair<String,String>>,socksProxySettings:ApplicationSocksProxySettings?,
+ routingModeTitle:String,onConnectionModeClick:()->Unit,onSocksProxyClick:()->Unit,onBack:()->Unit,
+ onAdBlockingChanged:(Boolean)->Unit
+){
+ var showTechnical by remember { mutableStateOf(false) }
+ Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=24.dp).padding(top=16.dp,bottom=32.dp),verticalArrangement=Arrangement.spacedBy(14.dp)){
+  SharedDetailHeader(title="Connection",subtitle="Choose how apps use the VPN",onBack=onBack)
+  SharedNavigationRow(title="Connection Mode",value=routingModeTitle,icon=Icons.Rounded.Public,onClick=onConnectionModeClick)
+  Text("Automatic mode is suitable for most users. Change it only if an app needs a separate proxy.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+  if(socksProxySettings!=null){
+   SharedSectionLabel("FOR TELEGRAM AND OTHER APPS")
+   SharedNavigationRow(title="Local SOCKS5 proxy",value="${socksProxySettings.host}:${socksProxySettings.port}",icon=Icons.Rounded.Public,onClick=onSocksProxyClick)
+   Text("Use this address and credentials in Telegram on this device. Keep UnifiedVPN connected.",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+  }
+  if(socksProxySettings!=null) AdBlockingToggle(socksProxySettings.blockAds,onAdBlockingChanged)
+  TextButton(onClick={showTechnical=!showTechnical}){Text(if(showTechnical)"Hide technical details" else "Technical details")}
+  if(showTechnical)details.filterNot{it.first.equals("Mode",true)}.forEach{(title,value)->SharedInfoRow(title=title,value=value)}
+ }
 }
 
 @Composable
@@ -1069,6 +992,8 @@ private fun SharedLogsSettingsContent(
                 modifier = Modifier.weight(1f)
             )
 
+        }
+        Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End) {
             TextButton(
                 enabled = logs.isNotEmpty(),
                 onClick = onSaveClick
@@ -1083,7 +1008,8 @@ private fun SharedLogsSettingsContent(
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        LogControls(logs)
+        Spacer(Modifier.height(8.dp))
 
         Surface(
             modifier = Modifier

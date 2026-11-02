@@ -62,7 +62,8 @@ internal static class BrowserHelper
     {
         if (args.Length == 1 && args[0] == "--self-test") return SelfTest();
         bool offline = args.Length == 1 && args[0] == "--self-test-browser";
-        if (args.Length != 0 && !offline) return 2;
+        bool interactive = args.Length == 1 && args[0] == "--interactive";
+        if (args.Length != 0 && !offline && !interactive) return 2;
         Console.InputEncoding = new UTF8Encoding(false, true);
         Console.OutputEncoding = new UTF8Encoding(false, true);
         string id = null;
@@ -94,7 +95,7 @@ internal static class BrowserHelper
                 });
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                using (var form = new VerificationForm(id, sourceUrl, url, directory, offline)) {
+                using (var form = new VerificationForm(id, sourceUrl, url, directory, offline, interactive)) {
                     Application.Run(form);
                     deadline.Cancel();
                     Console.WriteLine(Json.Serialize(form.Response ?? Failure(id)));
@@ -557,29 +558,32 @@ internal sealed class VerificationForm : Form
     private bool navigationCancelled;
     private bool nodePresent;
     private bool finished;
+    private readonly bool interactive;
     internal Dictionary<string, object> Response;
     internal int ExitCode = 22;
 
-    internal VerificationForm(string id, string sourceUrl, Uri document, string directory, bool offline)
+    internal VerificationForm(string id, string sourceUrl, Uri document, string directory, bool offline, bool interactive)
     {
         this.id = id;
         this.sourceUrl = sourceUrl;
         this.document = document;
         this.directory = directory;
         this.offline = offline;
+        this.interactive = interactive;
         if (offline) cancellation.CancelAfter(TimeSpan.FromSeconds(12));
-        Text = "OpenFlux verification";
+        Text = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru"
+            ? "UnifiedVPN — проверка Яндекса для OpenFlux" : "UnifiedVPN — Yandex verification for OpenFlux";
         ClientSize = new Size(1000, 700);
-        ShowInTaskbar = false;
-        Opacity = 0;
-        FormBorderStyle = FormBorderStyle.FixedToolWindow;
+        ShowInTaskbar = interactive;
+        Opacity = interactive ? 1 : 0;
+        FormBorderStyle = interactive ? FormBorderStyle.Sizable : FormBorderStyle.FixedToolWindow;
         Shown += async (sender, args) => await VerifyAsync();
         FormClosing += (sender, args) => {
             if (!finished) { args.Cancel = true; cancellation.Cancel(); }
         };
     }
 
-    protected override bool ShowWithoutActivation { get { return true; } }
+    protected override bool ShowWithoutActivation { get { return !interactive; } }
 
     private void MonitorParent()
     {

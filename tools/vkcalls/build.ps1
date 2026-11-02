@@ -7,9 +7,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$pin = '403edd409011dd371796260196ecd17630df0fdd'
+$properties = ConvertFrom-StringData (Get-Content -LiteralPath (Join-Path $repo 'gradle.properties') -Raw)
+$pin = $properties['olcbox.olcrtcSha']
+if ($pin -notmatch '^[0-9a-f]{40}$') { throw 'olcbox.olcrtcSha must be a full Git commit.' }
 $SourcePath = (Resolve-Path -LiteralPath $SourcePath).Path
-if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $repo '.downloads\vkcalls\artifacts' }
+if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $repo ('.downloads\vkcalls\artifacts-' + $pin.Substring(0, 7)) }
 $ArtifactsPath = [IO.Path]::GetFullPath($ArtifactsPath)
 if ((& git -C $SourcePath rev-parse HEAD).Trim() -ne $pin -or $LASTEXITCODE -ne 0) { throw 'VK Calls source revision mismatch.' }
 if (& git -C $SourcePath status --porcelain --untracked-files=no) { throw 'Tracked VK Calls source modifications are not accepted.' }

@@ -78,6 +78,7 @@ import com.google.zxing.MultiFormatWriter
 import com.google.zxing.common.BitMatrix
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.desktop.WindowsProcessSecurity
+import org.olcbox.app.desktop.DesktopImportBridge
 import org.olcbox.app.data.datasource.JvmLocationsDataSourceImpl
 import org.olcbox.app.data.datasource.LocationsRepositoryImpl
 import org.olcbox.app.data.exporter.JvmLogExporter
@@ -214,10 +215,11 @@ fun main(args: Array<String>) {
         )
         return
     }
-    runDesktopApplication()
+    val importBridge=DesktopImportBridge.open(args) ?: return
+    try { runDesktopApplication(importBridge) } finally { importBridge.close() }
 }
 
-private fun runDesktopApplication() = application {
+private fun runDesktopApplication(importBridge:DesktopImportBridge) = application {
     // Configure JNA to find native libraries in resources
     System.setProperty(
         "jna.library.path",
@@ -242,10 +244,27 @@ private fun runDesktopApplication() = application {
     var updateOffer by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var sharePayload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var desktopNotice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(importBridge) {
+        while(true){
+            val pending=withContext(Dispatchers.IO){importBridge.take()}
+            pending.forEach { source ->
+                isWindowVisible=true
+                if(source!="show") {
+                    desktopNotice="Importing selected profiles..."
+                    dependencies.homeViewModel.onImportFullConfig(source,onComplete={
+                        dependencies.locationViewModel.loadLocations { currentScreen=AppScreen.Home;desktopNotice="Profiles added" }
+                    },onError={desktopNotice=it})
+                }
+            }
+            delay(350)
+        }
+    }
+
     var isTrayReady by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val trayHomeState by dependencies.homeViewModel.state.collectAsState()
     val socksProxySettings by dependencies.vpnManager.socksProxySettings.collectAsState()
+    val activeRoutingMode by dependencies.vpnManager.activeRoutingMode.collectAsState()
     val systemLanguage = remember { java.util.Locale.getDefault().language }
     val desktopLanguage = appearanceSettings.language.resolve(systemLanguage)
 
@@ -392,8 +411,7 @@ private fun runDesktopApplication() = application {
         val trayUsesProxySettings = trayHomeState.activeProfile.usesProxyRoutingSettings()
         val showRouting = trayHomeState.activeProfile != null &&
             (trayHomeState.isVpnConnected || trayHomeState.isVpnLoading)
-        val configuredTrayMode = socksProxySettings.routingModeFor(trayUsesProxySettings)
-        val effectiveTrayMode = configuredTrayMode.effectiveMode(trayUsesProxySettings)
+        val effectiveTrayMode = activeRoutingMode ?: socksProxySettings.effectiveRoutingMode(trayUsesProxySettings)
         val availableTrayModes = DesktopRoutingMode.availableForCurrentPlatform(trayUsesProxySettings)
             .filterNot { it == DesktopRoutingMode.Auto }
         val currentTrayModeIndex = availableTrayModes.indexOf(effectiveTrayMode)
@@ -468,6 +486,7 @@ private fun runDesktopApplication() = application {
             val homeState by dependencies.homeViewModel.state.collectAsState()
             val settingsUsesProxySettings = homeState.activeProfile.usesProxyRoutingSettings()
             val selectedRoutingMode = socksProxySettings.routingModeFor(settingsUsesProxySettings)
+            val effectiveSettingsMode = activeRoutingMode ?: socksProxySettings.effectiveRoutingMode(settingsUsesProxySettings)
 
             fun reloadLocationsAfterImport(onComplete: () -> Unit = {}) {
                 dependencies.locationViewModel.loadLocations {
@@ -571,21 +590,22 @@ private fun runDesktopApplication() = application {
                         updateStatusText = updateMessage,
                         subscriptions = desktopSubscriptionItems(dependencies.locationViewModel.locations.toList()),
                         logs = logs,
-                        connectionSummary = "${selectedRoutingMode.effectiveDisplayName(settingsUsesProxySettings)} · " +
+                        connectionSummary = "${effectiveSettingsMode.displayName()} · " +
                             (homeState.activeProfile?.typeLabel() ?: "olcRTC"),
                         connectionDetails = buildList {
                             add(
-                                "Routing" to selectedRoutingMode.effectiveDisplayName(
-                                    settingsUsesProxySettings
-                                )
+                                "Routing" to effectiveSettingsMode.displayName()
                             )
-                            add("SOCKS5" to "${socksProxySettings.host}:${socksProxySettings.port}")
-                            when (selectedRoutingMode.effectiveMode(settingsUsesProxySettings)) {
+                            val connectedProxy = dependencies.vpnManager.subscriptionFetchProxy()
+                            add("SOCKS5" to if (connectedProxy != null) {
+                                "${connectedProxy.host}:${connectedProxy.port}"
+                            } else "${socksProxySettings.host}:${socksProxySettings.port}")
+                            when (effectiveSettingsMode) {
                                 DesktopRoutingMode.Tun -> add(
                                     "Administrator rights" to "Requested when TUN (VPN) starts"
                                 )
                                 DesktopRoutingMode.SystemProxy -> add(
-                                    "PAC URL" to "http://127.0.0.1:10809/proxy.pac"
+                                    "PAC URL" to (dependencies.vpnManager.activePacUrl ?: "http://127.0.0.1:10809/proxy.pac")
                                 )
                                 DesktopRoutingMode.LocalSocks -> Unit
                                 DesktopRoutingMode.Auto -> Unit
@@ -644,8 +664,7 @@ private fun runDesktopApplication() = application {
                         onSubscriptionRefreshClick = { url, onFinished ->
                             dependencies.homeViewModel.refreshSubscription(url) { updatedCount ->
                                 reloadLocationsAfterImport {
-                                    dependencies.homeViewModel.restartVpnIfRunning()
-                                    updateMessage = if (updatedCount > 0) {
+                                    updateMessage = dependencies.homeViewModel.state.value.subscriptionRefreshMessage ?: if (updatedCount > 0) {
                                         "Subscription updated"
                                     } else {
                                         "Subscription not updated"
@@ -700,6 +719,11 @@ private fun runDesktopApplication() = application {
                             if (homeState.isVpnConnected) {
                                 dependencies.homeViewModel.restartVpnIfRunning()
                             }
+                        },
+                        onAdBlockingChanged = { enabled ->
+                            val settings = socksProxySettings.copy(blockAds = enabled)
+                            dependencies.vpnManager.updateSocksProxySettings(settings)
+                            scope.launch { dependencies.socksProxySettingsStore.save(settings) }
                         },
                         onRoutingModeSelected = { id ->
                             val mode = runCatching { DesktopRoutingMode.valueOf(id) }
@@ -1005,7 +1029,8 @@ private fun DesktopSocksProxySettings.toApplicationSocksProxySettings(): Applica
         host = host,
         port = port,
         username = username,
-        password = password
+        password = password,
+        blockAds = blockAds
     )
 }
 

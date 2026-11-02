@@ -3,7 +3,6 @@ package org.olcbox.app.vpn
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.VpnService
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
@@ -38,6 +37,7 @@ import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_BYPASS_APPS
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_MODE
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_OLCRTC_PROXY_APPS
 import org.olcbox.app.vpn.data.KEY_ANDROID_SPLIT_TUNNEL_PROXY_APPS
+import org.olcbox.app.vpn.data.KEY_AD_BLOCKING
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_HOST
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PASSWORD
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PORT
@@ -47,6 +47,9 @@ import org.olcbox.app.vpn.data.vpnPrefDataStore
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
 import java.security.SecureRandom
+import android.os.SystemClock
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 
 class AndroidVpnManager(private val context: Context) : VpnManager {
     private val appContext = context.applicationContext
@@ -57,6 +60,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     private val _splitTunnelProfile = MutableStateFlow(AndroidSplitTunnelProfile.OlcRtc)
     private val _splitTunnelSettings = MutableStateFlow(AndroidSplitTunnelSettings())
     private val _dynamicThemeEnabled = MutableStateFlow(false)
+    private var installedAppsRefreshJob: Job? = null
+    @Volatile private var installedAppsLoadedAt = 0L
     private val _installedApps = MutableStateFlow<List<AndroidInstalledApp>>(emptyList())
     private val deviceIdentityProvider = PersistentDeviceIdentityProvider(
         LocationsDataSourceImpl(appContext)
@@ -91,7 +96,8 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
                             preferences[KEY_ANDROID_SOCKS_PORT]
                         ),
                         username = preferences[KEY_ANDROID_SOCKS_USERNAME].orEmpty(),
-                        password = preferences[KEY_ANDROID_SOCKS_PASSWORD].orEmpty()
+                        password = preferences[KEY_ANDROID_SOCKS_PASSWORD].orEmpty(),
+                        blockAds = preferences[KEY_AD_BLOCKING] ?: true
                     )
                     val legacySplitTunnel = AndroidSplitTunnelSettings(
                         mode = AndroidSplitTunnelMode.fromValue(
@@ -151,7 +157,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
     override fun needsPermission(): Boolean = needsPermission(_connectionMode.value)
 
     fun needsPermission(mode: AndroidConnectionMode): Boolean {
-        return mode == AndroidConnectionMode.Tun && VpnService.prepare(context) != null
+        return mode == AndroidConnectionMode.Tun && prepareUnifiedVpnPermission(context) != null
     }
 
     fun selectConnectionMode(mode: AndroidConnectionMode) {
@@ -201,6 +207,11 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         }
     }
 
+    fun setAdBlockingEnabled(enabled: Boolean) {
+        _proxySettings.value = _proxySettings.value.copy(blockAds = enabled)
+        scope.launch { appContext.vpnPrefDataStore.edit { it[KEY_AD_BLOCKING] = enabled } }
+    }
+
     fun updateProxyPassword(password: String) {
         updateProxySettings(
             host = _proxySettings.value.host,
@@ -213,9 +224,16 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         updateProxyPassword(generateProxyPassword())
     }
 
+    @Synchronized
     fun refreshInstalledApps() {
-        scope.launch {
-            _installedApps.value = loadInstalledApps()
+        if (installedAppsRefreshJob?.isActive == true) return
+        if (installedAppsLoadedAt > 0 && SystemClock.elapsedRealtime() - installedAppsLoadedAt < 60_000L) return
+        installedAppsRefreshJob = scope.launch {
+            try {
+                _installedApps.value = loadInstalledApps()
+                installedAppsLoadedAt = SystemClock.elapsedRealtime()
+            } catch (error: CancellationException) { throw error }
+            catch (_: Exception) { /* Retain the last usable catalog. */ }
         }
     }
 
@@ -265,6 +283,7 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             setClassName(context.packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
             action = OlcboxVpnActions.ACTION_START_VPN
             putExtra(OlcboxVpnActions.EXTRA_CONNECTION_MODE, _connectionMode.value.value)
+            putExtra(OlcboxVpnActions.EXTRA_AD_BLOCKING, _proxySettings.value.blockAds)
             putExtra(OlcboxVpnActions.EXTRA_SOCKS_HOST, _proxySettings.value.host)
             putExtra(OlcboxVpnActions.EXTRA_SOCKS_PORT, _proxySettings.value.port)
             putExtra(OlcboxVpnActions.EXTRA_SOCKS_USERNAME, _proxySettings.value.username)
@@ -313,19 +332,22 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
         locationConfig: LocationConfig,
         profile: VpnProfileConfig
     ): Long? {
-        return if (profile.isOpenFlux()) {
-            OpenFluxTunnelPing.ping(profile, OlcboxVpnState::connectedOpenFluxTunnel)
-        } else if (profile.isOlcRtc()) {
+        val connected = OlcboxVpnState.connectedLatencySession()?.takeIf { it.matches(profile,locationConfig) }
+        if (connected != null) return ProfileLatency.connected(connected,OlcboxVpnState::connectedLatencySession)
+        return if (profile.isOlcRtc() && !locationConfig.usesModernRtcEngine()) {
             OlcRtcConnectionChecker.ping(
                 locationConfig = locationConfig,
                 deviceId = deviceIdentityProvider.hwid()
             )
         } else {
-            VpnProfileReachability.ping(profile)
+            ExternalAwgGuard.requireNotConnected(profile)
+            AndroidProfileLatency.ping(appContext,locationConfig,profile)
         }
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
+        if (locationConfig.usesModernRtcEngine()) return AndroidProfileLatency.ping(
+            appContext, locationConfig, org.olcbox.app.data.model.LocationEntry.from("rtc-check", locationConfig).profile)
         return OlcRtcConnectionChecker.check(
             locationConfig = locationConfig,
             deviceId = deviceIdentityProvider.hwid()

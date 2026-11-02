@@ -8,6 +8,8 @@ object OlcboxVpnActions {
     const val ACTION_STOP_VPN = "org.olcbox.app.vpn.service.OlcboxVpnService.STOP"
     const val ACTION_APPLY_SELECTED_PROFILE =
         "org.olcbox.app.vpn.service.OlcboxVpnService.APPLY_SELECTED_PROFILE"
+    const val ACTION_RECONNECT_PROFILE =
+        "org.olcbox.app.vpn.service.OlcboxVpnService.RECONNECT_PROFILE"
     const val ACTION_RETRY_PROFILE =
         "org.olcbox.app.vpn.service.OlcboxVpnService.RETRY_PROFILE"
     const val ACTION_SWITCH_PREVIOUS_PROFILE =
@@ -18,6 +20,7 @@ object OlcboxVpnActions {
         "org.olcbox.app.vpn.service.OlcboxVpnService.PROFILE_STORAGE_ID"
     const val EXTRA_CONNECTION_MODE = "org.olcbox.app.vpn.service.OlcboxVpnService.CONNECTION_MODE"
     const val EXTRA_SOCKS_HOST = "org.olcbox.app.vpn.service.OlcboxVpnService.SOCKS_HOST"
+    const val EXTRA_AD_BLOCKING = "ad_blocking_enabled"
     const val EXTRA_SOCKS_PORT = "org.olcbox.app.vpn.service.OlcboxVpnService.SOCKS_PORT"
     const val EXTRA_SOCKS_USERNAME = "org.olcbox.app.vpn.service.OlcboxVpnService.SOCKS_USERNAME"
     const val EXTRA_SOCKS_PASSWORD = "org.olcbox.app.vpn.service.OlcboxVpnService.SOCKS_PASSWORD"

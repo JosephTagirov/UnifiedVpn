@@ -2,12 +2,16 @@ package org.olcbox.app.vpn.desktop
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.vpn.DesktopSocksProxySettings
+import org.olcbox.app.vpn.parseXhttpExtra
+import org.olcbox.app.vpn.vlessUriPayload
 import java.net.URLDecoder
 
 internal object DesktopXrayConfig {
@@ -19,7 +23,18 @@ internal object DesktopXrayConfig {
 
     fun endpointHost(profile: VpnProfileConfig): String = parse(profile).host
 
-    fun build(profile: VpnProfileConfig, socks: DesktopSocksProxySettings, endpointAddress: String? = null): String {
+    fun downloadEndpointHost(profile: VpnProfileConfig): String? = downloadHost(parse(profile).extra)
+
+    fun endpointHosts(profile: VpnProfileConfig): List<String> = parse(profile).let {
+        listOfNotNull(it.host, downloadHost(it.extra)).distinct()
+    }
+
+    fun build(
+        profile: VpnProfileConfig,
+        socks: DesktopSocksProxySettings,
+        endpointAddress: String? = null,
+        downloadEndpointAddress: String? = null
+    ): String {
         val outbound = parse(profile)
         require(outbound.transport in XRAY_TRANSPORTS) {
             "Unsupported desktop VLESS transport: ${outbound.transport}. " +
@@ -87,7 +102,7 @@ internal object DesktopXrayConfig {
                     )
                 }
             )
-            put("streamSettings", buildStreamSettings(outbound, endpointAddress != null))
+            put("streamSettings", buildStreamSettings(outbound, endpointAddress != null, downloadEndpointAddress))
         }
         val root = buildJsonObject {
             put(
@@ -114,7 +129,11 @@ internal object DesktopXrayConfig {
         return json.encodeToString(JsonElement.serializer(), root)
     }
 
-    private fun buildStreamSettings(outbound: VlessOutbound, pinnedEndpoint: Boolean) = buildJsonObject {
+    private fun buildStreamSettings(
+        outbound: VlessOutbound,
+        pinnedEndpoint: Boolean,
+        downloadEndpointAddress: String?
+    ) = buildJsonObject {
         put("network", outbound.transport)
         put("security", outbound.security ?: "none")
         // Xray otherwise derives HTTP authority from SNI or the endpoint. Keep it when TUN pins an IP.
@@ -128,6 +147,7 @@ internal object DesktopXrayConfig {
                     put("path", outbound.path ?: "/")
                     (outbound.hostHeader ?: pinnedHttpHost)?.let { put("host", it) }
                     outbound.mode?.let { put("mode", it) }
+                    pinDownloadSettings(outbound.extra, downloadEndpointAddress)?.let { put("extra", it) }
                 }
             )
             "ws", "httpupgrade" -> put(
@@ -175,6 +195,37 @@ internal object DesktopXrayConfig {
         }
     }
 
+    private fun downloadHost(extra: JsonObject?): String? =
+        ((extra?.get("downloadSettings") as? JsonObject)?.get("address") as? JsonPrimitive)
+            ?.contentOrNull?.takeIf(String::isNotBlank)
+
+    private fun pinDownloadSettings(extra: JsonObject?, address: String?): JsonObject? {
+        if (address == null) return extra
+        val originalHost = downloadHost(extra) ?: error("Missing XHTTP download endpoint")
+        val download = (extra?.get("downloadSettings") as JsonObject).toMutableMap()
+        download["address"] = JsonPrimitive(address)
+        val security = (download["security"] as? JsonPrimitive)?.contentOrNull
+        val tlsKey = when (security) {
+            "tls" -> "tlsSettings"
+            "reality" -> "realitySettings"
+            else -> null
+        }
+        var httpHost = originalHost
+        if (tlsKey != null) {
+            val tls = (download[tlsKey] as? JsonObject).orEmpty().toMutableMap()
+            httpHost = (tls["serverName"] as? JsonPrimitive)?.contentOrNull
+                ?.takeIf(String::isNotBlank) ?: originalHost
+            tls["serverName"] = JsonPrimitive(httpHost)
+            download[tlsKey] = JsonObject(tls)
+        }
+        val http = (download["xhttpSettings"] as? JsonObject).orEmpty().toMutableMap()
+        if ((http["host"] as? JsonPrimitive)?.contentOrNull.isNullOrBlank()) {
+            http["host"] = JsonPrimitive(httpHost)
+        }
+        download["xhttpSettings"] = JsonObject(http)
+        return JsonObject(extra.orEmpty() + ("downloadSettings" to JsonObject(download)))
+    }
+
     private fun defaultGrpcAuthority(outbound: VlessOutbound): String {
         if (outbound.security == "tls" && outbound.sni != null) return outbound.sni
         val octets = outbound.host.split('.')
@@ -199,7 +250,7 @@ internal object DesktopXrayConfig {
     }
 
     private fun parseVlessUri(uri: String): VlessOutbound {
-        val payload = uri.substringAfter("vless://", "")
+        val payload = vlessUriPayload(uri)
         require(payload.isNotBlank()) { "Invalid VLESS URI" }
         val withoutFragment = payload.substringBefore('#')
         val authority = withoutFragment.substringBefore('?')
@@ -210,6 +261,12 @@ internal object DesktopXrayConfig {
         val hostPort = authority.substring(at + 1)
         val endpoint = parseHostPort(hostPort)
         val params = parseQuery(query)
+        val transport = when (val value = params["type"]?.lowercase()?.takeIf(String::isNotBlank)) {
+            null, "tcp" -> "raw"
+            "websocket" -> "ws"
+            "splithttp" -> "xhttp"
+            else -> value
+        }
 
         return VlessOutbound(
             uuid = uuid,
@@ -223,12 +280,8 @@ internal object DesktopXrayConfig {
             publicKey = params["pbk"] ?: params["publicKey"],
             shortId = params["sid"] ?: params["shortId"],
             spiderX = params["spx"] ?: params["spiderX"],
-            transport = when (val transport = params["type"]?.lowercase()?.takeIf(String::isNotBlank)) {
-                null, "tcp" -> "raw"
-                "websocket" -> "ws"
-                "splithttp" -> "xhttp"
-                else -> transport
-            },
+            transport = transport,
+            extra = if (transport == "xhttp") parseXhttpExtra(params["extra"]) else null,
             path = params["path"],
             hostHeader = params["host"]?.takeIf(String::isNotBlank),
             mode = params["mode"]?.lowercase()?.takeIf(String::isNotBlank),
@@ -288,6 +341,7 @@ internal object DesktopXrayConfig {
         val shortId: String?,
         val spiderX: String?,
         val transport: String,
+        val extra: JsonObject?,
         val path: String?,
         val hostHeader: String?,
         val mode: String?,

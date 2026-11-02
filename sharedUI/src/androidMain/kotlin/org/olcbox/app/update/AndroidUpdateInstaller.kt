@@ -108,7 +108,7 @@ class AndroidUpdateInstaller(
         val expectedSha256 = UpdateDownloadSecurity.normalizeGithubSha256Digest(asset.digest)
         val proxy = proxyProvider()
         withProxyAuthentication(proxy) {
-            downloadFile(asset, expectedSha256, onProgress, proxy)
+            withUpdateMirrors(asset) { candidate -> downloadFile(candidate, expectedSha256, onProgress, proxy) }
         }
     }.onFailure { error ->
         if (error is CancellationException) throw error

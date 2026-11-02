@@ -1,9 +1,11 @@
 package org.olcbox.app.ui.activities
 
+import android.app.Activity
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.ColorDrawable
+import org.olcbox.app.vpn.prepareUnifiedVpnPermission
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.Gravity
@@ -11,9 +13,10 @@ import android.view.MotionEvent
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -56,7 +59,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
+import org.olcbox.app.ui.components.UnifiedBrandMark
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -84,8 +89,42 @@ class VpnProfileChooserActivity : ComponentActivity() {
         AndroidLocationsRepository.get(applicationContext)
     }
 
+    private var requestingPermission = false
+    private var startingVpn by mutableStateOf(false)
+    private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        requestingPermission = false
+        if (result.resultCode == Activity.RESULT_OK && !isDeviceLocked()) startPreparedVpn()
+        else startingVpn = false
+    }
+
+    private fun requestStartVpn() {
+        if (startingVpn || isDeviceLocked() || OlcboxVpnState.status.value !is VpnStatus.Disconnected) return
+        startingVpn = true
+        try {
+            val prepare = prepareUnifiedVpnPermission(this)
+            if (prepare != null) { requestingPermission = true; vpnPermission.launch(prepare) }
+            else startPreparedVpn()
+        } catch (_: RuntimeException) {
+            requestingPermission = false
+            startingVpn = false
+            OlcboxVpnState.addLog("Could not start VPN from quick controls")
+        }
+    }
+
+    private fun startPreparedVpn() {
+        if (isDeviceLocked() || OlcboxVpnState.status.value !is VpnStatus.Disconnected) { startingVpn = false; return }
+        try {
+            ContextCompat.startForegroundService(this, Intent(this, OlcboxVpnService::class.java)
+                .setAction(OlcboxVpnActions.ACTION_START_VPN))
+        } catch (_: RuntimeException) {
+            startingVpn = false
+            OlcboxVpnState.addLog("Could not start VPN from quick controls")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        requestingPermission = savedInstanceState?.getBoolean("requestingVpnPermission") == true
         if (intent?.action != OlcboxVpnActions.ACTION_OPEN_PROFILE_CHOOSER || isDeviceLocked()) {
             finishAndRemoveTask()
             return
@@ -112,6 +151,7 @@ class VpnProfileChooserActivity : ComponentActivity() {
             ) {
                 OpenFluxVerificationDialog()
                 val status by OlcboxVpnState.status.collectAsState()
+                LaunchedEffect(status) { if (status !is VpnStatus.Disconnected) startingVpn = false }
                 val session by OlcboxVpnState.session.collectAsState()
                 var profiles by remember { mutableStateOf<List<NotificationProfileChoice>?>(null) }
                 var activeProfileId by remember { mutableStateOf<String?>(null) }
@@ -151,11 +191,17 @@ class VpnProfileChooserActivity : ComponentActivity() {
                 val retryProfile = profiles?.firstOrNull {
                     it.storageId == session.failedProfileStorageId
                 }
-                val requestProfile: (NotificationProfileChoice, Boolean) -> Unit = { profile, retry ->
-                    if (pendingProfileId == null &&
+                val requestProfile: (NotificationProfileChoice, Boolean, Boolean) -> Unit = { profile, retry, reconnect ->
+                    if (OlcboxVpnState.status.value is VpnStatus.Disconnected && pendingProfileId == null && !startingVpn) {
+                        pendingProfileId = profile.storageId
+                        scope.launch {
+                            try { repository.setActiveLocationId(profile.storageId); activeProfileId = profile.storageId }
+                            finally { pendingProfileId = null }
+                        }
+                    } else if (pendingProfileId == null &&
                         !notificationProfileRequestBusy(OlcboxVpnState.status.value) &&
                         OlcboxVpnState.status.value !is VpnStatus.Disconnected &&
-                        (retry || profile.storageId != activeProfileId)
+                        (retry || reconnect || profile.storageId != activeProfileId)
                     ) {
                         pendingProfileId = profile.storageId
                         stopRequested = false
@@ -165,8 +211,11 @@ class VpnProfileChooserActivity : ComponentActivity() {
                                 startService(
                                     Intent(this@VpnProfileChooserActivity, OlcboxVpnService::class.java)
                                         .setAction(
-                                            if (retry) OlcboxVpnActions.ACTION_RETRY_PROFILE
-                                            else OlcboxVpnActions.ACTION_APPLY_SELECTED_PROFILE
+                                            when {
+                                                reconnect -> OlcboxVpnActions.ACTION_RECONNECT_PROFILE
+                                                retry -> OlcboxVpnActions.ACTION_RETRY_PROFILE
+                                                else -> OlcboxVpnActions.ACTION_APPLY_SELECTED_PROFILE
+                                            }
                                         )
                                         .putExtra(OlcboxVpnActions.EXTRA_PROFILE_STORAGE_ID, profile.storageId)
                                 )
@@ -205,10 +254,10 @@ class VpnProfileChooserActivity : ComponentActivity() {
                     activeProfileId = activeProfileId,
                     switchingProfileId = switchingProfileId,
                     retryProfile = retryProfile,
-                    requestInProgress = busy,
-                    appIconResource = applicationInfo.icon,
+                    requestInProgress = busy || startingVpn,
                     onOpenApp = ::openMainApp,
                     onDismiss = ::finish,
+                    onStart = ::requestStartVpn,
                     onStop = {
                         stopRequested = true
                         startService(
@@ -216,8 +265,11 @@ class VpnProfileChooserActivity : ComponentActivity() {
                                 .setAction(OlcboxVpnActions.ACTION_STOP_VPN)
                         )
                     },
-                    onProfileSelected = { requestProfile(it, false) },
-                    onReconnect = { retryProfile?.let { requestProfile(it, true) } }
+                    onProfileSelected = { requestProfile(it, false, false) },
+                    onReconnect = {
+                        val target = retryProfile ?: profiles?.firstOrNull { it.storageId == activeProfileId }
+                        target?.let { requestProfile(it, retryProfile != null, retryProfile == null) }
+                    }
                 )
             }
         }
@@ -230,6 +282,16 @@ class VpnProfileChooserActivity : ComponentActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("requestingVpnPermission", requestingPermission)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == OlcboxVpnActions.ACTION_OPEN_PROFILE_CHOOSER) setIntent(intent)
+    }
+
     override fun onResume() {
         super.onResume()
         if (isDeviceLocked()) finishAndRemoveTask()
@@ -237,7 +299,7 @@ class VpnProfileChooserActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (!isChangingConfigurations) finish()
+        if (!isChangingConfigurations && !requestingPermission) finish()
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -323,10 +385,10 @@ private fun VpnProfileChooserContent(
     switchingProfileId: String?,
     retryProfile: NotificationProfileChoice?,
     requestInProgress: Boolean,
-    appIconResource: Int,
     onOpenApp: () -> Unit,
     onDismiss: () -> Unit,
     onStop: () -> Unit,
+    onStart: () -> Unit,
     onProfileSelected: (NotificationProfileChoice) -> Unit,
     onReconnect: () -> Unit
 ) {
@@ -359,13 +421,9 @@ private fun VpnProfileChooserContent(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onOpenApp, modifier = Modifier.size(48.dp)) {
-                    Image(
-                        painter = painterResource(appIconResource),
-                        contentDescription = openAppDescription,
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                    )
+                    UnifiedBrandMark(Modifier.size(38.dp).semantics {
+                        contentDescription = openAppDescription
+                    })
                 }
                 Column(
                     modifier = Modifier
@@ -432,7 +490,7 @@ private fun VpnProfileChooserContent(
                         profile = profile,
                         selected = profile.storageId == activeProfileId,
                         switching = profile.storageId == switchingProfileId,
-                        enabled = !requestInProgress && status !is VpnStatus.Disconnected,
+                        enabled = !requestInProgress,
                         onClick = { onProfileSelected(profile) }
                     )
                 }
@@ -443,20 +501,20 @@ private fun VpnProfileChooserContent(
                 modifier = Modifier.padding(top = 4.dp),
                 color = MaterialTheme.colorScheme.outlineVariant
             )
-            if (retryProfile != null) {
+            if (status !is VpnStatus.Disconnected && (retryProfile != null || profiles?.any { it.storageId == activeProfileId } == true)) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
+                    if (retryProfile != null) Text(
                         text = "Connection failed",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.error
                     )
                     MaterialText(
-                        text = retryProfile.name,
+                        text = (retryProfile ?: profiles?.firstOrNull { it.storageId == activeProfileId })?.name.orEmpty(),
                         style = MaterialTheme.typography.bodySmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -483,8 +541,9 @@ private fun VpnProfileChooserContent(
                 horizontalArrangement = Arrangement.End
             ) {
                 OutlinedButton(
-                    onClick = onStop,
-                    enabled = status !is VpnStatus.Disconnected && status !is VpnStatus.Stopping,
+                    onClick = if (status is VpnStatus.Disconnected) onStart else onStop,
+                    enabled = if (status is VpnStatus.Disconnected) !requestInProgress && !profiles.isNullOrEmpty()
+                        else status !is VpnStatus.Stopping,
                     modifier = Modifier.heightIn(min = 48.dp)
                 ) {
                     Icon(
@@ -493,7 +552,7 @@ private fun VpnProfileChooserContent(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.size(8.dp))
-                    Text("Stop")
+                    Text(if (status is VpnStatus.Disconnected) "Connect" else "Stop")
                 }
             }
             }

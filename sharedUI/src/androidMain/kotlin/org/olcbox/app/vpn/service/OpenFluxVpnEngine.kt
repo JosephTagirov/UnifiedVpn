@@ -217,7 +217,12 @@ internal class OpenFluxVpnEngine(
                         if (started.stopping.get()) return@output
                         started.browserSecrets.toList()
                     }
-                    log(sanitizeOpenFluxEngineOutput(line, config, username, password, browserSecrets))
+                    val sanitized = sanitizeOpenFluxEngineOutput(line, config, username, password, browserSecrets)
+                    if (line.startsWith("OPENFLUX_FATAL:")) {
+                        started.nativeFailure = sanitized.removePrefix("OpenFlux: OPENFLUX_FATAL:").trim()
+                            .takeIf(String::isNotEmpty)
+                    }
+                    log(sanitized)
                 }
             }
             val ready = withTimeoutOrNull(OPENFLUX_READY_TIMEOUT_MS) {
@@ -257,11 +262,27 @@ internal class OpenFluxVpnEngine(
         stopRun(started)
     }
 
-    private fun requireActiveRun(started: RunningOpenFlux) {
-        synchronized(lifecycleLock) {
+    private suspend fun requireActiveRun(started: RunningOpenFlux) {
+        fun requireCurrent() = synchronized(lifecycleLock) {
             if (running !== started || started.stopping.get()) {
                 throw CancellationException("OpenFlux start was stopped")
             }
+        }
+        requireCurrent()
+        // Exit can precede the last stdout callback. Bound the drain wait and
+        // preserve cancellation rather than replacing the native reason with "exited".
+        if (!started.process.isAlive && started.nativeFailure == null) {
+            withTimeoutOrNull(500L) {
+                while (started.outputThread?.isAlive == true && started.nativeFailure == null) {
+                    currentCoroutineContext().ensureActive()
+                    requireCurrent()
+                    delay(25)
+                }
+            }
+        }
+        synchronized(lifecycleLock) {
+            requireCurrent()
+            started.nativeFailure?.let { error(it) }
             check(started.process.isAlive) {
                 started.browserFailure?.diagnostic
                     ?: "OpenFlux exited before the encrypted transport became ready"
@@ -367,6 +388,7 @@ internal class OpenFluxVpnEngine(
         val browserOutputLock: Any = Any(),
         val browserSecrets: MutableList<String> = mutableListOf(),
         @Volatile var browserFailure: OpenFluxBrowserFailure? = null,
+        @Volatile var nativeFailure: String? = null,
         @Volatile var outputThread: Thread? = null
     )
 

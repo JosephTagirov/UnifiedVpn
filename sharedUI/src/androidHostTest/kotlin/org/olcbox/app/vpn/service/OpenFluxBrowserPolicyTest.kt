@@ -141,9 +141,21 @@ class OpenFluxBrowserPolicyTest {
         assertEquals(OpenFluxBrowserPageState.Loading, openFluxBrowserPageState("\"loading\""))
         assertEquals(OpenFluxBrowserPageState.Config, openFluxBrowserPageState("\"config\""))
         assertEquals(OpenFluxBrowserPageState.Verification, openFluxBrowserPageState("\"verification\""))
+        assertEquals(OpenFluxBrowserPageState.FileViewer, openFluxBrowserPageState("\"file-viewer\""))
         assertEquals(OpenFluxBrowserPageState.Other, openFluxBrowserPageState("\"other\""))
         listOf(null, "", "true", "\"unknown\"", "private-cookie-value", "\"config-private-value\"").forEach {
             assertEquals(OpenFluxBrowserPageState.Unknown, openFluxBrowserPageState(it))
+        }
+    }
+
+    @Test
+    fun onlyACompletedFileViewerGetsTheActionableDocumentError() {
+        OpenFluxBrowserPageState.entries.forEach { state ->
+            assertEquals(OpenFluxBrowserFailure.Timeout, openFluxBrowserTimeoutFailure(state, false))
+            assertEquals(
+                if (state == OpenFluxBrowserPageState.FileViewer) OpenFluxBrowserFailure.DocumentViewer else OpenFluxBrowserFailure.Timeout,
+                openFluxBrowserTimeoutFailure(state, true)
+            )
         }
     }
 

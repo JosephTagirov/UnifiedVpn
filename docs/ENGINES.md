@@ -58,6 +58,13 @@ Native Ready or compilation alone is not proof that traffic works.
 `unified-openflux-aesgcm-v1`; Volga требует обёртку 5. Старые профили автоматически
 не меняются. На документ/ключ/экземпляр разрешён один активный клиент.
 
+Если Яндекс возвращает страницу просмотра файла (`store-prefetch`) вместо
+конфигурации редактора (`client-config`), клиент сообщает об этом отдельно и
+предлагает обновить подписку или запросить рабочую ссылку у её владельца.
+Обычная ссылка «Войти» и HTTP 200 не доказывают ни закрытый доступ, ни готовность
+туннеля. Ссылка и тип редактора должны работать на клиенте и сервере; смена
+User-Agent или автоматическая замена `yandex` на `vyandex` этого не подтверждает.
+
 AES-256-GCM обязателен, готовность требует свежего аутентифицированного ответа
 сервера; передачи без шифрования нет. Это не подтверждение аудита безопасности
 или прямой секретности. Поддерживается TCP/IPv4, но не произвольный UDP и IPv6.
@@ -99,7 +106,13 @@ In Android TUN mode, olcRTC and VLESS add a managed local sing-box bridge betwee
 
 AWG does not use the extra bridge: its sing-box WireGuard endpoint already carries DNS and general UDP through the tunnel, so `tun2socks` connects to the AWG SOCKS inbound directly.
 
-The VLESS adapter supports `tcp`/`raw`, `ws`, `grpc`, `http`/`h2`, `httpupgrade`, and `quic` through sing-box. XHTTP links (`type=xhttp`/`type=splithttp`) use the pinned official Xray `26.3.27` core because the packaged sing-box AWG core does not implement XHTTP.
+The VLESS adapter supports `tcp`/`raw`, `ws`, `grpc`, `http`/`h2`, `httpupgrade`, and `quic` through sing-box. XHTTP links (`type=xhttp`/`type=splithttp`) use the pinned official Xray `26.10.31` core because the packaged sing-box AWG core does not implement XHTTP.
+
+XHTTP share-link `extra` is preserved, including nested headers, XMUX and separate
+`downloadSettings`. Windows TUN pins both upload and download endpoints before
+adding capture routes and preserves their TLS and HTTP identities. Invalid
+`extra` JSON is reported before the engine starts, without including private
+subscription parameters in the error.
 
 Debug fallback packaging is also supported:
 

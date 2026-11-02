@@ -32,6 +32,13 @@ class DesktopOpenFluxBrowserBootstrapTest {
     private val url = "https://docs.yandex.ru/docs/view?test=public-placeholder"
 
     @Test
+    fun userConnectionCanShowVerificationWhileBackgroundProbesStayHidden() {
+        val helper = Path.of("owned", "unifiedvpn-browser-helper.exe")
+        assertEquals(listOf(helper.toString(), "--interactive"), desktopOpenFluxBrowserCommand(helper, true))
+        assertEquals(listOf(helper.toString()), desktopOpenFluxBrowserCommand(helper, false))
+    }
+
+    @Test
     fun acceptsOnlyTheExactNativeRequestMarker() {
         assertEquals(id, OpenFluxBrowserProtocol.requestId("OPENFLUX_BROWSER_VERIFY $id"))
         listOf("OPENFLUX_BROWSER_VERIFY ${id.uppercase()}", "OPENFLUX_BROWSER_VERIFY $id\n",

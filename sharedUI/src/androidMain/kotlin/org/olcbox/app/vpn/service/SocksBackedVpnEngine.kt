@@ -8,8 +8,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.vpn.AdBlockingConfig
+import org.olcbox.app.vpn.AdBlockingRules
 import org.olcbox.app.vpn.VkCallsRuntimeConfig
 import org.olcbox.app.vpn.WireGuardConfigValues
+import org.olcbox.app.vpn.parseXhttpExtra
+import org.olcbox.app.vpn.vlessUriPayload
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -37,7 +41,9 @@ internal fun profileRequiresTunSocksBridge(profileType: String): Boolean = when 
     VpnProfileConfig.TYPE_OLCRTC,
     VpnProfileConfig.TYPE_VLESS,
     VpnProfileConfig.TYPE_OPENFLUX -> true
-    VkCallsRuntimeConfig.ENGINE_TYPE -> true
+    VkCallsRuntimeConfig.ENGINE_TYPE,
+    LocationConfig.PROVIDER_SALUTE_JAZZ,
+    LocationConfig.PROVIDER_MTS_LINK -> true
     else -> false
 }
 
@@ -52,7 +58,7 @@ internal fun createSocksBackedVpnEngine(
     location: LocationConfig? = null
 ): SocksBackedVpnEngine {
     val normalized = profile.normalized()
-    if (normalized.isOlcRtc() && location?.isVkCalls() == true) {
+    if (normalized.isOlcRtc() && location?.usesModernRtcEngine() == true) {
         return createVkCallsVpnEngine(context, location, defaultSocksPort, username, password, log)
     }
     val localSocksPort = existingProfileSocksPort(normalized)
@@ -110,7 +116,11 @@ internal fun createTunSocksBridge(
     bridgeSocksPort: Int,
     username: String,
     password: String,
-    log: (String) -> Unit
+    log: (String) -> Unit,
+    blockAds: Boolean = false,
+    listenHost: String = DEFAULT_SOCKS_HOST,
+    upstreamUsername: String = username,
+    upstreamPassword: String = password
 ): SocksBackedVpnEngine = SingBoxTunSocksBridge(
     context = context.applicationContext,
     profileType = profileType,
@@ -119,7 +129,11 @@ internal fun createTunSocksBridge(
     socksPort = bridgeSocksPort,
     username = username,
     password = password,
-    log = log
+    log = log,
+    blockAds = blockAds,
+    socksHost = listenHost,
+    upstreamUsername = upstreamUsername,
+    upstreamPassword = upstreamPassword
 )
 
 private class ExistingSocksEngine(
@@ -167,12 +181,16 @@ private class SingBoxTunSocksBridge(
     override val socksPort: Int,
     private val username: String,
     private val password: String,
-    private val log: (String) -> Unit
+    private val log: (String) -> Unit,
+    private val blockAds: Boolean,
+    override val socksHost: String,
+    private val upstreamUsername: String,
+    private val upstreamPassword: String
 ) : SocksBackedVpnEngine {
-    override val socksHost: String = DEFAULT_SOCKS_HOST
     override val isRunning: Boolean
         get() = process?.isAlive == true && canConnect(socksHost, socksPort)
 
+    private var runtimeConfig: File? = null
     private var process: Process? = null
     private var logThread: Thread? = null
 
@@ -195,11 +213,16 @@ private class SingBoxTunSocksBridge(
             copyAsset(context, executableSource.assetPath.orEmpty(), target)
             target.setExecutable(true, false)
         }
-        val configFile = File(workDir, "tun-bridge-$socksPort.json").also { file ->
-            file.writeText(buildTunBridgeConfig().toString())
-        }
-
         stop()
+        val configFile = File(workDir, "tun-bridge-$socksPort.json").also { file ->
+            file.writeText(if (blockAds) AdBlockingConfig.build(
+                socksHost, socksPort, username, password, upstreamSocksHost, upstreamSocksPort,
+                AdBlockingRules.install(workDir).absolutePath, upstreamUsername, upstreamPassword,
+                preserveUpstreamDns = profileType == VpnProfileConfig.TYPE_AMNEZIA_WG ||
+                    profileType == VpnProfileConfig.TYPE_AMNEZIA_VPN
+            ) else buildTunBridgeConfig().toString())
+        }
+        runtimeConfig = configFile
         val started = ProcessBuilder(
             executable.absolutePath,
             "run",
@@ -214,7 +237,7 @@ private class SingBoxTunSocksBridge(
             threadName = "SingBoxTunBridgeLog",
             logPrefix = "TUN bridge",
             process = started,
-            log = log
+            log = if (blockAds) ({ _: String -> }) else log
         )
 
         val deadline = System.currentTimeMillis() + SING_BOX_READY_TIMEOUT_MS
@@ -223,7 +246,7 @@ private class SingBoxTunSocksBridge(
                 throw IllegalStateException("TUN DNS bridge exited before SOCKS became ready")
             }
             if (canConnect(socksHost, socksPort)) {
-                log("TUN DNS bridge ready on $socksHost:$socksPort")
+                log(if (blockAds) "Ad blocking enabled (local domain filter)" else "TUN DNS bridge ready on $socksHost:$socksPort")
                 return
             }
             delay(SOCKS_READY_POLL_MS)
@@ -246,6 +269,8 @@ private class SingBoxTunSocksBridge(
         }
         logThread?.interrupt()
         logThread = null
+        runtimeConfig?.delete()
+        runtimeConfig = null
     }
 
     private fun buildTunBridgeConfig(): JSONObject {
@@ -324,6 +349,7 @@ private class SingBoxVlessEngine(
     override val isRunning: Boolean
         get() = process?.isAlive == true && canConnect(socksHost, socksPort)
 
+    private var runtimeConfig: File? = null
     private var process: Process? = null
     private var logThread: Thread? = null
     private var activeEngineName: String = "sing-box"
@@ -352,6 +378,7 @@ private class SingBoxVlessEngine(
         }
 
         stop()
+        runtimeConfig = configFile
         activeEngineName = engineName
         val command = if (useXray) {
             listOf(executable.absolutePath, "run", "-config", configFile.absolutePath)
@@ -376,8 +403,16 @@ private class SingBoxVlessEngine(
     }
 
     override fun stop() {
-        process?.destroy()
+        process?.let { running ->
+            running.destroy()
+            if (!running.waitFor(1500, TimeUnit.MILLISECONDS)) {
+                running.destroyForcibly()
+                running.waitFor(1000, TimeUnit.MILLISECONDS)
+            }
+        }
         process = null
+        runtimeConfig?.delete()
+        runtimeConfig = null
         logThread?.interrupt()
         logThread = null
     }
@@ -421,7 +456,7 @@ private class SingBoxVlessEngine(
             .put("encryption", outbound.encryption ?: "none")
         outbound.flow?.let { user.put("flow", it) }
         val streamSettings = JSONObject()
-            .put("network", "xhttp")
+            .put("network", if(outbound.transport == "ws") "ws" else "xhttp")
             .put("security", outbound.security ?: "none")
             .put(
                 "sockopt",
@@ -434,8 +469,16 @@ private class SingBoxVlessEngine(
                     .also { settings ->
                         outbound.hostHeader?.let { settings.put("host", it) }
                         outbound.mode?.let { settings.put("mode", it) }
+                        outbound.extra?.let { settings.put("extra", JSONObject(it)) }
                     }
             )
+
+        if (outbound.transport == "ws") {
+            streamSettings.remove("xhttpSettings")
+            streamSettings.put("wsSettings",JSONObject().put("path",outbound.path ?: "/").also { ws ->
+                outbound.hostHeader?.let { ws.put("headers",JSONObject().put("Host",it)) }
+            })
+        }
 
         when (outbound.security) {
             "reality" -> streamSettings.put(
@@ -534,6 +577,7 @@ private class SingBoxVlessEngine(
         if (outbound.security == "tls" || outbound.security == "reality") {
             val tls = JSONObject().put("enabled", true)
             outbound.sni?.let { tls.put("server_name", it) }
+            outbound.alpn?.takeIf { it.isNotEmpty() }?.let { tls.put("alpn", JSONArray(it)) }
             outbound.fingerprint?.let {
                 tls.put(
                     "utls",
@@ -635,7 +679,8 @@ private data class VlessOutbound(
     val mode: String?,
     val spiderX: String?,
     val alpn: List<String>?,
-    val allowInsecure: Boolean?
+    val allowInsecure: Boolean?,
+    val extra: String?
 )
 
 private class SingBoxWireGuardEngine(
@@ -651,6 +696,7 @@ private class SingBoxWireGuardEngine(
     override val isRunning: Boolean
         get() = process?.isAlive == true && canConnect(socksHost, socksPort)
 
+    private var runtimeConfig: File? = null
     private var process: Process? = null
     private var logThread: Thread? = null
 
@@ -674,6 +720,7 @@ private class SingBoxWireGuardEngine(
         }
 
         stop()
+        runtimeConfig = configFile
         process = ProcessBuilder(
             executable.absolutePath,
             "run",
@@ -692,8 +739,16 @@ private class SingBoxWireGuardEngine(
     }
 
     override fun stop() {
-        process?.destroy()
+        process?.let { running ->
+            running.destroy()
+            if (!running.waitFor(1500, TimeUnit.MILLISECONDS)) {
+                running.destroyForcibly()
+                running.waitFor(1000, TimeUnit.MILLISECONDS)
+            }
+        }
         process = null
+        runtimeConfig?.delete()
+        runtimeConfig = null
         logThread?.interrupt()
         logThread = null
     }
@@ -1131,7 +1186,7 @@ private fun startEngineLogReader(
 }
 
 private fun parseVlessUri(uri: String): VlessOutbound {
-    val payload = uri.removePrefix("vless://")
+    val payload = vlessUriPayload(uri)
     val withoutFragment = payload.substringBefore("#")
     val authority = withoutFragment.substringBefore("?")
     val query = withoutFragment.substringAfter("?", "")
@@ -1175,7 +1230,10 @@ private fun parseVlessUri(uri: String): VlessOutbound {
         mode = params["mode"],
         spiderX = params["spx"] ?: params["spiderX"],
         alpn = params["alpn"]?.split(',')?.map(String::trim)?.filter(String::isNotBlank),
-        allowInsecure = params["allowInsecure"]?.toBooleanStrictOrNull()
+        allowInsecure = params["allowInsecure"]?.toBooleanStrictOrNull(),
+        extra = if (params["type"]?.lowercase() in setOf("xhttp", "splithttp")) {
+            parseXhttpExtra(params["extra"])?.toString()
+        } else null
     )
 }
 
@@ -1314,7 +1372,7 @@ private const val SOCKS_READY_POLL_MS = 150L
 private const val ENGINE_STOP_TIMEOUT_MS = 1_500L
 private const val ENGINE_FORCE_STOP_TIMEOUT_MS = 1_000L
 private const val MAX_DECOMPRESSED_PROFILE_SIZE = 4 * 1024 * 1024
-private val XRAY_VLESS_TRANSPORTS = setOf("xhttp", "splithttp")
+private val XRAY_VLESS_TRANSPORTS = setOf("xhttp", "splithttp", "ws")
 private val XRAY_BOOTSTRAP_DNS_SERVERS = listOf("1.1.1.1", "8.8.8.8")
 private const val XRAY_BOOTSTRAP_DNS_STRATEGY = "UseIPv4"
 private const val PRIMARY_DNS = "\$PRIMARY_DNS"

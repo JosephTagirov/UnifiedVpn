@@ -20,6 +20,24 @@ class OpenFluxSessionProfileConfigTest {
         context = url, transports = listOf(OpenFluxSessionTransport(type = type, url = url))
     )
 
+
+    @Test fun directSessionRetainsExplicitContextAndRejectsPrivateTargets() {
+        val endpoint = "151.243.209.234:50000"
+        val direct = OpenFluxSessionProfileConfig(name="Direct", negotiate=true, codec="batched", secret=secret,
+            context="tcp://$endpoint", transports=listOf(OpenFluxSessionTransport(type="direct",dial=endpoint,priority=50)))
+        assertTrue(direct.isValid())
+        val imported = assertNotNull(OpenFluxProfileConfig.parse(direct.toUri()))
+        assertTrue(imported.isValid())
+        assertEquals(direct.copy(name=""), imported.toSessionConfig())
+        assertEquals(imported, OpenFluxProfileConfig.parse(imported.toUri()))
+        assertTrue(direct.toEngineConf("key","cookies",1080).contains("Dial = $endpoint"))
+        for (bad in listOf("127.0.0.1:1024","10.0.0.1:5555","169.254.169.254:1024","151.243.209.234:22","example.com:4444","151.243.209.234:50000\nDebug=1")) {
+            assertFalse(validPublicDirectEndpoint(bad))
+        }
+        assertFalse(direct.copy(context="other").isValid())
+        assertFalse(direct.copy(secret="").isValid())
+    }
+
     @Test
     fun importsFixtureProducedByUpstream050ShareMake() {
         // Generated offline by the pinned Go share.Make with the synthetic room and key above.

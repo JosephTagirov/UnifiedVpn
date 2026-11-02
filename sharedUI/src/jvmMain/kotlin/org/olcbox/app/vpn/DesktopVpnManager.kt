@@ -30,13 +30,16 @@ import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
+import org.olcbox.app.vpn.desktop.VkCallsBootstrap
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
+import org.olcbox.app.vpn.desktop.DesktopAdBlockingProxy
 import org.olcbox.app.vpn.desktop.DesktopDnsResolver
 import org.olcbox.app.vpn.desktop.DesktopOpenFluxConfig
 import org.olcbox.app.vpn.desktop.DesktopOpenFluxBrowserBootstrap
 import org.olcbox.app.vpn.desktop.OpenFluxBrowserProtocol
 import org.olcbox.app.vpn.desktop.OpenFluxBrowserRequestGate
 import org.olcbox.app.vpn.desktop.DesktopProxyController
+import org.olcbox.app.vpn.desktop.DesktopConnectionPreflight
 import org.olcbox.app.vpn.desktop.DesktopSingBoxConfig
 import org.olcbox.app.vpn.desktop.DesktopXrayConfig
 import org.olcbox.app.vpn.desktop.LinuxPrivilege
@@ -54,10 +57,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
-class DesktopVpnManager private constructor(
+class DesktopVpnManager internal constructor(
     private val locationsRepository: LocationsRepository,
     private val proxyController: DesktopProxyController = DesktopProxyController.current(),
-    private val pacServer: PacServer = PacServer()
+    private val pacServer: PacServer = PacServer(),
+    private val probeOnly: Boolean = false,
+    private val checkActiveVpn: suspend () -> Unit = DesktopConnectionPreflight::requireNoActiveVpn
 ) : VpnManager {
 
     constructor(locationsRepository: LocationsRepository) : this(
@@ -66,6 +71,8 @@ class DesktopVpnManager private constructor(
         pacServer = PacServer()
     )
 
+
+    @Volatile private var connectedLatencySession: ProfileLatencySession? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
 
@@ -81,13 +88,25 @@ class DesktopVpnManager private constructor(
     private val _socksProxySettings = MutableStateFlow(DesktopSocksProxySettings())
     val socksProxySettings: StateFlow<DesktopSocksProxySettings> = _socksProxySettings.asStateFlow()
 
+    private val _activeRoutingMode = MutableStateFlow<DesktopRoutingMode?>(null)
+    val activeRoutingMode: StateFlow<DesktopRoutingMode?> = _activeRoutingMode.asStateFlow()
+
+    val activePacUrl: String?
+        get() = pacServer.url.takeIf {
+            _activeRoutingMode.value == DesktopRoutingMode.SystemProxy && pacServer.boundPort != null
+        }
+
     private var operationJob: Job? = null
     private var logJob: Job? = null
     private var tunLogJob: Job? = null
     private var processWatchJob: Job? = null
+    private var adBlockingWatchJob: Job? = null
+    private var adBlockingProxy: DesktopAdBlockingProxy? = null
     private var tunProcessWatchJob: Job? = null
     private var process: Process? = null
     private var sessionControlProcess: Process? = null
+    private var vkCallsBootstrap: VkCallsBootstrap? = null
+    private var bootstrapWatchJob: Job? = null
     private var tunProcess: Process? = null
     private var olcRtcConfigPath: Path? = null
     private var activeDesktopMode: DesktopMode? = null
@@ -98,6 +117,15 @@ class DesktopVpnManager private constructor(
     private var generation = 0L
     private val linuxTunController = LinuxTunController(::addLog)
     private val windowsTunController = WindowsTunController(::addLog)
+
+    init {
+        scope.launch {
+            mutex.withLock {
+                runCatching { if (!probeOnly) proxyController.recover() }
+                    .onFailure { addLog("Proxy recovery failed: ${it.message}") }
+            }
+        }
+    }
 
     override fun needsPermission(): Boolean = false
 
@@ -139,21 +167,16 @@ class DesktopVpnManager private constructor(
         locationConfig: LocationConfig,
         profile: VpnProfileConfig
     ): Long? {
-        return if (profile.isOpenFlux()) {
-            OpenFluxTunnelPing.ping(profile, connectedTunnel = {
-                openFluxPingTunnel.takeIf { _status.value is VpnStatus.Connected }
-            })
-        } else if (profile.isOlcRtc()) {
-            OlcRtcConnectionChecker.ping(
-                locationConfig = locationConfig,
-                deviceId = locationsRepository.getDeviceIdentity()
-            )
-        } else {
-            VpnProfileReachability.ping(profile)
-        }
+        val connected = connectedLatencySession?.takeIf { _status.value is VpnStatus.Connected && it.matches(profile,locationConfig) }
+        if (connected != null) return ProfileLatency.connected(connected,{ connectedLatencySession })
+        if (profile.isOlcRtc() && !locationConfig.usesModernRtcEngine()) return OlcRtcConnectionChecker.ping(locationConfig,locationsRepository.getDeviceIdentity())
+        ExternalAwgGuard.requireNotConnected(profile)
+        return DesktopProfileLatency.ping(locationsRepository,locationConfig,profile)
     }
 
     override suspend fun checkConnection(locationConfig: LocationConfig): Long? {
+        if (locationConfig.usesModernRtcEngine()) return DesktopProfileLatency.ping(
+            locationsRepository, locationConfig, org.olcbox.app.data.model.LocationEntry.from("rtc-check", locationConfig).profile)
         return OlcRtcConnectionChecker.check(
             locationConfig = locationConfig,
             deviceId = locationsRepository.getDeviceIdentity()
@@ -216,6 +239,7 @@ class DesktopVpnManager private constructor(
     }
 
     private suspend fun startDesktopMode(requestGeneration: Long, isRestart: Boolean) {
+        connectedLatencySession = null
         openFluxPingTunnel = null
         setStatus(if (isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
 
@@ -248,14 +272,39 @@ class DesktopVpnManager private constructor(
         val engineName = if (profile.isOlcRtc()) "olcRTC" else profile.typeLabel()
 
         try {
+            // Check before DNS, port allocation, bootstrap channels or engine startup.
+            val systemProxyActive = if (probeOnly) false else {
+                checkActiveVpn()
+                proxyController.hasActiveProxy()
+            }
+            if (requestGeneration != generation) throw CancellationException("Desktop start superseded")
+            val configuredSocksSettings = _socksProxySettings.value.normalized()
+            val usesProxySettings = profile.usesProxyRoutingSettings()
+            val requestedMode = configuredSocksSettings.routingModeFor(usesProxySettings)
+            val resolvedMode = configuredSocksSettings.resolvedRoutingMode(
+                DesktopPaths.os, usesProxySettings, systemProxyActive
+            )
+            check(!systemProxyActive || resolvedMode == DesktopRoutingMode.LocalSocks) {
+                ConnectionPreflight.PROXY_ACTIVE
+            }
+            if (resolvedMode == DesktopRoutingMode.SystemProxy) {
+                require(configuredSocksSettings.username.isBlank() && configuredSocksSettings.password.isBlank()) {
+                    "Chrome system proxy does not support SOCKS authentication; use local SOCKS mode with credentials"
+                }
+            }
+            var desktopMode = DesktopMode.from(resolvedMode, usesProxySettings)
+            check(!probeOnly || desktopMode == DesktopMode.LocalSocks) { "Latency probe requires loopback mode" }
+            if (requestedMode == DesktopRoutingMode.Auto) {
+                addLog("Auto selected ${resolvedMode.displayName()}")
+                if (systemProxyActive) addLog("Keeping the existing system proxy; use the local SOCKS endpoint in your application")
+            }
             val bypassHosts = when {
                 isAmneziaProfile -> listOf(DesktopSingBoxConfig.endpointHost(profile))
-                isVlessProfile -> listOf(DesktopXrayConfig.endpointHost(profile))
+                isVlessProfile -> DesktopXrayConfig.endpointHosts(profile)
                 else -> emptyList()
             }
             val ready = CompletableDeferred<Unit>()
             val startupFailure = CompletableDeferred<String>()
-            val configuredSocksSettings = _socksProxySettings.value.normalized()
             val selectedSocksPort = LocalPortAllocator.select(
                 host = configuredSocksSettings.host,
                 preferredPort = configuredSocksSettings.port,
@@ -263,53 +312,76 @@ class DesktopVpnManager private constructor(
             )
             val socksSettings = configuredSocksSettings.copy(port = selectedSocksPort)
             activeSocksProxySettings = socksSettings
+            val filtering = socksSettings.blockAds
+            val engineSocksSettings = if (filtering) socksSettings.copy(
+                host = "127.0.0.1",
+                port = LocalPortAllocator.select("127.0.0.1", if (selectedSocksPort < 65535) selectedSocksPort + 1 else 10809,
+                    excludedPorts = setOf(selectedSocksPort, PacServer.PAC_PORT))
+            ) else socksSettings
             if (selectedSocksPort != configuredSocksSettings.port) {
                 addLog(
                     "Local SOCKS port ${configuredSocksSettings.port} is occupied; " +
                         "using $selectedSocksPort for this connection"
                 )
             }
-            val desktopMode = DesktopMode.from(
-                mode = socksSettings.routingModeFor(profile.usesProxyRoutingSettings()),
-                usesProxySettings = profile.usesProxyRoutingSettings()
-            )
             activeDesktopMode = desktopMode
+            _activeRoutingMode.value = resolvedMode
+
+            if (DesktopPaths.os == DesktopOs.Windows && profile.isOlcRtc() && location.isVkCalls()) {
+                VkCallsBootstrap.findProfile(active.subscriptionUrl,locationsRepository.getAllLocations())?.let { supportProfile ->
+                    addLog("VK Calls: preparing secure support channel")
+                    vkCallsBootstrap = try {
+                        VkCallsBootstrap.start(supportProfile,setOf(selectedSocksPort,engineSocksSettings.port,PacServer.PAC_PORT))
+                    } catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) {
+                        addLog("VK Calls support is unavailable; trying direct signaling")
+                        null
+                    }
+                    vkCallsBootstrap?.let { addLog("VK Calls support SOCKS: 127.0.0.1:${it.port}") }
+                    if (requestGeneration != generation) throw CancellationException("Desktop start superseded")
+                }
+            }
 
             // Pin the exact endpoint before adding capture routes. Resolving it
             // again inside the engine could select another address and loop.
-            val pinnedEndpoint = if (desktopMode == DesktopMode.WindowsTun) {
+            val pinnedEndpoints = if (desktopMode == DesktopMode.WindowsTun) {
                 require(isAmneziaProfile || isVlessProfile) { "This profile only supports proxy modes on Windows" }
                 require(socksSettings.host == PacServer.LOCAL_SOCKS_HOST) { "Windows TUN requires SOCKS on 127.0.0.1" }
-                InetAddress.getAllByName(bypassHosts.single())
+                bypassHosts.associateWith { host -> InetAddress.getAllByName(host)
                     .sortedBy { if (it is Inet4Address) 0 else 1 }
                     .firstOrNull { !it.isAnyLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isMulticastAddress }
-                    ?.hostAddress ?: error("Could not resolve the VPN server for TUN")
+                    ?.hostAddress ?: error("Could not resolve the VPN server for TUN") }
+            } else emptyMap()
+            val pinnedEndpoint = bypassHosts.firstOrNull()?.let(pinnedEndpoints::get)
+            val pinnedDownloadEndpoint = if (isVlessProfile) {
+                DesktopXrayConfig.downloadEndpointHost(profile)?.let(pinnedEndpoints::get)
             } else null
 
             process = when {
                 profile.isOlcRtc() -> startOlcRtcWithRetries(
                     location = location,
-                    socksSettings = socksSettings,
+                    socksSettings = engineSocksSettings,
                     requestGeneration = requestGeneration,
                     privileged = desktopMode == DesktopMode.LinuxTun
                 )
                 isVlessProfile -> startXrayProcess(
                     profile = profile,
-                    socksSettings = socksSettings,
+                    socksSettings = engineSocksSettings,
                     startupFailure = startupFailure,
                     logOutput = true,
-                    endpointAddress = pinnedEndpoint
+                    endpointAddress = pinnedEndpoint,
+                    downloadEndpointAddress = pinnedDownloadEndpoint
                 )
                 profile.isOpenFlux() -> startOpenFluxProcess(
                     profile = profile,
-                    socksSettings = socksSettings,
+                    socksSettings = engineSocksSettings,
                     ready = ready,
                     startupFailure = startupFailure,
                     logOutput = true
                 )
                 else -> startSingBoxProcess(
                     profile = profile,
-                    socksSettings = socksSettings,
+                    socksSettings = engineSocksSettings,
                     startupFailure = startupFailure,
                     logOutput = true,
                     endpointAddress = pinnedEndpoint
@@ -322,7 +394,7 @@ class DesktopVpnManager private constructor(
                     process = engineProcess,
                     ready = ready,
                     startupFailure = startupFailure,
-                    socksPort = socksSettings.port,
+                    socksPort = engineSocksSettings.port,
                     requestGeneration = requestGeneration,
                     engineName = engineName,
                     requireReadySignal = profile.isOpenFlux(),
@@ -334,14 +406,50 @@ class DesktopVpnManager private constructor(
                 throw CancellationException("Desktop start superseded")
             }
 
+            if (filtering) {
+                val filter = DesktopAdBlockingProxy()
+                adBlockingProxy = filter
+                filter.start(socksSettings, engineSocksSettings, preserveUpstreamDns = isAmneziaProfile)
+                addLog("Ad blocking enabled (local domain filter)")
+                val filterProcess = filter.process ?: error("Ad blocking filter is missing")
+                adBlockingWatchJob = scope.launch {
+                    val exit = waitForProcessExit(filterProcess) ?: return@launch
+                    if (!isActive) return@launch
+                    scope.launch {
+                        mutex.withLock {
+                            if (requestGeneration == generation && adBlockingProxy === filter) {
+                                handleUnexpectedProcessExit("Ad blocking filter stopped ($exit)",
+                                    "Ad blocking filter stopped", requestGeneration)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (requestGeneration != generation) throw CancellationException("Desktop start superseded")
             when (desktopMode) {
                 DesktopMode.LinuxTun -> startLinuxTun(socksSettings, requestGeneration)
                 DesktopMode.WindowsTun -> startWindowsTun(
                     socksSettings,
                     requestGeneration,
-                    listOfNotNull(pinnedEndpoint)
+                    pinnedEndpoints.values.distinct()
                 )
-                DesktopMode.SystemProxy -> startSystemProxy(socksSettings, requestGeneration)
+                DesktopMode.SystemProxy -> {
+                    try {
+                        startSystemProxy(socksSettings, requestGeneration)
+                    } catch (cancel: CancellationException) {
+                        throw cancel
+                    } catch (error: Exception) {
+                        if (requestedMode != DesktopRoutingMode.Auto) throw error
+                        // Only fall back after our proxy lease has been restored.
+                        proxyController.restore()
+                        pacServer.stop()
+                        desktopMode = DesktopMode.LocalSocks
+                        activeDesktopMode = desktopMode
+                        _activeRoutingMode.value = DesktopRoutingMode.LocalSocks
+                        addLog("System proxy is unavailable; Auto selected Local SOCKS only")
+                    }
+                }
                 DesktopMode.LocalSocks -> Unit
             }
 
@@ -366,6 +474,8 @@ class DesktopVpnManager private constructor(
                     password = socksSettings.password
                 )
             )
+            connectedLatencySession = ProfileLatencySession(profile,location,
+                SubscriptionFetchProxy(socksSettings.host,socksSettings.port,socksSettings.username,socksSettings.password))
             setStatus(VpnStatus.Connected)
             addLog(
                 when (desktopMode) {
@@ -500,7 +610,7 @@ class DesktopVpnManager private constructor(
                 socksPort = socksSettings.port,
                 requestGeneration = requestGeneration
             )
-            if (location.isVkCalls()) {
+            if (location.usesModernRtcEngine()) {
                 check(VkCallsRuntimeConfig.probeSocks(socksSettings.port, socksSettings.username, socksSettings.password)) {
                     "VK Calls SOCKS authentication failed"
                 }
@@ -525,7 +635,7 @@ class DesktopVpnManager private constructor(
         logOutput: Boolean,
         privileged: Boolean
     ): Process {
-        val binaries = if (location.isVkCalls()) listOf(DesktopNativeAssets.resolveVkCallsBinary())
+        val binaries = if (location.usesModernRtcEngine()) listOf(DesktopNativeAssets.resolveVkCallsBinary())
             else DesktopNativeAssets.resolveOlcRtcBinaryCandidates()
         val dnsServer = normalizeOlcRtcDnsEndpoint(
             location.dnsServer.ifBlank { DesktopDnsResolver.current() }
@@ -559,8 +669,12 @@ class DesktopVpnManager private constructor(
     }
 
     private suspend fun stopDesktopMode(finalStatus: Boolean) {
+        connectedLatencySession = null
         openFluxPingTunnel = null
-        if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null) {
+        _activeRoutingMode.value = null
+        vkCallsBootstrap?.close()
+        vkCallsBootstrap = null
+        if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null && adBlockingProxy == null) {
             cancelProcessJobs()
             activeSocksProxySettings = null
             return
@@ -604,6 +718,8 @@ class DesktopVpnManager private constructor(
         activeDesktopMode = null
         activeSocksProxySettings = null
 
+        adBlockingProxy?.close()
+        adBlockingProxy = null
         stopProcess(process)
         process = null
         deleteOlcRtcConfig()
@@ -623,6 +739,10 @@ class DesktopVpnManager private constructor(
     }
 
     private fun cancelProcessJobs() {
+        adBlockingWatchJob?.cancel()
+        adBlockingWatchJob = null
+        bootstrapWatchJob?.cancel()
+        bootstrapWatchJob = null
         processWatchJob?.cancel()
         processWatchJob = null
 
@@ -659,7 +779,7 @@ class DesktopVpnManager private constructor(
             dnsServer = dnsServer,
             dataDir = dataDir
         )
-        val configPath = if (config.isVkCalls()) {
+        val configPath = if (config.usesModernRtcEngine()) {
             require(socksSettings.host == "127.0.0.1") { "VK Calls requires loopback SOCKS" }
             writeEngineClientConfig("vkcalls", VkCallsRuntimeConfig.build(
                 config, socksSettings.port, socksSettings.username, socksSettings.password, dnsServer
@@ -682,9 +802,13 @@ class DesktopVpnManager private constructor(
 
         processBuilder.environment()["NO_PROXY"] = "127.0.0.1,localhost"
         processBuilder.environment()["no_proxy"] = "127.0.0.1,localhost"
-        if (config.isVkCalls()) {
+        if (config.usesModernRtcEngine()) {
             listOf("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
                 .forEach { processBuilder.environment().remove(it) }
+            vkCallsBootstrap?.let { support ->
+                processBuilder.environment()["HTTPS_PROXY"] = support.proxyUrl
+                processBuilder.environment()["HTTP_PROXY"] = support.proxyUrl
+            }
         }
         val startedProcess = try {
             processBuilder.start()
@@ -702,11 +826,11 @@ class DesktopVpnManager private constructor(
                     for (line in lines) {
                         if (!isActive) break
 
-                        val diagnosticLine = if (config.isVkCalls()) VkCallsRuntimeConfig.sanitizedOutput(
-                            line, config, socksSettings.username, socksSettings.password
+                        val diagnosticLine = if (config.usesModernRtcEngine()) VkCallsRuntimeConfig.sanitizedOutput(
+                            vkCallsBootstrap?.sanitize(line) ?: line, config, socksSettings.username, socksSettings.password
                         ) else line
                         if (logOutput) {
-                            val safeLine = if (config.isVkCalls()) diagnosticLine
+                            val safeLine = if (config.usesModernRtcEngine()) diagnosticLine
                                 else sanitizeOlcRtcDiagnosticOutput(line, config.id)
                             val message = "rtc: $safeLine"
                             addLog(message)
@@ -767,12 +891,13 @@ class DesktopVpnManager private constructor(
         socksSettings: DesktopSocksProxySettings,
         startupFailure: CompletableDeferred<String>,
         logOutput: Boolean,
-        endpointAddress: String? = null
+        endpointAddress: String? = null,
+        downloadEndpointAddress: String? = null
     ): Process {
         val binary = DesktopNativeAssets.resolveXrayBinary()
         val configPath = writeEngineClientConfig(
             prefix = "xray",
-            config = DesktopXrayConfig.build(profile, socksSettings, endpointAddress)
+            config = DesktopXrayConfig.build(profile, socksSettings, endpointAddress, downloadEndpointAddress)
         )
         val command = listOf(
             binary.toAbsolutePath().toString(),
@@ -860,7 +985,7 @@ class DesktopVpnManager private constructor(
         val openFlux = checkNotNull(OpenFluxProfileConfig.parse(
             profile.normalized().rawConfig?.takeIf(String::isNotBlank) ?: profile.normalized().uri.orEmpty()
         ))
-        val browser = DesktopOpenFluxBrowserBootstrap(::addLog)
+        val browser = DesktopOpenFluxBrowserBootstrap(::addLog, interactive = logOutput)
         val browserRequests = OpenFluxBrowserRequestGate()
         val binary = DesktopNativeAssets.resolveOpenFluxBinary(session = openFlux.isSession)
         val configPath = writeEngineClientConfig(prefix = "openflux", config = config)
@@ -956,6 +1081,21 @@ class DesktopVpnManager private constructor(
         requestGeneration: Long
     ) {
         startEngineExitWatcher(engineProcess, engineName, requestGeneration)
+
+        vkCallsBootstrap?.let { support ->
+            bootstrapWatchJob?.cancel()
+            bootstrapWatchJob = scope.launch {
+                val exitCode = waitForProcessExit(support.process) ?: return@launch
+                if (!isActive) return@launch
+                scope.launch {
+                    mutex.withLock {
+                        if (requestGeneration != generation || vkCallsBootstrap !== support) return@withLock
+                        handleUnexpectedProcessExit("VK Calls support channel stopped (code $exitCode)",
+                            "VK Calls support channel is unavailable",requestGeneration)
+                    }
+                }
+            }
+        }
 
         when (desktopMode) {
             DesktopMode.LinuxTun,
@@ -1167,13 +1307,19 @@ class DesktopVpnManager private constructor(
     }
 
     private fun addLog(message: String) {
-        val sanitized = sanitizeDiagnosticLogLine(message)
+        val sanitized = org.olcbox.app.data.logging.LogPresentation.entry(message)
         _logs.update {
             (it + sanitized).takeLast(MAX_LOG_ENTRIES)
         }
     }
 
-    private companion object {
+    companion object {
+        internal fun latencyProbe(repository: LocationsRepository) = DesktopVpnManager(repository,
+            proxyController=object : DesktopProxyController {
+                override suspend fun enable(pacUrl: String) = error("Latency probe cannot change system proxy")
+                override suspend fun restore() = Unit
+            },probeOnly=true)
+
         const val MAX_LOG_ENTRIES = 5_000
         const val OLC_READY_TIMEOUT_MS = 25_000L
         const val OPENFLUX_READY_TIMEOUT_MS = 120_000L

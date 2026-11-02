@@ -35,11 +35,11 @@ class DesktopProxyModeTest {
             DesktopRoutingMode.Tun.resolveFor(DesktopOs.Windows)
         )
         assertEquals(
-            DesktopRoutingMode.SystemProxy,
+            DesktopRoutingMode.Tun,
             DesktopRoutingMode.Auto.resolveFor(DesktopOs.Windows)
         )
         assertEquals(
-            DesktopRoutingMode.LocalSocks,
+            DesktopRoutingMode.SystemProxy,
             DesktopRoutingMode.Auto.resolveFor(
                 os = DesktopOs.Windows,
                 usesProxySettings = true
@@ -75,7 +75,7 @@ class DesktopProxyModeTest {
             routingMode = DesktopRoutingMode.Tun, externalRoutingMode = DesktopRoutingMode.Tun
         ).normalizedFor(DesktopOs.Windows)
         assertEquals(DesktopRoutingMode.Auto, settings.routingMode)
-        assertEquals(DesktopRoutingMode.LocalSocks, settings.routingMode.resolveFor(DesktopOs.Windows, true))
+        assertEquals(DesktopRoutingMode.SystemProxy, settings.routingMode.resolveFor(DesktopOs.Windows, true))
         assertEquals(DesktopRoutingMode.Tun, settings.externalRoutingMode)
     }
 
@@ -107,7 +107,7 @@ class DesktopProxyModeTest {
 
         assertContains(pac, "isPlainHostName(host)")
         assertContains(pac, "host === \"localhost\"")
-        assertContains(pac, "SOCKS5 127.0.0.1:10808; SOCKS 127.0.0.1:10808")
+        assertContains(pac, "SOCKS5 127.0.0.1:10808")
     }
 
     @Test
@@ -115,10 +115,10 @@ class DesktopProxyModeTest {
         val server = PacServer(port = 0)
 
         server.start("127.0.0.1", 10808)
-        server.start("127.0.0.1", 10810, "user", "pass")
+        server.start("127.0.0.1", 10810)
 
         val pac = server.currentPacContent()
-        assertContains(pac, "SOCKS5 user:pass@127.0.0.1:10810; SOCKS user:pass@127.0.0.1:10810")
+        assertContains(pac, "SOCKS5 127.0.0.1:10810")
         assertTrue("SOCKS5 127.0.0.1:10808" !in pac)
 
         server.stop()
@@ -200,19 +200,10 @@ class DesktopProxyModeTest {
     }
 
     @Test
-    fun pacEscapesSocksCredentialsInUserInfo() {
-        val pac = PacServer.generatePac(
-            socksHost = "127.0.0.1",
-            socksPort = 10808,
-            socksUsername = "user name",
-            socksPassword = "p@ss:word"
-        )
-
-        assertContains(
-            pac,
-            "SOCKS5 user%20name:p%40ss%3Aword@127.0.0.1:10808; " +
-                    "SOCKS user%20name:p%40ss%3Aword@127.0.0.1:10808"
-        )
+    fun pacRejectsCredentialsRatherThanPublishingAnUnsupportedChromeProxy() {
+        assertFailsWith<IllegalArgumentException> {
+            PacServer.generatePac("127.0.0.1", 10808, "user name", "p@ss:word")
+        }
     }
 
     @Test
@@ -367,8 +358,8 @@ class DesktopProxyModeTest {
         )
 
         assertContains(restore.flatten(), "ProxyEnable")
-        assertContains(restore.flatten(), "ProxyServer")
-        assertContains(restore.flatten(), "ProxyOverride")
+        assertTrue("ProxyServer" !in restore.flatten())
+        assertTrue("ProxyOverride" !in restore.flatten())
         assertContains(restore.flatten(), "AutoConfigURL")
         assertContains(restore.flatten(), "delete")
     }
@@ -378,10 +369,13 @@ class DesktopProxyModeTest {
         val trustedPowerShell =
             "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
         val refresh = WindowsProxyController.refreshCommand(trustedPowerShell)
-        val script = refresh.last()
+        val script = String(java.util.Base64.getDecoder().decode(refresh.last()), Charsets.UTF_16LE)
 
         assertEquals(trustedPowerShell, refresh.first())
         assertContains(refresh, "-NonInteractive")
+        assertContains(refresh, "-EncodedCommand")
+        assertTrue("-ExecutionPolicy" !in refresh)
+        assertContains(script, "DllImport(\"wininet.dll\"")
         assertContains(script, "System.Runtime.InteropServices.DllImport")
         assertContains(script, "System.IntPtr")
         assertContains(script, "InternetSetOption")

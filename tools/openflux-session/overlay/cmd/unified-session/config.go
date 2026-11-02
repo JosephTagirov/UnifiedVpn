@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const versionText = "unified-openflux-session 1 upstream=7336e1b9d940fc09d00bbf545d15b9437487aa10 protocol=upstream-openflux-session"
+const versionText = "unified-openflux-session 3 upstream=f492a1a33b7581ad8f88118f97e0b866adda3cdc protocol=upstream-openflux-session"
 
 type configuration struct {
 	Version                 int    `json:"version"`
@@ -62,13 +62,20 @@ func (c configuration) validate() error {
 		return invalid
 	}
 	u, err := url.Parse(c.DocumentURL)
-	if err != nil || len(c.DocumentURL) > 8192 || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery || (u.Port() != "" && u.Port() != "443") {
+	if err != nil || len(c.DocumentURL) > 8192 || (u.Scheme != "https" && c.Transport != "direct") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery || (c.Transport != "direct" && u.Port() != "" && u.Port() != "443") {
 		return invalid
 	}
 	if strings.ContainsAny(c.DocumentURL, "\r\n\t #;\"") {
 		return invalid
 	}
 	switch c.Transport {
+    case "direct":
+        ip := net.ParseIP(u.Hostname())
+        port, portErr := strconv.Atoi(u.Port())
+        if u.Scheme != "tcp" || u.Path != "" || ip == nil || ip.To4() == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || portErr != nil || port < 1024 || port > 65535 {
+            return invalid
+        }
+
 	case "telemost":
 		if u.Hostname() != "telemost.yandex.ru" || !telemostPath.MatchString(u.EscapedPath()) {
 			return invalid

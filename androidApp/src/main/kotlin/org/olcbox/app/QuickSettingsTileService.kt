@@ -3,157 +3,91 @@ package org.olcbox.app
 import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Intent
-import android.net.VpnService
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import android.util.Log
 import androidx.annotation.RequiresApi
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import org.olcbox.app.ui.activities.VpnProfileChooserActivity
 import org.olcbox.app.ui.localization.androidUiText
 import org.olcbox.app.vpn.VpnStatus
 import org.olcbox.app.vpn.service.OlcboxVpnActions
 import org.olcbox.app.vpn.service.OlcboxVpnState
 
-/**
- * Android Quick Settings tile that toggles the Olcbox VPN on/off.
- *
- * Appears in the notification shade. Tap it to start or stop the VPN.
- * If VPN permission hasn't been granted yet, opens the main app instead.
- *
- * Requires Android 7.0+ (API 24). Works correctly with minSdk = 23 because
- * the system only binds this service on devices that support Quick Settings tiles.
- */
+/** Opens explicit VPN controls; tapping the tile must never silently stop a tunnel. */
 @RequiresApi(Build.VERSION_CODES.N)
-class QuickSettingsTileService : TileService() {
-
+open class QuickSettingsTileService : TileService() {
     private var scope: CoroutineScope? = null
-
-    // ──────────────────────────────────────────────────────────────────────
-    // Lifecycle
-    // ──────────────────────────────────────────────────────────────────────
 
     override fun onStartListening() {
         super.onStartListening()
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
-        // Keep the tile in sync with VPN status while it is visible.
-        OlcboxVpnState.status
-            .onEach { status -> updateTile(status) }
-            .launchIn(scope!!)
+        scope?.cancel()
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main).also { listening ->
+            OlcboxVpnState.status.onEach(::updateTile).launchIn(listening)
+        }
     }
 
     override fun onStopListening() {
-        super.onStopListening()
         scope?.cancel()
         scope = null
+        super.onStopListening()
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Click handling
-    // ──────────────────────────────────────────────────────────────────────
+    override fun onDestroy() {
+        scope?.cancel()
+        scope = null
+        super.onDestroy()
+    }
 
     override fun onClick() {
         super.onClick()
-
-        when (OlcboxVpnState.status.value) {
-            is VpnStatus.Connected,
-            is VpnStatus.Connecting,
-            is VpnStatus.Reconnecting -> stopVpn()
-
-            else -> {
-                // VpnService.prepare() returns null when permission is already held.
-                val prepIntent = VpnService.prepare(applicationContext)
-                if (prepIntent == null) {
-                    startVpn()
-                } else {
-                    // Permission not yet granted - open the main app so the dialog can appear.
-                    openMainApp()
-                }
-            }
-        }
-    }
-
-    // ──────────────────────────────────────────────────────────────────────
-    // VPN control
-    // ──────────────────────────────────────────────────────────────────────
-
-    private fun startVpn() {
-        val intent = Intent().apply {
-            setClassName(packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
-            action = OlcboxVpnActions.ACTION_START_VPN
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(applicationContext, intent)
-        } else {
-            startService(intent)
-        }
-    }
-
-    private fun stopVpn() {
-        val intent = Intent().apply {
-            setClassName(packageName, OlcboxVpnActions.SERVICE_CLASS_NAME)
-            action = OlcboxVpnActions.ACTION_STOP_VPN
-        }
-        startService(intent)
+        if (isLocked) unlockAndRun(::openControls) else openControls()
     }
 
     @SuppressLint("StartActivityAndCollapseDeprecated")
-    private fun openMainApp() {
-        val intent = Intent(applicationContext, AppActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    private fun openControls() {
+        val intent = Intent(this, VpnProfileChooserActivity::class.java).apply {
+            action = OlcboxVpnActions.ACTION_OPEN_PROFILE_CHOOSER
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val pending = PendingIntent.getActivity(
-                applicationContext,
-                0,
-                intent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            startActivityAndCollapse(pending)
-        } else {
-            @Suppress("DEPRECATION")
-            startActivityAndCollapse(intent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val pending = PendingIntent.getActivity(this, 201, intent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+                startActivityAndCollapse(pending)
+            } else {
+                @Suppress("DEPRECATION")
+                startActivityAndCollapse(intent)
+            }
+        } catch (error: RuntimeException) {
+            // A vendor SystemUI failure must not kill the process hosting the VPN.
+            OlcboxVpnState.addLog("Quick settings could not open VPN controls: " + error.javaClass.simpleName)
+            Log.w("UnifiedVPN.Tile", "Could not open VPN controls", error)
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Tile appearance
-    // ──────────────────────────────────────────────────────────────────────
-
     private fun updateTile(status: VpnStatus) {
         val tile = qsTile ?: return
-        when (status) {
-            is VpnStatus.Connected -> {
-                tile.state = Tile.STATE_ACTIVE
-                tile.label = getString(R.string.qs_tile_label)
-                tile.contentDescription = androidUiText("Connected")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = androidUiText("Connected")
-                }
-            }
-            is VpnStatus.Connecting, is VpnStatus.Reconnecting -> {
-                tile.state = Tile.STATE_ACTIVE
-                tile.label = getString(R.string.qs_tile_label)
-                tile.contentDescription = androidUiText("Connecting...")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = androidUiText("Connecting...")
-                }
-            }
-            else -> {
-                tile.state = Tile.STATE_INACTIVE
-                tile.label = getString(R.string.qs_tile_label)
-                tile.contentDescription = androidUiText("Disconnected")
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    tile.subtitle = androidUiText("Disconnected")
-                }
-            }
+        val label = when (status) {
+            VpnStatus.Connected -> "Connected"
+            VpnStatus.Connecting -> "Connecting..."
+            VpnStatus.Reconnecting -> "Reconnecting..."
+            VpnStatus.Stopping -> "Stopping..."
+            VpnStatus.Disconnected -> "Disconnected"
+            is VpnStatus.Error -> "Connection failed"
         }
+        tile.state = if (status is VpnStatus.Disconnected || status is VpnStatus.Error)
+            Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
+        tile.label = getString(R.string.qs_tile_label)
+        tile.contentDescription = androidUiText("Profiles") + ". " + androidUiText(label)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) tile.subtitle = androidUiText(label)
         tile.updateTile()
     }
 }

@@ -18,6 +18,7 @@ var (
 	ErrBrowserVerification = errors.New("Yandex browser verification is required")
 	ErrBrowserSession      = errors.New("Yandex browser verification did not complete")
 	ErrDocumentAccess      = errors.New("Yandex document editor is unavailable or does not allow editing")
+	ErrDocumentViewer      = errors.New("Yandex returned a file viewer instead of the document editor. Refresh the OpenFlux subscription or ask its owner for a working editable document link")
 
 	// Fixed stage names never include provider errors, response bodies or cookies.
 	errBrowserProvider = fmt.Errorf("%w (stage=provider)", ErrBrowserSession)
@@ -292,6 +293,10 @@ func (b *documentBootstrap) fetchDocument(document string, allowClassic bool) (b
 		return bootstrapResult{}, errBrowserBackoff
 	}
 	body, err := b.request(document)
+	if err == nil && isDocumentViewer(body) {
+		b.publish(ErrDocumentViewer)
+		return bootstrapResult{}, ErrDocumentViewer
+	}
 	if err != nil || !isVerificationPage(body) {
 		return bootstrapResult{html: body}, err
 	}
@@ -352,6 +357,10 @@ func (b *documentBootstrap) fetchDocument(document string, allowClassic bool) (b
 			failure = errBrowserHTTPS
 			body, err = b.request(document)
 			if err == nil {
+				if isDocumentViewer(body) {
+					b.publish(ErrDocumentViewer)
+					return bootstrapResult{}, ErrDocumentViewer
+				}
 				if !isVerificationPage(body) {
 					return bootstrapResult{html: body}, nil
 				}

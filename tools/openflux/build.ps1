@@ -13,7 +13,7 @@ $protocol = 'unified-openflux-aesgcm-v1'
 $versionText = "unified-openflux 8 upstream=$upstream protocol=$protocol"
 if (-not $SourcePath) { $SourcePath = Join-Path $repo ('.downloads\openflux\source-' + $upstream.Substring(0, 12)) }
 $SourcePath = [IO.Path]::GetFullPath($SourcePath)
-if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $repo '.downloads\openflux\artifacts' }
+if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $repo '.downloads\openflux\artifacts-wrapper8-20261102-viewer' }
 $artifacts = [IO.Path]::GetFullPath($ArtifactsPath)
 
 function Invoke-Checked {

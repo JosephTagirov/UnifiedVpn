@@ -266,6 +266,7 @@ class OpenFluxBrowserVerificationService : Service() {
                     session.httpStatus = null
                     session.navigationGeneration++
                     session.navigationFinished = false
+                    session.pageState = OpenFluxBrowserPageState.Loading
                     if (!isOpenFluxBrowserNavigationAllowed(url)) {
                         finish(session, null, OpenFluxBrowserFailure.Failed, diagnosticStage = OpenFluxBrowserDiagnosticStage.NavigationRejected)
                     }
@@ -429,6 +430,10 @@ class OpenFluxBrowserVerificationService : Service() {
             } else {
                 view.evaluateJavascript(OPENFLUX_BROWSER_PAGE_STATE_SCRIPT) checkpoint@{ checkpoint ->
                     if (active !== session) return@checkpoint
+                    if (session.navigationGeneration != navigationGeneration || view.url != inspectedUrl) {
+                        handler.postDelayed(session.poll, 500)
+                        return@checkpoint
+                    }
                     session.pageState = openFluxBrowserPageState(checkpoint)
                     handler.postDelayed(session.poll, 500)
                 }
@@ -575,7 +580,7 @@ class OpenFluxBrowserVerificationService : Service() {
         var polls = 0
         var pageState = OpenFluxBrowserPageState.Unknown
         val blockedResources = AtomicInteger(0)
-        val timeout = Runnable { finish(this, null, OpenFluxBrowserFailure.Timeout) }
+        val timeout = Runnable { finish(this, null, openFluxBrowserTimeoutFailure(pageState, navigationFinished)) }
         val poll = Runnable { inspect(this) }
         val checkCurrent: Runnable = object : Runnable {
             override fun run() {

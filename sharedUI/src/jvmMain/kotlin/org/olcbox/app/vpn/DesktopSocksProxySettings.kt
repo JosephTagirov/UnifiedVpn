@@ -28,7 +28,7 @@ enum class DesktopRoutingMode {
     }
 
     fun description(): String = when (this) {
-        Auto -> "Use local SOCKS for olcRTC / OpenFlux on Windows and the recommended mode for other profiles"
+        Auto -> "Use VPN for AWG/VLESS; choose system proxy or local SOCKS for proxy profiles"
         Tun -> "Route all traffic through a virtual adapter"
         SystemProxy -> "Configure the operating system proxy automatically"
         LocalSocks -> "Expose SOCKS5 without changing system routing"
@@ -54,10 +54,10 @@ enum class DesktopRoutingMode {
         if (this != Auto) {
             return if (this == Tun && os == DesktopOs.Windows && usesProxySettings) LocalSocks else this
         }
-        if (usesProxySettings) return LocalSocks
+        if (usesProxySettings) return if (os == DesktopOs.Windows) SystemProxy else LocalSocks
         return when (os) {
             DesktopOs.Linux -> Tun
-            DesktopOs.Windows -> SystemProxy
+            DesktopOs.Windows -> Tun
             DesktopOs.Other -> LocalSocks
         }
     }
@@ -86,7 +86,8 @@ data class DesktopSocksProxySettings(
     val username: String = "",
     val password: String = "",
     val routingMode: DesktopRoutingMode = DesktopRoutingMode.Auto,
-    val externalRoutingMode: DesktopRoutingMode = DesktopRoutingMode.Auto
+    val externalRoutingMode: DesktopRoutingMode = DesktopRoutingMode.Auto,
+    val blockAds: Boolean = true
 ) {
     val isConfigured: Boolean
         get() = username.isNotBlank() && password.isNotBlank()
@@ -109,6 +110,22 @@ data class DesktopSocksProxySettings(
 
     fun routingModeFor(usesProxySettings: Boolean): DesktopRoutingMode =
         if (usesProxySettings) routingMode else externalRoutingMode
+
+    fun effectiveRoutingMode(usesProxySettings: Boolean): DesktopRoutingMode =
+        resolvedRoutingMode(DesktopPaths.os, usesProxySettings, systemProxyActive = false)
+
+    internal fun resolvedRoutingMode(
+        os: DesktopOs,
+        usesProxySettings: Boolean,
+        systemProxyActive: Boolean
+    ): DesktopRoutingMode {
+        val selected = routingModeFor(usesProxySettings)
+        if (selected == DesktopRoutingMode.Auto && os == DesktopOs.Windows &&
+            (systemProxyActive || (usesProxySettings && (username.isNotBlank() || password.isNotBlank())))) {
+            return DesktopRoutingMode.LocalSocks
+        }
+        return selected.resolveFor(os, usesProxySettings)
+    }
 
     companion object {
         const val MIN_PORT = 1024

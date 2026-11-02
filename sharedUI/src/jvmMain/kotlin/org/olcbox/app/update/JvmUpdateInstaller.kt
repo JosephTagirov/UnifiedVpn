@@ -52,7 +52,7 @@ class JvmUpdateInstaller(
             selectedAsset.digest
         )
         val file = withProxyAuthentication(proxy) {
-            download(selectedAsset, expectedSha256, proxy, onProgress)
+            withUpdateMirrors(selectedAsset) { candidate -> download(candidate, expectedSha256, proxy, onProgress) }
         }
         coroutineContext.ensureActive()
         val portableTargetRoot = if (

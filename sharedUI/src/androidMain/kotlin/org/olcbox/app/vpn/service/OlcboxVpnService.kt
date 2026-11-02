@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
+import org.olcbox.app.vpn.AndroidConnectionPreflight
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -73,8 +74,9 @@ import org.olcbox.app.vpn.notificationProfileTargetId
 import org.olcbox.app.vpn.canRetryNotificationProfile
 import org.olcbox.app.vpn.notificationProfileRequestBusy
 import org.olcbox.app.vpn.notificationSafeProfileName
-import org.olcbox.app.vpn.selectOlcRtcDnsEndpoint
+import org.olcbox.app.vpn.androidRtcDnsEndpoint
 import org.olcbox.app.vpn.data.KEY_ANDROID_CONNECTION_MODE
+import org.olcbox.app.vpn.data.KEY_AD_BLOCKING
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_HOST
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PASSWORD
 import org.olcbox.app.vpn.data.KEY_ANDROID_SOCKS_PORT
@@ -195,6 +197,9 @@ class OlcboxVpnService : VpnService() {
     private var connectionMode = AndroidConnectionMode.Tun
     private var socksListenHost = AndroidSocksProxySettings.DEFAULT_HOST
     private var socksListenPort = AndroidSocksProxySettings.DEFAULT_PORT
+    private var adBlockingEnabled = true
+    private var configuredSocksHost = AndroidSocksProxySettings.DEFAULT_HOST
+    private var configuredSocksPort = AndroidSocksProxySettings.DEFAULT_PORT
     private var socksUsername = ""
     private var socksPassword = ""
     private var splitTunnelMode = AndroidSplitTunnelMode.AllApps
@@ -206,6 +211,7 @@ class OlcboxVpnService : VpnService() {
     private var tunSocksBridge: SocksBackedVpnEngine? = null
     private var activeProfileType = VpnProfileConfig.TYPE_OLCRTC
     private var activePingProfile: VpnProfileConfig? = null
+    private var activePingLocation = LocationConfig()
 
     private data class StartOptions(
         val connectionMode: AndroidConnectionMode,
@@ -213,7 +219,8 @@ class OlcboxVpnService : VpnService() {
         val socksListenPort: Int,
         val socksUsername: String,
         val socksPassword: String,
-        val splitTunnelProfiles: AndroidSplitTunnelProfiles
+        val splitTunnelProfiles: AndroidSplitTunnelProfiles,
+        val blockAds: Boolean
     )
 
     private data class Tun2SocksStats(
@@ -401,6 +408,16 @@ class OlcboxVpnService : VpnService() {
                 return START_NOT_STICKY
             }
 
+            OlcboxVpnActions.ACTION_RECONNECT_PROFILE -> {
+                if (!requestNotificationSelectedProfileSwitch(
+                        intent.getStringExtra(OlcboxVpnActions.EXTRA_PROFILE_STORAGE_ID) ?: activeProfileStorageId,
+                        reconnect = true
+                    )) {
+                    finishRejectedServiceStart(startId)
+                }
+                return START_NOT_STICKY
+            }
+
             OlcboxVpnActions.ACTION_RETRY_PROFILE -> {
                 if (!requestNotificationSelectedProfileSwitch(
                         intent.getStringExtra(OlcboxVpnActions.EXTRA_PROFILE_STORAGE_ID),
@@ -536,6 +553,9 @@ class OlcboxVpnService : VpnService() {
                 intent.getStringExtra(OlcboxVpnActions.EXTRA_SOCKS_PASSWORD)
                     ?: preferences?.get(KEY_ANDROID_SOCKS_PASSWORD)
                 ).orEmpty(),
+            blockAds = if (intent.hasExtra(OlcboxVpnActions.EXTRA_AD_BLOCKING))
+                intent.getBooleanExtra(OlcboxVpnActions.EXTRA_AD_BLOCKING, true)
+                else preferences?.get(KEY_AD_BLOCKING) ?: true,
             splitTunnelProfiles = resolveAndroidSplitTunnelProfiles(
                 preferences = preferences,
                 stringExtra = intent::getStringExtra,
@@ -547,7 +567,14 @@ class OlcboxVpnService : VpnService() {
     private fun applyStartOptions(options: StartOptions) {
         connectionMode = options.connectionMode
         socksListenHost = options.socksListenHost
-        socksListenPort = options.socksListenPort
+        configuredSocksHost = options.socksListenHost
+        configuredSocksPort = options.socksListenPort
+        adBlockingEnabled = options.blockAds
+        socksListenPort = if (adBlockingEnabled && connectionMode == AndroidConnectionMode.Proxy) {
+            var backendPort = allocateLocalSocksPort()
+            while (backendPort == configuredSocksPort) backendPort = allocateLocalSocksPort()
+            backendPort
+        } else options.socksListenPort
         socksUsername = options.socksUsername
         socksPassword = options.socksPassword
         splitTunnelProfiles = options.splitTunnelProfiles
@@ -580,6 +607,7 @@ class OlcboxVpnService : VpnService() {
         expectedGeneration: Long? = null,
         expectedNotificationRequestId: Long? = null,
         retryProfileId: String? = null,
+        reconnectProfile: Boolean = false,
         onGenerationClaimed: ((Long) -> Unit)? = null
     ): Long? {
         var claimedStartupJob: Job? = null
@@ -601,7 +629,8 @@ class OlcboxVpnService : VpnService() {
                     lifecycleStopping = lifecycleStopping,
                     targetProfileId = retryProfileId,
                     activeProfileId = activeProfileStorageId,
-                    failedProfileId = failedProfileStorageId
+                    failedProfileId = failedProfileStorageId,
+                    reconnect = reconnectProfile
                 )
             ) return@synchronized null
             if (expectedGeneration == null && expectedNotificationRequestId == null) {
@@ -644,6 +673,12 @@ class OlcboxVpnService : VpnService() {
                     return@launch
                 }
 
+                AndroidConnectionPreflight.requireNoConflict(
+                    this@OlcboxVpnService,
+                    ownsVpn = vpnInterface != null && VpnService.prepare(this@OlcboxVpnService) == null,
+                    checkSystemProxy = connectionMode == AndroidConnectionMode.Tun
+                )
+
                 if (!isMigration) {
                     registerNetworkMonitor()
                     updateUnderlyingNetwork(findActiveUpstreamNetwork())
@@ -672,6 +707,7 @@ class OlcboxVpnService : VpnService() {
                     activeProfileStorageId = active.storageId
                     activeProfileType = profile.normalizedType
                     activePingProfile = profile
+                    activePingLocation = active.location
                     updateNotification(lastNotificationStatus)
                     if (profile.isOlcRtc() && !active.location.hasValidCryptoKey()) {
                         val message = "olcRTC key must be 64 hexadecimal characters"
@@ -701,7 +737,7 @@ class OlcboxVpnService : VpnService() {
                             splitTunnelProfiles[AndroidSplitTunnelProfile.fromProfileType(profile.normalizedType)]
                         )
                     }
-                    if (!profile.isOlcRtc() || active.location.isVkCalls()) {
+                    if (!profile.isOlcRtc() || active.location.usesModernRtcEngine()) {
                         startExternalProfile(
                             profile = profile,
                             requestedGeneration = requestedGeneration,
@@ -838,10 +874,14 @@ class OlcboxVpnService : VpnService() {
 //                stopTransportProcesses(closeTun = true)
 //                return
 //            }
+            if (adBlockingEnabled && !startTunSocksBridge()) {
+                stopTransportProcesses(closeTun = true, waitForSocksPort = true)
+                return
+            }
             if (!setConnectedForGeneration(requestedGeneration, profileStorageId)) return
             resetRecoveryState()
             updateNotification(connectedNotificationText())
-            addLog("Proxy mode connected on SOCKS $socksListenHost:$socksListenPort")
+            addLog("Proxy mode connected on SOCKS ${tun2SocksHost()}:${tun2SocksPort()}")
             startWatchdog()
             return
         }
@@ -938,7 +978,8 @@ class OlcboxVpnService : VpnService() {
 
     private fun requestNotificationSelectedProfileSwitch(
         targetProfileId: String?,
-        retry: Boolean = false
+        retry: Boolean = false,
+        reconnect: Boolean = false
     ): Boolean {
         val sanitizedTargetId = targetProfileId?.trim()?.takeIf { it.isNotEmpty() }
             ?: return false
@@ -947,14 +988,15 @@ class OlcboxVpnService : VpnService() {
             if (pendingNotificationSelectedRequestId != null ||
                 notificationProfileRequestBusy(OlcboxVpnState.status.value)
             ) return false
-            if (retry && !canRetryNotificationProfile(
+            if ((retry || reconnect) && !canRetryNotificationProfile(
                     status = OlcboxVpnState.status.value,
                     foregroundStarted = notificationForegroundStarted,
                     requestPending = false,
                     lifecycleStopping = lifecycleStopping,
                     targetProfileId = sanitizedTargetId,
                     activeProfileId = activeProfileStorageId,
-                    failedProfileId = failedProfileStorageId
+                    failedProfileId = failedProfileStorageId,
+                    reconnect = reconnect
                 )
             ) return false
             synchronized(notificationProfileInputLock) {
@@ -972,7 +1014,8 @@ class OlcboxVpnService : VpnService() {
                     steps = null,
                     requestId = requestId,
                     selectedTargetId = sanitizedTargetId,
-                    retry = retry
+                    retry = retry,
+                    reconnect = reconnect
                 )
             } finally {
                 synchronized(lifecycleTransitionLock) {
@@ -1000,7 +1043,8 @@ class OlcboxVpnService : VpnService() {
         steps: Int?,
         requestId: Long,
         selectedTargetId: String? = null,
-        retry: Boolean = false
+        retry: Boolean = false,
+        reconnect: Boolean = false
     ) {
         notificationProfileSwitchMutex.withLock {
             var previousProfileId: String? = null
@@ -1014,7 +1058,7 @@ class OlcboxVpnService : VpnService() {
                 val orderedProfileIds = selectableProfiles.map { it.storageId }
                 targetId = if (steps == null) {
                     selectedTargetId?.takeIf {
-                        it in orderedProfileIds && (retry || it != activeProfileStorageId)
+                        it in orderedProfileIds && (retry || reconnect || it != activeProfileStorageId)
                     }
                 } else {
                     notificationProfileTargetId(
@@ -1045,18 +1089,19 @@ class OlcboxVpnService : VpnService() {
                     if (steps != null && !commitNotificationProfileSteps(requestId, steps)) {
                         return@selection null
                     }
-                    if (retry && !canRetryNotificationProfile(
+                    if ((retry || reconnect) && !canRetryNotificationProfile(
                             status = OlcboxVpnState.status.value,
                             foregroundStarted = notificationForegroundStarted,
                             requestPending = false,
                             lifecycleStopping = lifecycleStopping,
                             targetProfileId = latestTarget.storageId,
                             activeProfileId = activeProfileStorageId,
-                            failedProfileId = failedProfileStorageId
+                            failedProfileId = failedProfileStorageId,
+                            reconnect = reconnect
                         )
                     ) return@selection null
 
-                    val retrySelectionRevision = if (retry) {
+                    val retrySelectionRevision = if (retry || reconnect) {
                         repository.compareAndSetActiveLocationId(selectionRevision, latestTarget.storageId)
                             ?: return@selection null
                     } else {
@@ -1067,7 +1112,8 @@ class OlcboxVpnService : VpnService() {
                         isMigration = false,
                         isRestart = true,
                         expectedNotificationRequestId = requestId,
-                        retryProfileId = latestTarget.storageId.takeIf { retry },
+                        retryProfileId = latestTarget.storageId.takeIf { retry || reconnect },
+                        reconnectProfile = reconnect,
                         onGenerationClaimed = {
                             clearFailedNotificationProfile()
                             sessionConnectedAtElapsedRealtimeMs = null
@@ -1075,9 +1121,9 @@ class OlcboxVpnService : VpnService() {
                             activeProfileStorageId = latestTarget.storageId
                             activeProfileType = latestTarget.profile.normalizedType
                             setStatus(VpnStatus.Reconnecting)
-                            updateNotification(if (retry) "Reconnecting..." else "Switching profile...")
+                            updateNotification(if (retry || reconnect) "Reconnecting..." else "Switching profile...")
                             addLog(
-                                if (retry) "Retrying ${latestTarget.profile.typeLabel()} from notification"
+                                if (retry || reconnect) "Reconnecting ${latestTarget.profile.typeLabel()} from notification"
                                 else "Switching to ${latestTarget.profile.typeLabel()} from notification"
                             )
                         }
@@ -1240,6 +1286,7 @@ class OlcboxVpnService : VpnService() {
         OlcboxVpnActions.ACTION_SWITCH_PREVIOUS_PROFILE,
         OlcboxVpnActions.ACTION_SWITCH_NEXT_PROFILE,
         OlcboxVpnActions.ACTION_RETRY_PROFILE,
+        OlcboxVpnActions.ACTION_RECONNECT_PROFILE,
         OlcboxVpnActions.ACTION_APPLY_SELECTED_PROFILE -> true
         else -> false
     }
@@ -1256,10 +1303,18 @@ class OlcboxVpnService : VpnService() {
             profileType = activeProfileType,
             upstreamSocksHost = socksConnectHost(),
             upstreamSocksPort = socksListenPort,
-            bridgeSocksPort = allocateLocalSocksPort(),
+            bridgeSocksPort = if (adBlockingEnabled && connectionMode == AndroidConnectionMode.Proxy) {
+                if (isLocalSocksPortOpen(configuredSocksPort, AndroidSocksProxySettings.connectHost(configuredSocksHost)))
+                    allocateLocalSocksPort() else configuredSocksPort
+            } else allocateLocalSocksPort(),
             username = socksUsername,
             password = socksPassword,
-            log = ::addLog
+            log = ::addLog,
+            blockAds = adBlockingEnabled,
+            listenHost = if (adBlockingEnabled && connectionMode == AndroidConnectionMode.Proxy)
+                configuredSocksHost else AndroidSocksProxySettings.DEFAULT_HOST,
+            upstreamUsername = socksUsername.takeIf { externalEngine?.usesAppSocksCredentials != false }.orEmpty(),
+            upstreamPassword = socksPassword.takeIf { externalEngine?.usesAppSocksCredentials != false }.orEmpty()
         )
         tunSocksBridge = bridge
 
@@ -1345,7 +1400,7 @@ class OlcboxVpnService : VpnService() {
             upstream,
             "Bound ${profile.typeLabel()} transport to ${getNetName(upstream)}"
         )
-        activeProfileType = if (location?.isVkCalls() == true) VkCallsRuntimeConfig.ENGINE_TYPE else profile.normalizedType
+        activeProfileType = if (location?.usesModernRtcEngine() == true) VkCallsRuntimeConfig.engineType(location) else profile.normalizedType
 
         val existingSocksPort = existingProfileSocksPort(profile)
         val targetSocksPort = existingSocksPort ?: allocateLocalSocksPort()
@@ -1408,10 +1463,14 @@ class OlcboxVpnService : VpnService() {
         }
 
         if (connectionMode == AndroidConnectionMode.Proxy) {
+            if (adBlockingEnabled && !startTunSocksBridge()) {
+                stopTransportProcesses(closeTun = true, waitForSocksPort = false)
+                return
+            }
             if (!setConnectedForGeneration(requestedGeneration, profileStorageId)) return
             resetRecoveryState()
             updateNotification("${profile.typeLabel()} SOCKS connected")
-            addLog("${profile.typeLabel()} SOCKS connected on $socksListenHost:$socksListenPort")
+            addLog("${profile.typeLabel()} SOCKS connected on ${tun2SocksHost()}:${tun2SocksPort()}")
             startWatchdog()
             return
         }
@@ -1766,7 +1825,7 @@ class OlcboxVpnService : VpnService() {
                         return@launch
                     }
 
-                    mode == AndroidConnectionMode.Tun &&
+                    (mode == AndroidConnectionMode.Tun || adBlockingEnabled) &&
                         requiresTunSocksBridge() &&
                         tunSocksBridge?.isRunning != true -> {
                         addLog("Watchdog: TUN DNS bridge stopped")
@@ -2093,11 +2152,8 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun resolveOlcRtcDnsServer(configuredDnsServer: String): String {
-        val selectedDnsServer = selectOlcRtcDnsEndpoint(
-            configuredValue = configuredDnsServer,
-            fallbackValue = DEFAULT_OLCRTC_DNS_SERVER
-        )
-        val source = if (configuredDnsServer.isBlank()) "default" else "configured"
+        val selectedDnsServer = androidRtcDnsEndpoint(this, configuredDnsServer)
+        val source = if (configuredDnsServer.isBlank()) "automatic network" else "configured"
         addLog("Using $source DNS server $selectedDnsServer for olcRTC signaling")
         return selectedDnsServer
     }
@@ -2126,7 +2182,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun requiresTunSocksBridge(): Boolean {
-        return profileRequiresTunSocksBridge(activeProfileType)
+        return adBlockingEnabled || profileRequiresTunSocksBridge(activeProfileType)
     }
 
     private fun handleRtcLine(line: String) {
@@ -2578,7 +2634,7 @@ class OlcboxVpnService : VpnService() {
         val localizedStatus = localizedNotificationText(status)
         val contentText = activeProfileName
             .takeIf { it.isNotBlank() }
-            ?.let { "$it · $localizedStatus" }
+            ?.let { "$it Р’В· $localizedStatus" }
             ?: localizedStatus
 
         val publicNotification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
@@ -2614,17 +2670,12 @@ class OlcboxVpnService : VpnService() {
                     pendingIntent = verification.pendingIntent
                 )
             )
-        } else if (notificationProfileCount > 1) {
-            builder.addAction(
-                authenticatedNotificationAction(
-                    icon = android.R.drawable.ic_media_previous,
-                    label = "Previous",
-                    pendingIntent = getServiceActionPendingIntent(
-                        OlcboxVpnActions.ACTION_SWITCH_PREVIOUS_PROFILE,
-                        NOTIFICATION_PREVIOUS_REQUEST_CODE
-                    )
-                )
-            )
+        } else {
+            builder.addAction(authenticatedNotificationAction(
+                icon = android.R.drawable.ic_menu_manage,
+                label = "Profiles",
+                pendingIntent = getProfileChooserPendingIntent()
+            ))
         }
 
         builder
@@ -2639,17 +2690,15 @@ class OlcboxVpnService : VpnService() {
                 )
             )
 
-        if (verification == null && notificationProfileCount > 1) {
-            builder.addAction(
-                authenticatedNotificationAction(
-                    icon = android.R.drawable.ic_media_next,
-                    label = "Next",
-                    pendingIntent = getServiceActionPendingIntent(
-                        OlcboxVpnActions.ACTION_SWITCH_NEXT_PROFILE,
-                        NOTIFICATION_NEXT_REQUEST_CODE
-                    )
+        run {
+            builder.addAction(authenticatedNotificationAction(
+                icon = android.R.drawable.ic_popup_sync,
+                label = "Reconnect",
+                pendingIntent = getServiceActionPendingIntent(
+                    OlcboxVpnActions.ACTION_RECONNECT_PROFILE,
+                    NOTIFICATION_RECONNECT_REQUEST_CODE
                 )
-            )
+            ))
         }
 
         return builder
@@ -2709,7 +2758,7 @@ class OlcboxVpnService : VpnService() {
                     Intent.FLAG_ACTIVITY_CLEAR_TOP or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
             },
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_CANCEL_CURRENT
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }
 
@@ -2724,17 +2773,17 @@ class OlcboxVpnService : VpnService() {
             return@synchronized
         }
         val connectedProxy = if (status is VpnStatus.Connected) {
-            val usesAppCredentials = externalEngine?.usesAppSocksCredentials != false
+            val usesAppCredentials = adBlockingEnabled || externalEngine?.usesAppSocksCredentials != false
             SubscriptionFetchProxy(
-                host = socksConnectHost(),
-                port = socksListenPort,
+                host = if (adBlockingEnabled) AndroidSocksProxySettings.connectHost(tun2SocksHost()) else socksConnectHost(),
+                port = if (adBlockingEnabled) tun2SocksPort() else socksListenPort,
                 username = socksUsername.takeIf { usesAppCredentials }.orEmpty(),
                 password = socksPassword.takeIf { usesAppCredentials }.orEmpty()
             )
         } else {
             null
         }
-        OlcboxVpnState.setStatus(status, connectedProxy, activePingProfile)
+        OlcboxVpnState.setStatus(status, connectedProxy, activePingProfile,activePingLocation)
         if (status !is VpnStatus.Connecting && status !is VpnStatus.Reconnecting) {
             OlcboxVpnState.setOpenFluxVerification(null)
         }
@@ -2819,6 +2868,8 @@ class OlcboxVpnService : VpnService() {
                 VpnProfileConfig.TYPE_AMNEZIA_WG -> "AmneziaWG"
                 VpnProfileConfig.TYPE_AMNEZIA_VPN -> "AmneziaVPN"
                 VkCallsRuntimeConfig.ENGINE_TYPE -> "VK Calls"
+                LocationConfig.PROVIDER_SALUTE_JAZZ -> "Р РЋР В°Р В»РЎР‹РЎвЂљ Jazz"
+                LocationConfig.PROVIDER_MTS_LINK -> "Р СљР СћР РЋ Р вЂєР С‘Р Р…Р С”"
                 else -> "VPN"
             }
         }
@@ -2924,7 +2975,7 @@ class OlcboxVpnService : VpnService() {
                 backendOut.flush()
 
                 if (backendIn.readUnsignedByte() != SOCKS_AUTH_VERSION.toInt()) return
-                if (backendIn.readUnsignedByte() != 0x00) return // 0x00 - успешно
+                if (backendIn.readUnsignedByte() != 0x00) return // 0x00 - РЎС“РЎРѓР С—Р ВµРЎв‚¬Р Р…Р С•
 
                 val c2b = relay(client, backend, "client-to-backend")
                 val b2c = relay(backend, client, "backend-to-client")
@@ -3068,6 +3119,7 @@ class OlcboxVpnService : VpnService() {
         private const val NOTIFICATION_STOP_REQUEST_CODE = 101
         private const val NOTIFICATION_PREVIOUS_REQUEST_CODE = 102
         private const val NOTIFICATION_NEXT_REQUEST_CODE = 103
+        private const val NOTIFICATION_RECONNECT_REQUEST_CODE = 104
         private const val ANDROID_APP_RESOURCE_PACKAGE = "org.olcbox.app"
         private const val NOTIFICATION_SMALL_ICON_METADATA =
             "org.olcbox.app.NOTIFICATION_SMALL_ICON"

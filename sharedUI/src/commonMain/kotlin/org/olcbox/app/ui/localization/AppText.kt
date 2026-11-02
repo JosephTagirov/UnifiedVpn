@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import org.olcbox.app.ui.theme.LocalAppLanguagePreference
+import org.olcbox.app.vpn.OpenFluxConnectionErrors
 
 @Composable
 fun AppText(
@@ -70,6 +71,9 @@ fun localizeUiText(text: String, language: String): String {
     russianExactText[text]?.let { return it }
 
     return when {
+        text == "OPENFLUX_FATAL: ${OpenFluxConnectionErrors.DOCUMENT_VIEWER}" ||
+            text == "OpenFlux failed before desktop proxy was enabled: OPENFLUX_FATAL: ${OpenFluxConnectionErrors.DOCUMENT_VIEWER}" ->
+            localizeUiText(OpenFluxConnectionErrors.DOCUMENT_VIEWER, language)
         text.startsWith("Version ") -> "Версия ${text.removePrefix("Version ")}"
         text.startsWith("Connected ") && text.endsWith("ms") ->
             "Подключено за ${text.removePrefix("Connected ").removeSuffix("ms")} мс"
@@ -105,7 +109,7 @@ fun localizeUiText(text: String, language: String): String {
             text.replace("Subscription deleted", "Подписка удалена")
                 .replace("locations removed", "профилей удалено")
         text.startsWith("Subscriptions updated: ") ->
-            "Подписок обновлено: ${text.removePrefix("Subscriptions updated: ")}"
+            "Подписок обновлено: ${text.removePrefix("Subscriptions updated: ").replace(". Some subscriptions could not be refreshed.", ". Часть подписок не удалось обновить.")}"
         text.startsWith("Download failed: ") ->
             "Ошибка загрузки: ${text.removePrefix("Download failed: ")}"
         text.startsWith("Unified VPN update available: ") ->
@@ -123,6 +127,66 @@ fun localizeUiText(text: String, language: String): String {
 }
 
 private val russianExactText = mapOf(
+    OpenFluxConnectionErrors.DOCUMENT_VIEWER to
+        "Яндекс открыл страницу просмотра файла вместо редактора. Обновите подписку OpenFlux или попросите её владельца предоставить рабочую ссылку на редактируемый документ.",
+    "Update subscription" to "Обновить подписку",
+    "Updating subscriptions..." to "Обновление подписок...",
+    "Could not update subscriptions. Saved profiles were kept." to
+        "Не удалось обновить подписки. Сохранённые профили оставлены без изменений.",
+    "Another VPN connection is active. Disconnect it before starting Unified VPN." to
+        "Уже активно другое VPN-подключение. Отключите его перед запуском Unified VPN.",
+    "A system proxy is active. Disable it before starting Unified VPN." to
+        "Уже включён системный прокси. Отключите его или выберите локальный SOCKS.",
+    "Could not check active VPN and proxy connections. Try connecting again." to
+        "Не удалось проверить активные VPN и прокси. Повторите подключение.",
+    "Chrome system proxy does not support SOCKS authentication; use local SOCKS mode with credentials" to
+        "Системный прокси Chrome не поддерживает авторизацию SOCKS. Выберите «Авто» или локальный SOCKS.",
+    "Use VPN for AWG/VLESS; choose system proxy or local SOCKS for proxy profiles" to
+        "VPN для AWG/VLESS; системный прокси или локальный SOCKS для прокси-профилей",
+    "YOUR PERSONAL NETWORK" to "ТВОЯ ЛИЧНАЯ СЕТЬ",
+    "Your network." to "Твоя сеть.",
+    "Under control." to "Под контролем.",
+    "Connect" to "Подключить",
+    "Disconnect" to "Отключить",
+    "Cancel connection" to "Отменить подключение",
+    "Add profile" to "Добавить профиль",
+    "Add your first profile" to "Добавь первый профиль",
+    "Use a link, QR or file" to "По ссылке, QR или из файла",
+    "Ready to connect" to "Готово к подключению",
+    "Choose a profile below" to "Выбери профиль ниже",
+    "The channel is starting" to "Запускаем соединение",
+    "Your connection is protected" to "Соединение защищено",
+    "Logs" to "Журнал",
+    "Cabinet" to "Кабинет",
+    "Everything in its place" to "Всё нужное на своём месте",
+    "EVERYDAY" to "НА КАЖДЫЙ ДЕНЬ",
+    "ADMINISTRATION" to "АДМИНИСТРИРОВАНИЕ",
+    "PERSONALIZATION" to "ДЛЯ СЕБЯ",
+    "HELP AND DIAGNOSTICS" to "ПОМОЩЬ И ДИАГНОСТИКА",
+    "Connection" to "Подключение",
+    "VPN mode and Telegram proxy" to "Режим VPN и прокси для Telegram",
+    "Profiles and subscriptions" to "Профили и подписки",
+    "People and access" to "Пользователи и доступ",
+    "Create a config set, change expiry or revoke access" to "Создать набор, изменить срок или отключить доступ",
+    "Recent lines, errors, copy and export" to "Последние записи, ошибки и копирование",
+    "App updates" to "Обновление приложения",
+    "Check for a new version" to "Проверить новую версию",
+    "Choose how apps use the VPN" to "Как приложения используют VPN",
+    "Automatic mode is suitable for most users. Change it only if an app needs a separate proxy." to "Обычно подходит автоматический режим. Меняй его, если приложению нужен отдельный прокси.",
+    "FOR TELEGRAM AND OTHER APPS" to "ДЛЯ TELEGRAM И ДРУГИХ ПРИЛОЖЕНИЙ",
+    "Local SOCKS5 proxy" to "Локальный прокси SOCKS5",
+    "Use this address and credentials in Telegram on this device. Keep UnifiedVPN connected." to "Укажи этот адрес и данные входа в Telegram на этом устройстве. UnifiedVPN должен оставаться подключённым.",
+    "Technical details" to "Технические сведения",
+    "Hide technical details" to "Скрыть технические сведения",
+    "Open a config link, scan QR or choose a file" to "Открой ссылку, отсканируй QR или выбери файл",
+    "Paste a config link" to "Вставить ссылку на конфиги",
+    "One link adds the selected profiles" to "Одна ссылка добавит выбранные профили",
+    "A config set or an individual VPN file" to "Набор конфигов или отдельный файл VPN",
+    "Advanced setup" to "Дополнительная настройка",
+    "Hide advanced setup" to "Скрыть дополнительные настройки",
+    "Profiles added" to "Профили добавлены",
+    "Could not open the browser" to "Не удалось открыть браузер",
+
     "Active" to "Активно",
     "Appearance" to "Внешний вид",
     "Dark" to "Тёмная",
@@ -167,6 +231,10 @@ private val russianExactText = mapOf(
     "Application Logs" to "Журнал приложения",
     "Application Settings" to "Настройки приложения",
     "Application settings" to "Настройки приложения",
+    "VPN management" to "Управление VPN",
+    "Profiles, access periods and sharing" to "Профили, сроки и выдача доступа",
+    "Opens your server's cabinet in the browser. Sign in with your owner login." to "Кабинет на твоём сервере откроется в браузере. Войди по логину и паролю владельца.",
+    "Could not open the browser. Copy the cabinet address:" to "Не удалось открыть браузер. Скопируй адрес кабинета:",
     "Applies when settings closes" to "Применится после закрытия настроек",
     "Apps Using Unified VPN" to "Приложения через Unified VPN",
     "Auto" to "Авто",
@@ -210,6 +278,10 @@ private val russianExactText = mapOf(
     "Connection failed" to "Ошибка подключения",
     "Connection Mode" to "Режим подключения",
     "Connection Settings" to "Настройки подключения",
+    "Ad blocking" to "Блокировка рекламы",
+    "Blocks known advertising and tracking domains while connected. Some video and in-app ads may remain." to
+        "Блокирует известные рекламные и следящие домены при подключении. Часть видеорекламы и рекламы в приложениях может остаться.",
+    "Changes apply after reconnecting." to "Изменения применятся после переподключения.",
     "Connection mode saved" to "Режим подключения сохранён",
     "Connection settings" to "Настройки подключения",
     "Connection type" to "Тип подключения",
@@ -484,6 +556,8 @@ private val russianExactText = mapOf(
     "Username" to "Имя пользователя",
     "Username is required" to "Укажите имя пользователя",
     "Uses the subscription schedule" to "Использует расписание подписки",
+    "Use system proxy on Windows and the recommended mode for other profiles" to
+        "В Windows использовать системный прокси, на других платформах — рекомендуемый режим",
     "Use local SOCKS for olcRTC and the recommended mode for other profiles" to
         "Для olcRTC использовать локальный SOCKS, для остальных профилей — рекомендуемый режим",
     "Using Android system colors" to "Используются системные цвета Android",

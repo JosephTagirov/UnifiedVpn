@@ -90,6 +90,9 @@ func allowedVolgaURL(raw string) bool {
 func parseVolgaDocument(body string) (volgaDocument, error) {
 	script, _, err := clientConfigScript(body)
 	if err != nil {
+		if isDocumentViewer(body) {
+			return volgaDocument{}, ErrDocumentViewer
+		}
 		return volgaDocument{}, errVolgaDocument
 	}
 	var root map[string]any

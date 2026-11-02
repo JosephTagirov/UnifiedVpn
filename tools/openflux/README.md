@@ -38,7 +38,7 @@ use 16 KiB ELF alignment and `-checklinkname=0`, required by the pinned `anet`
 dependency. `-AndroidNdk PATH` overrides NDK discovery. `-PrepareOnly` prepares
 sources; `-SkipAndroid` deliberately produces an incomplete Android manifest.
 
-Outputs are local and ignored by Git in `.downloads/openflux/artifacts`:
+Outputs are local and ignored by Git in `.downloads/openflux/artifacts-wrapper8-20261102-viewer`:
 
 - `openflux-windows-amd64.exe` and `openflux-linux-amd64`;
 - `android/<abi>/libopenflux.so`;

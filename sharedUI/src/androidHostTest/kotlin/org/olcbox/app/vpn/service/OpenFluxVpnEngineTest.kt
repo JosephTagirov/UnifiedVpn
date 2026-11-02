@@ -155,6 +155,37 @@ class OpenFluxVpnEngineTest {
     }
 
     @Test
+    fun nativeFatalReasonSurvivesProcessExitAndIsSanitized() = runTest {
+        Fixture(autoReady = false).use { fixture ->
+            val startup = async { runCatching { fixture.engine.start() } }
+            runCurrent()
+            fixture.onOutput("OPENFLUX_FATAL: document failed: $TEST_DOCUMENT_URL password=$TEST_PASSWORD encryption_key=$TEST_KEY")
+            fixture.process.alive = false
+            advanceUntilIdle()
+            val failure = assertIs<IllegalStateException>(startup.await().exceptionOrNull())
+            assertContains(failure.message.orEmpty(), "document failed")
+            listOf(TEST_DOCUMENT_URL, TEST_PASSWORD, TEST_KEY).forEach { secret ->
+                assertFalse(secret in failure.message.orEmpty())
+            }
+            assertTrue(fixture.configFiles().isEmpty())
+        }
+    }
+
+    @Test
+    fun nativeFatalStopsStartupEvenBeforeTheChildExits() = runTest {
+        Fixture(autoReady = false).use { fixture ->
+            val startup = async { runCatching { fixture.engine.start() } }
+            runCurrent()
+            fixture.onOutput("OPENFLUX_FATAL: ${org.olcbox.app.vpn.OpenFluxConnectionErrors.DOCUMENT_VIEWER}")
+            advanceUntilIdle()
+            val failure = assertIs<IllegalStateException>(startup.await().exceptionOrNull())
+            assertEquals(org.olcbox.app.vpn.OpenFluxConnectionErrors.DOCUMENT_VIEWER, failure.message)
+            assertFalse(fixture.process.isAlive)
+            assertTrue(fixture.configFiles().isEmpty())
+        }
+    }
+
+    @Test
     fun cancellingStartupStopsChildAndDeletesConfiguration() = runTest {
         Fixture(autoReady = false).use { fixture ->
             val startup = launch { fixture.engine.start() }
