@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="480" viewBox="0 0 1280 480" role="img" aria-labelledby="title desc">
+<title id="title">UnifiedVPN — ваши подключения в одном приложении</title>
+<desc id="desc">VPN-клиент для Android и Windows. Единый интерфейс для olcRTC, VLESS, AmneziaWG и OpenFlux. Альфа-версия.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#10241c"/><stop offset="1" stop-color="#294737"/></linearGradient>
+  <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d6e3be"/><stop offset="1" stop-color="#a6bf89"/></linearGradient>
+  <radialGradient id="glow"><stop stop-color="#9fbc7a" stop-opacity=".16"/><stop offset="1" stop-color="#9fbc7a" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="1280" height="480" rx="24" fill="url(#bg)"/>
+<circle cx="1010" cy="230" r="340" fill="url(#glow)"/>
+<g fill="none" stroke="#c3d4af" stroke-opacity=".08"><circle cx="1000" cy="240" r="205"/><circle cx="1000" cy="240" r="145"/><path d="M700 0v480M820 0v480M940 0v480M1060 0v480M1180 0v480M680 80h600M680 200h600M680 320h600M680 440h600"/></g>
+<g font-family="Segoe UI,Arial,sans-serif">
+  <rect x="54" y="48" width="48" height="48" rx="14" fill="#c3d4af"/>
+  <path d="m78 58 14 5v12c0 10-7 16-14 20-7-4-14-10-14-20V63Z" fill="none" stroke="#193426" stroke-width="2.8" stroke-linejoin="round"/>
+  <path d="m71 75 5 5 10-11" fill="none" stroke="#193426" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="118" y="79" font-size="21" font-weight="600" letter-spacing="2" fill="#d3dec8">UNIFIEDVPN</text>
+  <rect x="335" y="56" width="76" height="28" rx="14" fill="#3d5340" stroke="#687c54"/>
+  <text x="373" y="75" text-anchor="middle" font-size="12" font-weight="700" letter-spacing="1.5" fill="#dce7c9">ALPHA</text>
+  <text x="54" y="185" font-size="72" font-weight="700" letter-spacing="-2.5" fill="#f3f6ed">UnifiedVPN</text>
+  <text x="56" y="252" font-size="34" font-weight="500" fill="#edf1e7">Ваши подключения.</text>
+  <text x="56" y="297" font-size="34" font-weight="500" fill="#edf1e7">Одно приложение.</text>
+  <text x="56" y="350" font-size="19" fill="#b9c9ae">Профили, подписки и управление соединением</text>
+  <path d="M56 393h450" stroke="#536d53"/>
+  <text x="56" y="429" font-size="16" font-weight="600" fill="#d1dfc4">ANDROID</text>
+  <circle cx="162" cy="423" r="2.5" fill="#93ac7b"/>
+  <text x="181" y="429" font-size="16" font-weight="600" fill="#d1dfc4">WINDOWS</text>
+  <text x="387" y="429" font-size="14" fill="#aabf9b">OPEN SOURCE</text>
+  <g fill="none" stroke="#a7bf8b" stroke-width="2" stroke-opacity=".65">
+    <path d="M853 133h55q24 0 24 24v36M1089 133h-55q-24 0-24 24v36M853 347h55q24 0 24-24v-36M1089 347h-55q-24 0-24-24v-36"/>
+  </g>
+  <g fill="#1d3629" stroke="#68835a">
+    <rect x="701" y="102" width="170" height="62" rx="16"/>
+    <rect x="1071" y="102" width="155" height="62" rx="16"/>
+    <rect x="701" y="316" width="184" height="62" rx="16"/>
+    <rect x="1055" y="316" width="171" height="62" rx="16"/>
+  </g>
+  <g font-size="21" font-weight="600" fill="#e0e9d6" text-anchor="middle">
+    <text x="786" y="141">olcRTC</text><text x="1148" y="141">VLESS</text>
+    <text x="793" y="355">AmneziaWG</text><text x="1140" y="355">OpenFlux</text>
+  </g>
+  <rect x="901" y="175" width="140" height="140" rx="36" fill="#0c1e16" opacity=".35"/>
+  <rect x="901" y="167" width="140" height="140" rx="36" fill="url(#tile)"/>
+  <path d="m971 193 36 13v31c0 26-17 42-36 52-19-10-36-26-36-52v-31Z" fill="none" stroke="#203b2c" stroke-width="7" stroke-linejoin="round"/>
+  <path d="m954 236 13 13 25-28" fill="none" stroke="#203b2c" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="971" y="429" text-anchor="middle" font-size="15" fill="#b9c9ae">Четыре типа профилей · единый интерфейс</text>
+</g>
+</svg>

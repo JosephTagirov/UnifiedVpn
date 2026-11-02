@@ -1,472 +1,130 @@
-# Unified VPN
-
-Android-first VPN client based on the original olcbox application by Alan Anisimov:
-https://github.com/alananisimov/olcbox. It keeps the existing `olcrtc`
-engine and adds a unified profile layer for `olcrtc`, VLESS, Amnezia,
-and experimental OpenFlux profiles.
-
 <p align="center">
-  <img src="docs/screenshots/unified-vpn-home.png" alt="Unified VPN home screen" width="260">
-  <img src="docs/screenshots/unified-vpn-settings.png" alt="Unified VPN application settings" width="260">
-  <img src="docs/screenshots/unified-vpn-sharing.png" alt="Unified VPN secure sharing screen" width="260">
+  <img src="docs/assets/hero.svg" alt="UnifiedVPN — ваши подключения, одно приложение. Android и Windows; olcRTC, VLESS, AmneziaWG и OpenFlux." width="100%">
 </p>
 
-## Status
-Alpha version.
-Not intended for production use.
+<h1 align="center">UnifiedVPN</h1>
 
-Supported release targets are Android, Windows (x86-64), and Linux (x86-64/arm64).
-Linux packages are built as portable AppImage files.
+<p align="center">
+  VPN-клиент для <strong>Android и Windows</strong>.<br>
+  Добавьте подписку или готовый профиль — и управляйте подключениями в одном месте.
+</p>
 
-Release history is maintained in [CHANGELOG.md](CHANGELOG.md).
+<p align="center">
+  <a href="#download"><strong>Скачать</strong></a> ·
+  <a href="#start">Быстрый старт</a> ·
+  <a href="#features">Возможности</a> ·
+  <a href="#docs">Документация</a> ·
+  <a href="#english">English</a>
+</p>
 
-Current [0.0.14 release, build `2026101301`](docs/releases/0.0.14-build.2026101301.md),
-adds experimental VK Calls with a separate VP8/Chrome-DTLS engine. The exact
-packaged Windows manager and signed Android APK on API 35 passed Connected,
-verified HTTPS and Stop. See the [build-specific test report](docs/testing/vk-calls-2026101301.md).
-Physical Android 13, direct whitelist operation and sustained speed are not
-verified. Jitsi keeps its separate `d7a00da` core; OpenFlux Session and classic
-profiles remain separate. Windows VK TUN is not implemented, and live Windows
-VLESS/AWG TUN recovery remains unverified.
-
-[Download APK/MSI](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.0.14).
-Choose `build.2026101301`; historical assets and tags are retained. These Android
-and Windows files have a separate source snapshot, `build-2026101301`, and no
-newly validated Linux package. Earlier build notes remain in [release history](CHANGELOG.md).
-
-## Legal Notice
-This software is intended for development, testing and research purposes only.
-
-The author does not provide any guarantees regarding:
-- availability of network access
-- compatibility with specific services
-- compliance with any external restrictions
-
-Users are solely responsible for how they use this software and must comply with applicable laws.
-
-## Usage Restrictions
-This software is not intended to be used for bypassing access restrictions or violating applicable laws.
-The author does not support or encourage such use.
-
-## Features
-- One Android `VpnService` with selectable profile types.
-- Imports `olcrtc://`, VLESS `vless://`, VLESS base64 subscriptions, AmneziaWG `.conf`, `awg://`, and Amnezia `vpn://`.
-- VLESS runtime through packaged `sing-box`, with XHTTP/SplitHTTP profiles handled by the packaged Xray core; see `docs/ENGINES.md`.
-- Self-hosted Amnezia WireGuard runtime through the packaged `sing-box` path; AmneziaWG obfuscation requires an AWG-capable core.
-- One-tap tunnel start/stop with live relay status.
-- Saved connection profiles with active location selection.
-- Providers: Jazz, Telemost, WB Stream, Jitsi; experimental VK Calls (VP8).
-- Transports: DataChannel, VP8, SEI.
-- VP8 tuning: FPS and batch size.
-- Connectivity checks for individual locations.
-- Config import from clipboard/file and export to clipboard.
-- Diagnostics log view with log export.
-- Android TUN/proxy modes and SOCKS5 credentials. One shared per-app split-tunneling group for olcRTC/OpenFlux; a separate group for VLESS/AmneziaWG.
-- Experimental OpenFlux: `+ -> Add OpenFlux` opens document URL, transport and encryption-key fields; URI/JSON import is also available. Requires a compatible encrypted server and a Yandex document with matching classic `yandex` or Volga `vyandex` transport, with one active client per document. Windows and Android emulator traffic were verified; physical-device/carrier coverage remains limited.
-- OpenFlux QR/link sharing is available from the profile editor after a secret-key warning. For a second simultaneous device, create a separate document and use the optional [server profile helper](tools/openflux-server/CREATE_PROFILE.md); default preparation is offline and does not change running services.
-- Network migration, reconnect handling, and watchdog recovery.
-- Password-protected friend packages for Android and Windows: shared olcRTC profiles, an explicitly selected VLESS link, and a separate AmneziaWG peer provisioned by the package creator.
-
-## Updates
-
-Unified VPN checks stable application releases at:
-https://github.com/JosephTagirov/UnifiedVpn/releases.
-
-Application identity uses both `olcbox.version` and the monotonic
-`olcbox.build` from `gradle.properties`. A higher semantic version is always an
-update. When semantic versions are equal, an asset is offered only when its
-`build.<number>` is greater than the installed build. Release APK, EXE, and ZIP
-asset names must therefore contain that build token; MSI names use it as well.
-
-The machine-wide Windows installer keeps the `0.0.11` upgrade family and uses
-a different ProductCode for each build. Its compiled MSI policy includes older
-builds with the same semantic version, while preserving the Start-menu path.
-This metadata and the packaged launcher were verified; installation over the
-owner's working Windows copy was not performed by the automated tests.
-
-Android and Windows download updates inside the application, with progress and
-mandatory HTTPS, size and SHA-256 verification, then open the local installer.
-System installation confirmation is still required. This release supplies an
-APK and Windows MSI; the manual portable ZIP is not an auto-update asset. Older
-clients without MSI support must update manually.
-
-Checks for updates of the original [olcbox](https://github.com/alananisimov/olcbox)
-and [Amnezia VPN](https://github.com/amnezia-vpn/amnezia-client) are not run by
-the application. They can be monitored separately by the owner's private
-server-side notifier.
-
-## Secure Friend Packages
-
-The friend-package creator includes only olcRTC profiles, the VLESS URI entered
-for that friend, and a ready AmneziaWG client configuration created specifically
-for that friend. Existing VLESS and AmneziaWG profiles are deliberately
-excluded, so an existing AWG private key is never reused.
-
-Packages are encrypted with AES-256-GCM. Send the encrypted package and its
-password through different private channels. Do not publish either item. The
-creator obtains the complete SSH `SHA256:...` fingerprint independently and
-Unified VPN verifies it before sending any SSH credential. Provisioning then
-runs locally on the creator's device. The resulting package never contains the
-SSH login, password, SSH port, or host key. The receiver only decrypts and
-imports the ready profiles; legacy credential-bearing v1 packages are rejected.
-
-To create one combined link, open `Settings -> Subscriptions & Sharing ->
-Package for a friend`, enter the VLESS URI, SSH server details, and a package
-password. Unified VPN first creates a separate AWG peer and then produces one
-encrypted `unifiedvpn-friend-v2:` string.
-The receiver copies that complete string and selects `+ -> Paste link, URI, or
-friend package`, then enters the package password. The app imports olcRTC and
-VLESS and adds the already provisioned AmneziaWG profile.
-
-## Platform Matrix
-
-| Platform | Modes | Runtime |
-| --- | --- | --- |
-| Android | TUN, proxy | `VpnService`, `hev-socks5-tunnel`, local `olcrtc`, `sing-box`, and Xray SOCKS5 runtimes |
-| Windows x86-64 | system proxy, local SOCKS; experimental VLESS/AWG TUN | bundled engines and separate UAC helper; live TUN validation pending |
-| Linux x86-64/arm64 | local SOCKS, optional TUN | bundled `olcrtc`, AWG `sing-box`, Xray, and `hev-socks5-tunnel` runtimes |
-
-## Requirements
-
-| Area | Requirement |
-| --- | --- |
-| JVM | JDK 17+ |
-| Android | Android Studio, Android SDK, Android NDK |
-| Android olcRTC | Go, `gomobile`, and local `olcrtc` fork |
-| Android VLESS | Packaged `sing-box` and Xray executables as `jniLibs/<abi>/libsing-box.so` and `libxray.so` |
-| Windows native assets | Go and local `olcrtc` fork |
-| Windows TUN | Experimental separate UAC helper for VLESS/AWG only; live traffic/recovery validation pending; GUI elevation remains refused |
-| Linux native assets | JDK 17+, Go, C toolchain, `make`, FUSE/AppImage tools, AWG `sing-box`, and Xray |
-
-Default local `olcrtc` path:
-
-```text
-../olcrtc
-```
-
-Override it with `OLCRTC_REPO`:
-
-```powershell
-$env:OLCRTC_REPO="C:\path\to\olcrtc"
-.\gradlew.bat :desktopApp:run
-```
-
-The checkout must be clean and match the full `olcbox.olcrtcSha` pinned in
-`gradle.properties`; Gradle rejects a different or unversioned source tree.
-
-## Commands
-
-| Task | Command |
-| --- | --- |
-| Android debug APK | `.\gradlew.bat :androidApp:assembleDebug` |
-| Android local test APK | `.\gradlew.bat :androidApp:packageDebugUpdateApk` |
-| Android signed GitHub update APK | `.\gradlew.bat :androidApp:packageReleaseUpdateApk` |
-| Install Android debug APK | `.\gradlew.bat :androidApp:installDebug` |
-| Run Windows desktop app | `.\gradlew.bat :desktopApp:run` |
-| Build Windows native assets | `.\gradlew.bat :desktopApp:buildDesktopNativeAssets` |
-| Windows EXE installer | `.\gradlew.bat :desktopApp:packageReleaseExe --no-daemon` |
-| Windows portable ZIP | `.\gradlew.bat :desktopApp:packageReleasePortableZip` |
-| Windows GitHub update bundle | `.\gradlew.bat :desktopApp:packageReleaseUpdateBundle` |
-| Linux AppImage (run on Linux) | `./gradlew :desktopApp:packageReleaseLinuxAppImage --no-daemon` |
-| Reproducible Linux build and smoke-test | `sh ./scripts/Build-LinuxRelease.sh` |
-| Main checks | `.\gradlew.bat :sharedUI:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug` |
-| JVM tests | `.\gradlew.bat :sharedUI:jvmTest` |
-
-## Build Outputs
-
-| Target | Command | Output |
-| --- | --- | --- |
-| Android debug | `.\gradlew.bat :androidApp:assembleDebug` | `androidApp\build\outputs\apk\debug\androidApp-debug.apk` |
-| Android release | `.\gradlew.bat :androidApp:assembleRelease` | `androidApp\build\outputs\apk\release\androidApp-release.apk` |
-| Android local test APK | `.\gradlew.bat :androidApp:packageDebugUpdateApk` | `androidApp\build\outputs\update\UnifiedVPN-<version>-build.<build>-android-universal-debug.apk` |
-| Android signed update APK | `.\gradlew.bat :androidApp:packageReleaseUpdateApk` | `androidApp\build\outputs\update\UnifiedVPN-<version>-build.<build>-android-universal.apk` |
-| Windows EXE | `.\gradlew.bat :desktopApp:packageReleaseExe --no-daemon` | `desktopApp\build\compose\binaries\main-release\exe\UnifiedVPN-<version>.exe` |
-| Windows MSI | `.\gradlew.bat :desktopApp:packageReleaseMsi --no-daemon` | `desktopApp\build\compose\binaries\main-release\msi\UnifiedVPN-<version>.msi` |
-| Windows manual portable ZIP | `.\gradlew.bat :desktopApp:packageReleasePortableZip` | `desktopApp\build\compose\binaries\main-release\portable\UnifiedVPN-<version>-build.<build>-portable-manual.zip` |
-| Windows update bundle | `.\gradlew.bat :desktopApp:packageReleaseUpdateBundle` | `desktopApp\build\compose\binaries\main-release\update\UnifiedVPN-<version>-build.<build>-windows-amd64-installer.exe` |
-| Linux AppImage | `./gradlew :desktopApp:packageReleaseLinuxAppImage --no-daemon` | `desktopApp/build/compose/binaries/main-release/appimage/UnifiedVPN-<version>-build.<build>-linux-<arch>.AppImage` |
-
-## Native Assets
-
-| Asset | Path |
-| --- | --- |
-| Windows `olcrtc` | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-windows-amd64.exe` |
-| Windows `tun2socks` | `desktopApp/build/generated/desktopNativeResources/native/tun2socks-windows-amd64.exe` |
-| Windows Wintun runtime | `desktopApp/build/generated/desktopNativeResources/native/wintun.dll` |
-| Windows AWG `sing-box` | `desktopApp/build/generated/desktopNativeResources/native/sing-box-awg-windows-amd64.exe` |
-| Windows Xray | `desktopApp/build/generated/desktopNativeResources/native/xray-windows-amd64.exe` |
-| Linux `olcrtc` | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-linux-<arch>` |
-| Linux TUN bridge | `desktopApp/build/generated/desktopNativeResources/native/hev-socks5-tunnel-linux-<arch>` |
-| Linux AWG `sing-box` | `desktopApp/build/generated/desktopNativeResources/native/sing-box-awg-linux-<arch>` |
-| Linux Xray | `desktopApp/build/generated/desktopNativeResources/native/xray-linux-<arch>` |
-
-## Notes
-
-- Android native ABIs: `armeabi-v7a`, `arm64-v8a`, `x86_64`.
-- Android release builds require `keystore.properties` in the repository root.
-- Windows installers must be built on Windows with `jpackage` and WiX available.
-- Keep the manual portable ZIP out of GitHub release assets while clients older
-  than `0.0.12` remain supported. Released `0.0.11` prefers a matching ZIP and
-  would otherwise bypass the registered installer upgrade path.
-- Linux AppImage must be built and smoke-tested on Linux; cross-packaging from Windows is not supported.
-- `scripts/Build-LinuxRelease.sh` does not install packages, use `sudo`, restart
-  services, or publish files. It checks out only the commits pinned in
-  `gradle.properties` under `.downloads` and requires an explicit
-  `APPIMAGETOOL` executable when `appimagetool` is not on `PATH`.
-
-`keystore.properties`:
-
-```properties
-storeFile=/absolute/path/to/release.keystore
-storePassword=...
-keyAlias=...
-keyPassword=...
-```
+<p align="center">
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.4">v0.1.4 · build 2026110202</a> &nbsp; / &nbsp;
+  Alpha &nbsp; / &nbsp;
+  <a href="LICENSE">MIT License</a>
+</p>
 
 ---
 
-# Unified VPN на русском
+<a id="download"></a>
 
-VPN-клиент в первую очередь для Android, основанный на оригинальном приложении
-[olcbox Алана Анисимова](https://github.com/alananisimov/olcbox). Приложение
-сохраняет существующий движок `olcrtc` и добавляет единый слой профилей для
-`olcrtc`, VLESS, Amnezia и экспериментального OpenFlux.
+## Скачать приложение
 
 <p align="center">
-  <img src="docs/screenshots/unified-vpn-home.png" alt="Главный экран Unified VPN" width="260">
-  <img src="docs/screenshots/unified-vpn-settings.png" alt="Настройки приложения Unified VPN" width="260">
-  <img src="docs/screenshots/unified-vpn-sharing.png" alt="Экран безопасного обмена Unified VPN" width="260">
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.4/UnifiedVPN-android-v0.1.4-build.2026110202.apk"><img src="docs/assets/download-android.svg" alt="Скачать UnifiedVPN для Android — APK, Android 6 и новее" width="300" height="84"></a>
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.4/UnifiedVPN-windows-amd64-v0.1.4-build.2026110202.zip"><img src="docs/assets/download-windows.svg" alt="Скачать UnifiedVPN для Windows — ZIP, x64" width="300" height="84"></a>
 </p>
 
-## Состояние
+| Android 6+ | Windows x64 |
+| :--- | :--- |
+| [**Скачать APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.4/UnifiedVPN-android-v0.1.4-build.2026110202.apk) | [**Скачать ZIP**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.4/UnifiedVPN-windows-amd64-v0.1.4-build.2026110202.zip) |
+| Откройте APK на телефоне. При обновлении устанавливайте поверх прежней версии, без удаления приложения. | Распакуйте архив целиком и запустите `UnifiedVPN.exe` из распакованной папки. |
 
-Альфа-версия. Не предназначена для использования в рабочей среде.
+<p align="center">
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.4">Что нового и ограничения</a> ·
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases">Все версии</a> ·
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.4/SHA256-build-2026110202.json">Контрольные суммы SHA-256</a>
+</p>
 
-Поддерживаемые платформы: Android, Windows x86-64 и Linux x86-64/arm64.
-Linux поставляется как переносимый файл AppImage.
+> **Альфа-версия.** Скорость и доступность зависят от сети. В 0.1.4 опубликованы Android APK и Windows ZIP; нового Linux-пакета и собственного iOS-приложения в этой поставке нет.
 
-История выпусков ведётся в [CHANGELOG.md](CHANGELOG.md).
+<a id="features"></a>
 
-Текущая [0.0.14, сборка `2026101301`](docs/releases/0.0.14-build.2026101301.md),
-добавляет экспериментальный VK Calls через отдельное ядро VP8/Chrome-DTLS.
-Итоговый manager Windows и подписанный Android APK на API 35 прошли Connected,
-HTTPS с проверкой сертификатов и Stop. Есть [отчёт именно этой сборки](docs/testing/vk-calls-2026101301.md).
-Физический Android 13, прямое подключение при белых списках и длительная скорость
-не проверены. Jitsi сохраняет отдельное ядро `d7a00da`; OpenFlux Session и старые
-профили не смешиваются. Windows TUN для VK не реализован, а восстановление
-Windows VLESS/AWG TUN при реальном трафике пока не проверено.
+## Одно место для ваших подключений
 
-[Скачать APK/MSI](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.0.14).
-Выбирайте `build.2026101301`: прежние файлы и теги сохранены. Для этих APK/MSI
-есть отдельный снимок исходников `build-2026101301`; нового проверенного
-Linux-пакета нет. Прежние описания сохранены в [истории выпусков](CHANGELOG.md).
+| Профили и подписки | Управление соединением |
+| :--- | :--- |
+| **Четыре типа профилей.** olcRTC, VLESS, AmneziaWG и экспериментальный OpenFlux в одном списке. | **Подключение одним нажатием.** Выбор профиля, текущий статус и проверка доступности. |
+| **Удобный импорт.** Ссылка подписки, URI, буфер обмена или файл конфигурации. | **Настройки под задачу.** VPN/TUN и прокси; доступность режимов зависит от платформы и движка. |
+| **Обмен профилями.** Экспорт и защищённые паролем пакеты для друзей с отдельным AmneziaWG-профилем. | **Диагностика рядом.** Просмотр и экспорт журналов, обновление подписок из приложения. |
 
-## Юридическое уведомление
+<a id="start"></a>
 
-Это программное обеспечение предназначено только для разработки, тестирования
-и исследований.
+## От установки до подключения — три шага
 
-Автор не предоставляет гарантий относительно:
+1. **Установите приложение.** Выберите Android или Windows в блоке скачивания.
+2. **Добавьте профиль.** Нажмите **«+»**, вставьте ссылку подписки или импортируйте готовую конфигурацию.
+3. **Подключитесь.** Выберите профиль и нажмите **«Подключиться»**. Для загрузки изменений с сервера используйте **«Обновить подписки»** в меню **«+»**.
 
-- доступности сетевого подключения;
-- совместимости с конкретными сервисами;
-- соответствия внешним ограничениям.
+Приложение работает с вашими профилями и подписками. Для подключения нужна готовая конфигурация от администратора или вашего сервера.
 
-Пользователи самостоятельно отвечают за использование программы и обязаны
-соблюдать применимое законодательство.
+### В выпуске 0.1.4
 
-## Ограничения использования
+Добавлен **Салют Jazz (DataChannel)** для Android и Windows: подключение, HTTPS-проверка пинга и реконнект. Реализована поддержка **МТС Линк (VP9)**, но она требует настроенной постоянной встречи; успешное подключение пока не подтверждено.
 
-Программа не предназначена для обхода ограничений доступа или нарушения
-применимого законодательства. Автор не поддерживает и не поощряет такое
-использование.
+В некоторых сетях **VK Calls** использует вспомогательный OpenFlux-канал сигналинга. Работа в белых списках МегаФона, на физических Android 17 / One UI 9, Galaxy Fold и iPhone текущими проверками не подтверждена. Результаты и границы проверок перечислены в [описании релиза](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.4).
 
-## Возможности
+<details>
+<summary><strong>Посмотреть скриншоты раннего интерфейса</strong></summary>
 
-- Один Android `VpnService` с выбором типа профиля.
-- Импорт `olcrtc://`, VLESS `vless://`, VLESS-подписок Base64, AmneziaWG
-  `.conf`, `awg://` и Amnezia `vpn://`.
-- VLESS работает через встроенный `sing-box`; профили XHTTP/SplitHTTP
-  обрабатываются встроенным Xray. Подробности: `docs/ENGINES.md`.
-- Собственный Amnezia WireGuard работает через встроенный `sing-box`;
-  обфускация AmneziaWG требует AWG-совместимый core.
-- Запуск и остановка туннеля одним нажатием с отображением текущего состояния.
-- Сохранённые профили и выбор активного подключения.
-- Сервисы: Jazz, Telemost, WB Stream и Jitsi; экспериментальный VK Calls (VP8).
-- Транспорты: DataChannel, VP8 и SEI.
-- Настройка VP8: FPS и размер пакета.
-- Проверка доступности отдельных профилей.
-- Импорт конфигурации из буфера обмена или файла и экспорт в буфер обмена.
-- Просмотр и экспорт диагностического журнала.
-- Режимы Android TUN/прокси и учётные данные SOCKS5. Общая группа раздельного
-  туннелирования приложений для olcRTC/OpenFlux; отдельная для VLESS/AmneziaWG.
-- Экспериментальный OpenFlux: `+ -> Добавить OpenFlux` открывает поля ссылки
-  документа, транспорта и ключа шифрования; также доступен импорт URI/JSON. Нужны
-  совместимый зашифрованный сервер и документ Яндекса с одинаковым транспортом
-  старого редактора `yandex` или Volga `vyandex`, один активный клиент на документ.
-  Трафик проверен на Windows и Android-эмуляторе; охват физических устройств
-  и мобильных сетей пока ограничен.
-- Перенос подключения между сетями, переподключение и восстановление watchdog.
-- Защищённые паролем пакеты для друзей на Android и Windows: общие профили
-  olcRTC, явно выбранная VLESS-ссылка и создание отдельного peer AmneziaWG
-  одним действием.
+Снимки демонстрируют управление профилями и настройки ранней версии. Оформление актуальной версии отличается.
 
-## Обновления
+<p align="center">
+  <img src="docs/screenshots/unified-vpn-home.png" alt="Ранняя версия: главный экран с демонстрационными профилями" width="240">
+  <img src="docs/screenshots/unified-vpn-settings.png" alt="Ранняя версия: настройки приложения" width="240">
+  <img src="docs/screenshots/unified-vpn-sharing.png" alt="Ранняя версия: подписки и обмен конфигурациями" width="240">
+</p>
 
-Unified VPN проверяет стабильные выпуски приложения здесь:
-https://github.com/JosephTagirov/UnifiedVpn/releases.
+</details>
 
-Идентификатор приложения включает `olcbox.version` и монотонный `olcbox.build`
-из `gradle.properties`. Более высокая семантическая версия всегда считается
-обновлением. При одинаковой версии файл предлагается только тогда, когда его
-`build.<number>` больше установленного build. Поэтому имена релизных APK, EXE и
-ZIP обязаны содержать этот build-токен; для MSI действует то же правило.
+<a id="docs"></a>
 
-Системный Windows-установщик сохраняет семейство обновлений версии `0.0.11` и
-получает отдельный ProductCode для каждого build. Правила скомпилированного MSI
-включают замену прежних сборок с тем же номером версии и сохранением пути ярлыка
-меню «Пуск». Эти метаданные и запуск упакованной JVM проверены; установка поверх
-рабочей Windows-копии владельца автоматическими тестами не выполнялась.
+## Документация и участие
 
-Android и Windows скачивают обновление внутри приложения с прогрессом и
-обязательной проверкой HTTPS, размера и SHA-256, затем открывают локальный
-установщик. Системное подтверждение установки остаётся обязательным. Выпуск
-содержит APK и Windows MSI; ручной portable ZIP не является файлом автообновления.
-Старые клиенты без поддержки MSI нужно обновить вручную.
+| Что нужно | Куда перейти |
+| :--- | :--- |
+| Разобраться в движках и форматах | [Движки и протоколы](docs/ENGINES.md) |
+| Собрать приложение из исходников | [Требования, команды и результаты сборки](docs/REFERENCE.md#requirements) · [на русском](docs/REFERENCE.md#требования) |
+| Настроить защищённый обмен профилями | [Пакеты для друзей](docs/REFERENCE.md#безопасные-пакеты-для-друзей) |
+| Посмотреть историю изменений | [Релизы на GitHub](https://github.com/JosephTagirov/UnifiedVpn/releases) · [CHANGELOG](CHANGELOG.md) |
+| Сообщить об ошибке или предложить улучшение | [Issues](https://github.com/JosephTagirov/UnifiedVpn/issues) |
 
-Само приложение не проверяет обновления оригинальных
-[olcbox](https://github.com/alananisimov/olcbox) и
-[Amnezia VPN](https://github.com/amnezia-vpn/amnezia-client). Владелец может
-отслеживать их отдельным приватным уведомителем на своём сервере.
+При описании ошибки укажите версию и сборку, платформу, тип профиля и шаги воспроизведения. Перед отправкой журнала удалите ключи, пароли и приватные ссылки.
 
-## Безопасные пакеты для друзей
+<a id="english"></a>
 
-Создатель пакета включает только профили olcRTC, введённый специально для друга
-VLESS URI и готовую конфигурацию клиента AmneziaWG, созданную отдельно для этого
-друга. Существующие профили VLESS и AmneziaWG намеренно исключаются, поэтому уже
-используемый закрытый ключ AWG никогда не передаётся повторно.
+<details>
+<summary><strong>English — overview, downloads and getting started</strong></summary>
 
-Пакеты шифруются с помощью AES-256-GCM. Передавайте зашифрованный пакет и пароль
-по разным закрытым каналам. Не публикуйте ни один из них. Создатель заранее
-получает полный SSH fingerprint `SHA256:...` независимым способом, а Unified VPN
-проверяет его до отправки любых SSH-данных. Настройка сервера выполняется
-локально на устройстве создателя. Итоговый пакет никогда не содержит SSH-логин,
-пароль, SSH-порт или host key. Получатель только расшифровывает и импортирует
-готовые профили; старые пакеты v1 с учётными данными отклоняются.
+### Your connections. One application.
 
-Чтобы создать одну объединённую ссылку, откройте `Настройки -> Подписки и общий
-доступ -> Пакет для друга`, введите VLESS URI, данные SSH-сервера и пароль
-пакета. Unified VPN сначала создаст отдельный AWG peer, затем сформирует одну
-зашифрованную строку `unifiedvpn-friend-v2:`. Получатель копирует строку целиком, выбирает
-`+ -> Вставить ссылку, URI или пакет для друга` и вводит пароль пакета.
-Приложение импортирует olcRTC и VLESS и добавляет уже подготовленный профиль
-AmneziaWG.
+**UnifiedVPN** is an Android-first VPN client with **olcRTC, VLESS, AmneziaWG and experimental OpenFlux** profiles. Import a subscription or a configuration and manage your connections from one interface.
 
-## Поддерживаемые платформы
+**Current release: [v0.1.4 · build 2026110202](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.4).**
 
-| Платформа | Режимы | Среда выполнения |
-| --- | --- | --- |
-| Android | TUN, прокси | `VpnService`, `hev-socks5-tunnel`, локальные среды SOCKS5 `olcrtc`, `sing-box` и Xray |
-| Windows x86-64 | системный прокси, локальный SOCKS; экспериментальный TUN для VLESS/AWG | встроенные движки и отдельный компонент с UAC; реальное подключение TUN ещё не проверено |
-| Linux x86-64/arm64 | локальный SOCKS, необязательный TUN | встроенные `olcrtc`, AWG `sing-box`, Xray и `hev-socks5-tunnel` |
+- [**Download Android APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.4/UnifiedVPN-android-v0.1.4-build.2026110202.apk) — Android 6+. Install over the existing app when updating.
+- [**Download Windows ZIP**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.4/UnifiedVPN-windows-amd64-v0.1.4-build.2026110202.zip) — x64 portable package. Extract the entire archive and run `UnifiedVPN.exe`.
+- [**SHA-256 checksums**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.4/SHA256-build-2026110202.json).
 
-## Требования
+To get started, install the app, use **+** to import your subscription or profile, select a profile and connect. A configuration from your administrator or your own server is required.
 
-| Область | Требование |
-| --- | --- |
-| JVM | JDK 17+ |
-| Android | Android Studio, Android SDK, Android NDK |
-| olcRTC для Android | Go, `gomobile` и локальная копия olcrtc |
-| VLESS для Android | Встроенные `sing-box` и Xray в `jniLibs/<abi>/libsing-box.so` и `libxray.so` |
-| Нативные файлы Windows | Go и локальная копия olcrtc |
-| TUN для Windows | Экспериментальный отдельный компонент с UAC для VLESS/AWG; передача трафика/восстановление ещё не проверены; GUI не повышает права |
-| Нативные файлы Linux | JDK 17+, Go, C toolchain, `make`, FUSE/AppImage tools, AWG `sing-box` и Xray |
+This is **alpha software**. Availability and speed depend on the network. Release 0.1.4 adds Salyut Jazz and MTS Link configuration support; a successful MTS Link connection has not yet been verified. VK Calls may require an auxiliary OpenFlux signaling channel in some networks. This release includes no new Linux package or native iOS app. See the [release notes](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.4) for tested scenarios and limitations.
 
-Путь к локальному `olcrtc` по умолчанию:
+[Technical reference](docs/REFERENCE.md#english) · [Engines](docs/ENGINES.md) · [Issues](https://github.com/JosephTagirov/UnifiedVpn/issues)
 
-```text
-../olcrtc
-```
+</details>
 
-Его можно переопределить через `OLCRTC_REPO`:
+---
 
-```powershell
-$env:OLCRTC_REPO="C:\path\to\olcrtc"
-.\gradlew.bat :desktopApp:run
-```
+Основан на [**olcbox**](https://github.com/alananisimov/olcbox) Алана Анисимова. Спасибо автору оригинального приложения и разработчикам используемых движков. Лицензия — [MIT](LICENSE).
 
-Рабочая копия должна быть чистой и совпадать с полным `olcbox.olcrtcSha`,
-закреплённым в `gradle.properties`. Gradle отклоняет другой commit или каталог
-без истории Git.
-
-## Команды
-
-| Задача | Команда |
-| --- | --- |
-| Debug APK для Android | `.\gradlew.bat :androidApp:assembleDebug` |
-| Локальный тестовый APK Android | `.\gradlew.bat :androidApp:packageDebugUpdateApk` |
-| Подписанный APK обновления Android для GitHub | `.\gradlew.bat :androidApp:packageReleaseUpdateApk` |
-| Установить debug APK Android | `.\gradlew.bat :androidApp:installDebug` |
-| Запустить Windows-приложение | `.\gradlew.bat :desktopApp:run` |
-| Собрать нативные файлы Windows | `.\gradlew.bat :desktopApp:buildDesktopNativeAssets` |
-| EXE-установщик Windows | `.\gradlew.bat :desktopApp:packageReleaseExe --no-daemon` |
-| Portable ZIP Windows | `.\gradlew.bat :desktopApp:packageReleasePortableZip` |
-| Набор файлов обновления Windows для GitHub | `.\gradlew.bat :desktopApp:packageReleaseUpdateBundle` |
-| AppImage для Linux (запускать в Linux) | `./gradlew :desktopApp:packageReleaseLinuxAppImage --no-daemon` |
-| Воспроизводимая Linux-сборка и smoke-test | `sh ./scripts/Build-LinuxRelease.sh` |
-| Основные проверки | `.\gradlew.bat :sharedUI:jvmTest :desktopApp:compileKotlin :androidApp:assembleDebug` |
-| JVM-тесты | `.\gradlew.bat :sharedUI:jvmTest` |
-
-## Результаты сборки
-
-| Цель | Команда | Результат |
-| --- | --- | --- |
-| Android debug | `.\gradlew.bat :androidApp:assembleDebug` | `androidApp\build\outputs\apk\debug\androidApp-debug.apk` |
-| Android release | `.\gradlew.bat :androidApp:assembleRelease` | `androidApp\build\outputs\apk\release\androidApp-release.apk` |
-| Локальный тестовый APK Android | `.\gradlew.bat :androidApp:packageDebugUpdateApk` | `androidApp\build\outputs\update\UnifiedVPN-<version>-build.<build>-android-universal-debug.apk` |
-| Подписанный APK обновления Android | `.\gradlew.bat :androidApp:packageReleaseUpdateApk` | `androidApp\build\outputs\update\UnifiedVPN-<version>-build.<build>-android-universal.apk` |
-| Windows EXE | `.\gradlew.bat :desktopApp:packageReleaseExe --no-daemon` | `desktopApp\build\compose\binaries\main-release\exe\UnifiedVPN-<version>.exe` |
-| Windows MSI | `.\gradlew.bat :desktopApp:packageReleaseMsi --no-daemon` | `desktopApp\build\compose\binaries\main-release\msi\UnifiedVPN-<version>.msi` |
-| Ручной portable ZIP Windows | `.\gradlew.bat :desktopApp:packageReleasePortableZip` | `desktopApp\build\compose\binaries\main-release\portable\UnifiedVPN-<version>-build.<build>-portable-manual.zip` |
-| Набор обновления Windows | `.\gradlew.bat :desktopApp:packageReleaseUpdateBundle` | `desktopApp\build\compose\binaries\main-release\update\UnifiedVPN-<version>-build.<build>-windows-amd64-installer.exe` |
-| AppImage Linux | `./gradlew :desktopApp:packageReleaseLinuxAppImage --no-daemon` | `desktopApp/build/compose/binaries/main-release/appimage/UnifiedVPN-<version>-build.<build>-linux-<arch>.AppImage` |
-
-## Нативные файлы
-
-| Файл | Путь |
-| --- | --- |
-| Windows `olcrtc` | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-windows-amd64.exe` |
-| Windows `tun2socks` | `desktopApp/build/generated/desktopNativeResources/native/tun2socks-windows-amd64.exe` |
-| Среда Wintun для Windows | `desktopApp/build/generated/desktopNativeResources/native/wintun.dll` |
-| AWG `sing-box` для Windows | `desktopApp/build/generated/desktopNativeResources/native/sing-box-awg-windows-amd64.exe` |
-| Xray для Windows | `desktopApp/build/generated/desktopNativeResources/native/xray-windows-amd64.exe` |
-| `olcrtc` для Linux | `desktopApp/build/generated/desktopNativeResources/native/olcrtc-linux-<arch>` |
-| TUN-мост для Linux | `desktopApp/build/generated/desktopNativeResources/native/hev-socks5-tunnel-linux-<arch>` |
-| AWG `sing-box` для Linux | `desktopApp/build/generated/desktopNativeResources/native/sing-box-awg-linux-<arch>` |
-| Xray для Linux | `desktopApp/build/generated/desktopNativeResources/native/xray-linux-<arch>` |
-
-## Примечания
-
-- Нативные ABI Android: `armeabi-v7a`, `arm64-v8a`, `x86_64`.
-- Для release-сборки Android требуется `keystore.properties` в корне
-  репозитория.
-- Установщики Windows необходимо собирать в Windows при наличии `jpackage` и
-  WiX.
-- Пока поддерживаются клиенты старше `0.0.12`, ручной portable ZIP нельзя
-  добавлять в файлы GitHub-релиза. Выпущенная `0.0.11` предпочитает подходящий
-  ZIP и иначе обойдёт штатное обновление зарегистрированного установщика.
-- AppImage необходимо собирать и проверять в Linux; кросс-упаковка из Windows
-  не поддерживается.
-- `scripts/Build-LinuxRelease.sh` не устанавливает пакеты, не использует `sudo`,
-  не перезапускает сервисы и ничего не публикует. Скрипт получает в `.downloads`
-  только commit'ы, закреплённые в `gradle.properties`, и требует явный исполняемый
-  `APPIMAGETOOL`, если `appimagetool` отсутствует в `PATH`.
-
-`keystore.properties`:
-
-```properties
-storeFile=/absolute/path/to/release.keystore
-storePassword=...
-keyAlias=...
-keyPassword=...
-```
+Проект предназначен для разработки, тестирования и исследований. Автор не гарантирует доступность подключения или совместимость с сервисами. Используйте программу в соответствии с применимым законодательством; она не предназначена для нарушения ограничений доступа. [Полное уведомление](docs/REFERENCE.md#юридическое-уведомление).
