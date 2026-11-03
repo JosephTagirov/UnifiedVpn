@@ -6,6 +6,7 @@ import org.gradle.api.provider.ListProperty
 import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.InputFiles
 import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
@@ -312,6 +313,16 @@ abstract class BuildAwareWindowsInstallerTask @Inject constructor(format: Target
     @get:PathSensitive(PathSensitivity.NONE)
     abstract val installerVerifier: RegularFileProperty
 
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    val installerSources: org.gradle.api.file.FileTree
+        get() = project.rootProject.fileTree("desktopApp/src/windowsInstaller")
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    val installerBuilders: org.gradle.api.file.FileCollection
+        get() = project.rootProject.files("tools/Build-WindowsMsiGuard.ps1", "tools/Build-WindowsInstaller.ps1")
+
     @get:InputFile
     @get:PathSensitive(PathSensitivity.NONE)
     val packagingJmod: File
@@ -427,28 +438,27 @@ abstract class BuildAwareWindowsInstallerTask @Inject constructor(format: Target
 
         val installOrRepair = "NOT REMOVE~=\"ALL\""
         val runningProperty = "UNIFIEDVPN_APP_RUNNING"
-        // WiX only detects here: no close messages, termination, or deferred reboot action.
-        val detector = document.createElementNS("http://schemas.microsoft.com/wix/UtilExtension", "util:CloseApplication")
-        mapOf(
-            "Id" to "UnifiedVpnDetectRunningApp",
-            "Target" to "\$(var.JpAppName).exe",
-            "Property" to runningProperty,
-            "CloseMessage" to "no",
-            "ElevatedCloseMessage" to "no",
-            "EndSessionMessage" to "no",
-            "ElevatedEndSessionMessage" to "no",
-            "RebootPrompt" to "no",
-            "PromptToContinue" to "no",
-        ).forEach { (key, value) -> detector.setAttribute(key, value) }
-        detector.textContent = installOrRepair
-        product.appendChild(detector)
+        // Match resolved installation paths. A portable copy with the same filename
+        // must neither block this MSI nor be closed by it.
+        val guard = jpackageResources.get().asFile.resolve("UnifiedVpnGuard.CA.dll")
+        val powershell = File(requireNotNull(System.getenv("SystemRoot")), "System32/WindowsPowerShell/v1.0/powershell.exe")
+        val buildGuard = ProcessBuilder(powershell.absolutePath, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", project.rootProject.file("tools/Build-WindowsMsiGuard.ps1").absolutePath,
+            "-OutputPath", guard.absolutePath
+        ).inheritIO().start()
+        check(buildGuard.waitFor(90, TimeUnit.SECONDS) && buildGuard.exitValue() == 0) { "Scoped MSI guard build failed" }
+        append(product, "Binary", mapOf("Id" to "UnifiedVpnProcessGuard", "SourceFile" to guard.absolutePath))
+        append(product, "CustomAction", mapOf(
+            "Id" to "UnifiedVpnDetectInstalledApp", "BinaryKey" to "UnifiedVpnProcessGuard",
+            "DllEntry" to "UnifiedVpnDetectInstalledApp", "Execute" to "immediate", "Return" to "check",
+        ))
         append(product, "CustomAction", mapOf(
             "Id" to "UnifiedVpnRequireClosed",
-            "Error" to "Close UnifiedVPN, including its tray icon, then run this installer again. Other VPN applications do not need to be closed.",
+            "Error" to "Close UnifiedVPN from its installed directory, including its tray icon, then run this installer again. Portable copies and other VPN applications do not need to be closed.",
         ))
         append(product, "Property", mapOf("Id" to "REBOOT", "Value" to "ReallySuppress"))
         append(executeSequence, "Custom", mapOf(
-            "Action" to "WixCloseApplications", "Before" to "UnifiedVpnRequireClosed",
+            "Action" to "UnifiedVpnDetectInstalledApp", "Before" to "UnifiedVpnRequireClosed",
         ), installOrRepair)
         append(executeSequence, "Custom", mapOf(
             "Action" to "UnifiedVpnRequireClosed", "Before" to "InstallValidate",

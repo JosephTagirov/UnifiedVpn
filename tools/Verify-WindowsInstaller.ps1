@@ -162,7 +162,7 @@ function Assert-WindowsReplacementPolicy(
         $sequence[$row[0]] = [int]$row[2]
         $conditions[$row[0]] = $row[1]
     }
-    $ordered = @('CostInitialize', 'WixCloseApplications', 'UnifiedVpnRequireClosed',
+    $ordered = @('CostInitialize', 'CostFinalize', 'UnifiedVpnDetectInstalledApp', 'UnifiedVpnRequireClosed',
         'InstallValidate', 'InstallInitialize', 'RemoveExistingProducts', 'ProcessComponents')
     $previous = 0
     foreach ($action in $ordered) {
@@ -173,7 +173,7 @@ function Assert-WindowsReplacementPolicy(
     }
     $installOrRepair = 'NOT REMOVE~="ALL"'
     $expectedConditions = @{
-        WixCloseApplications = $installOrRepair
+        UnifiedVpnDetectInstalledApp = $installOrRepair
         UnifiedVpnRequireClosed = "$installOrRepair AND UNIFIEDVPN_APP_RUNNING"
     }
     foreach ($action in $expectedConditions.Keys) {
@@ -198,18 +198,13 @@ function Assert-WindowsReplacementPolicy(
     if ($customActions['UnifiedVpnRequireClosed'][3] -notlike '*Close UnifiedVPN*') {
         throw 'MSI preflight messages must explain how to retry safely'
     }
-    $detectAction = $customActions['WixCloseApplications']
+    $detectAction = $customActions['UnifiedVpnDetectInstalledApp']
     if ($null -eq $detectAction -or [int]$detectAction[1] -ne 1 -or
-        [string]::IsNullOrWhiteSpace($detectAction[2]) -or $detectAction[3] -cne 'WixCloseApplications') {
+        $detectAction[2] -cne 'UnifiedVpnProcessGuard' -or $detectAction[3] -cne 'UnifiedVpnDetectInstalledApp') {
         throw 'MSI running-application detection must be immediate and checked'
     }
-    if ($CloseApplicationRows.Count -ne 1) { throw 'Expected one non-destructive MSI application detector' }
-    $detector = $CloseApplicationRows[0]
-    if ($detector[0] -cne 'UnifiedVpnDetectRunningApp' -or $detector[1] -cne "$ApplicationName.exe" -or
-        $detector[2] -cne $installOrRepair -or [int]$detector[3] -ne 0 -or
-        $detector[4] -cne 'UNIFIEDVPN_APP_RUNNING' -or $detector[5] -ne '' -or
-        ($detector[6] -ne '' -and [int]$detector[6] -ne 0)) {
-        throw 'MSI application guard must only detect: no close, terminate, prompt-to-ignore, or reboot actions'
+    if ($CloseApplicationRows.Count -ne 0 -or $customActions.ContainsKey('WixCloseApplications') -or $sequence.ContainsKey('WixCloseApplications')) {
+        throw 'Filename-only MSI process detection must not block portable copies'
     }
 }
 
@@ -280,7 +275,13 @@ try {
     }
     $sequenceRows = Read-MsiRows $database 'SELECT `Action`, `Condition`, `Sequence` FROM `InstallExecuteSequence`' 3
     $customActionRows = Read-MsiRows $database 'SELECT `Action`, `Type`, `Source`, `Target` FROM `CustomAction`' 4
-    $closeApplicationRows = Read-MsiRows $database 'SELECT `WixCloseApplication`, `Target`, `Condition`, `Attributes`, `Property`, `Timeout`, `TerminateExitCode` FROM `WixCloseApplication`' 7
+    $tableRows = Read-MsiRows $database 'SELECT `Name` FROM `_Tables`' 1
+    $closeApplicationRows = @()
+    if (@($tableRows | Where-Object { $_[0] -eq 'WixCloseApplication' }).Count -ne 0) {
+        $closeApplicationRows = Read-MsiRows $database 'SELECT `WixCloseApplication`, `Target`, `Condition`, `Attributes`, `Property`, `Timeout`, `TerminateExitCode` FROM `WixCloseApplication`' 7
+    }
+    $binaryRows = Read-MsiRows $database 'SELECT `Name` FROM `Binary`' 1
+    if (@($binaryRows | Where-Object { $_[0] -eq 'UnifiedVpnProcessGuard' }).Count -ne 1) { throw 'Missing scoped MSI preflight binary' }
     Assert-WindowsReplacementPolicy $sequenceRows $customActionRows $closeApplicationRows $ExpectedName
     [pscustomobject]@{
         Status = 'PASS'
@@ -290,7 +291,7 @@ try {
         UpgradeCode = $ExpectedUpgradeCode.ToString('B').ToUpperInvariant()
         SameVersionUpgrade = $true
         SafeReplacementSequence = $true
-        RunningApplicationGuard = 'detect-only'
+        RunningApplicationGuard = 'installation-path-detect-only'
         PendingFileRebootGuard = $false
         AutomaticRebootSuppressed = $true
         InstallerSha256 = Get-Sha256 $source

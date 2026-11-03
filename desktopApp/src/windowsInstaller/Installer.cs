@@ -127,7 +127,10 @@ internal sealed class SetupWindow : Form {
             int code;
             using(var process=Process.Start(start)) { process.WaitForExit(); code=process.ExitCode; }
             if(code==3010) throw new InvalidOperationException("Windows отложила замену занятого файла. Автоматическая перезагрузка отключена. Журнал: "+logPath);
-            if(code!=0) throw new InvalidOperationException(code==1223 || code==1602 ? "Установка отменена. Можно повторить." : "Не удалось завершить установку ("+code+"). Журнал: "+logPath);
+            if(code!=0) {
+                string log="";try {log=File.ReadAllText(logPath);} catch(IOException) {} catch(UnauthorizedAccessException) {}
+                throw new InvalidOperationException(InstallerPolicy.FailureMessage(code,log,logPath));
+            }
             var installed=NativeMsi.Installed().FirstOrDefault(p=>String.Equals(p.Code,SetupProduct.ProductCode,StringComparison.OrdinalIgnoreCase));
             if(installed==null) throw new InvalidOperationException("Windows не подтвердила установку. Журнал: "+logPath);
             launchRoot=installed.Root;
@@ -138,10 +141,9 @@ internal sealed class SetupWindow : Form {
     }
     private void CloseApplication() {
         foreach(var process in Process.GetProcessesByName("UnifiedVPN")) using(process) {
-            string path;
-            try {path=process.MainModule.FileName;} catch(Exception) { throw new InvalidOperationException("Закройте UnifiedVPN из трея, затем нажмите «Повторить».");}
+            var path=InstallationScope.Executable(process);
             // Match the registered installation, never other VPN applications or similarly named programs.
-            if(!products.Any(p=>!String.IsNullOrWhiteSpace(p.Root) && String.Equals(Path.GetFullPath(path),Path.Combine(Path.GetFullPath(p.Root),"UnifiedVPN.exe"),StringComparison.OrdinalIgnoreCase))) continue;
+            if(!InstallationScope.Matches(path,products.Select(p=>p.Root))) continue;
             process.CloseMainWindow();
             int pid=process.Id;
             EnumWindows((window,data)=> {uint owner;GetWindowThreadProcessId(window,out owner);if(owner==pid)PostMessage(window,0x0010,IntPtr.Zero,IntPtr.Zero);return true;},IntPtr.Zero);

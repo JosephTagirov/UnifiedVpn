@@ -28,6 +28,12 @@ internal static class InstallerPolicy {
             throw new ArgumentException("Invalid installer path");
         return "\"" + value + "\"";
     }
+    public static string FailureMessage(int code,string log,string path) {
+        if(code==1223 || code==1602) return "Установка отменена. Можно повторить.";
+        if(code==1603 && log.Contains("UnifiedVpnRequireClosed. Return value 3"))
+            return "Запущена установленная копия UnifiedVPN. Закройте её из трея и нажмите «Повторить». Журнал: "+path;
+        return "Не удалось завершить установку ("+code+"). Журнал: "+path;
+    }
     public static int SelfTest() {
         var old = new InstalledProduct {Code="old", Version="0.1.5"};
         var sameVersion = new InstalledProduct {Code="other-build", Version="0.1.6"};
@@ -46,7 +52,10 @@ internal static class InstallerPolicy {
         bool rejected=false;
         try { Arguments("bad\"path", "log", SetupAction.Install, null); } catch(ArgumentException) { rejected=true; }
         Check(rejected);
-        return 10;
+        Check(FailureMessage(1603,"Action ended: UnifiedVpnRequireClosed. Return value 3.","setup.log").Contains("из трея"));
+        Check(FailureMessage(1603,"other failure","setup.log").Contains("1603"));
+        Check(FailureMessage(1602,"","setup.log").Contains("отменена"));
+        return 13;
     }
     private static void Check(bool value) { if (!value) throw new InvalidOperationException("Installer policy self-test failed"); }
 }

@@ -32,7 +32,7 @@ internal static class SetupProduct {
 "@
     [IO.File]::WriteAllText((Join-Path $work 'SetupProduct.cs'),$metadata,[Text.Encoding]::UTF8)
     $compiler=Join-Path ([Environment]::GetFolderPath('Windows')) 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
-    & $compiler /nologo /target:winexe /platform:x64 /optimize+ /warnaserror+ "/out:$stub" "/win32manifest:$source\setup.manifest" "/win32icon:$root\desktopApp\appIcons\WindowsIcon.ico" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Core.dll "$source\Installer.cs" "$source\InstallerPolicy.cs" "$work\SetupProduct.cs"
+    & $compiler /nologo /target:winexe /platform:x64 /optimize+ /warnaserror+ "/out:$stub" "/win32manifest:$source\setup.manifest" "/win32icon:$root\desktopApp\appIcons\WindowsIcon.ico" /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Core.dll "$source\Installer.cs" "$source\InstallerPolicy.cs" "$source\InstallationScope.cs" "$work\SetupProduct.cs"
     if($LASTEXITCODE -ne 0){throw 'Windows installer compilation failed'}
     $test=Start-Process -FilePath $stub -ArgumentList '--self-test' -WindowStyle Hidden -Wait -PassThru
     if($test.ExitCode -ne 0){throw 'Installer policy self-tests failed'}
@@ -49,7 +49,7 @@ internal static class SetupProduct {
         $output.Flush($true)
     } finally {$output.Dispose();$payloadStream.Dispose();$hash.Dispose()}
     [IO.File]::Copy($stub,$target,$true)
-    Write-Output 'Built UnifiedVPN branded setup: install/update/repair detection, 10 policy checks passed'
+    Write-Output 'Built UnifiedVPN branded setup: install/update/repair detection, policy checks passed'
 } finally {
     # Resolve and bound the generated temporary directory before deleting it.
     $resolved=[IO.Path]::GetFullPath($work)
