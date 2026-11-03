@@ -18,6 +18,7 @@ import kotlinx.serialization.json.Json
 import org.olcbox.app.data.datasource.AndroidLocationsRepository
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import java.util.UUID
+import org.olcbox.app.vpn.service.OlcboxVpnState
 
 class AndroidNotificationStore(context:Context):NotificationDeliveryStore {
     private val prefs=context.getSharedPreferences("device-notifications",Context.MODE_PRIVATE)
@@ -72,7 +73,7 @@ class DeviceNotificationJob:JobService() {
     private var work:Job?=null
     override fun onStartJob(params:JobParameters):Boolean {
         work=CoroutineScope(SupervisorJob()+Dispatchers.IO).launch {
-            try { AndroidDeviceNotifications.get(applicationContext).pollOnce() }
+            try { AndroidDeviceNotifications.get(applicationContext).pollOnce(OlcboxVpnState.connectedProxy()) }
             catch(e:CancellationException){throw e} catch(_:Exception){}
             jobFinished(params,false)
         }
