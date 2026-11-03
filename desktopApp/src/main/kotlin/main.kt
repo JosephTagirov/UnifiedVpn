@@ -120,6 +120,10 @@ import org.olcbox.app.vpn.DesktopVpnManager
 import org.olcbox.app.vpn.JvmDesktopSocksProxySettingsStore
 import org.olcbox.app.vpn.desktop.verifyDesktopNativeAssets
 import javax.swing.JOptionPane
+import org.olcbox.app.notifications.DeviceNotifications
+import org.olcbox.app.notifications.JvmNotificationStore
+import org.olcbox.app.notifications.DeviceMessage
+import org.olcbox.app.notifications.DeviceMessagePresenter
 
 private class DesktopAppDependencies {
     private val closed = AtomicBoolean(false)
@@ -145,6 +149,18 @@ private class DesktopAppDependencies {
     )
 
     val locationViewModel = LocationViewModel(locationsRepository)
+    val notifications = DeviceNotifications(locationsRepository,JvmNotificationStore(),object:DeviceMessagePresenter {
+        override fun permitted():Boolean = java.awt.SystemTray.isSupported() && java.awt.SystemTray.getSystemTray().trayIcons.any { it.toolTip=="Unified VPN" }
+        override suspend fun show(message:DeviceMessage):Boolean {
+            var shown=false
+            java.awt.EventQueue.invokeAndWait {
+                java.awt.SystemTray.getSystemTray().trayIcons.firstOrNull { it.toolTip=="Unified VPN" }?.let {
+                    it.displayMessage(message.title,message.body,java.awt.TrayIcon.MessageType.INFO);shown=true
+                }
+            }
+            return shown
+        }
+    })
 
     fun close() {
         if (closed.compareAndSet(false, true)) {
@@ -400,6 +416,12 @@ private fun runDesktopApplication(importBridge:DesktopImportBridge) = applicatio
         checkUpdate(manual = false)
     }
 
+    LaunchedEffect(isTrayReady) {
+        if(isTrayReady)while(true) {
+            withContext(Dispatchers.IO) { runCatching { dependencies.notifications.pollOnce(dependencies.vpnManager.subscriptionFetchProxy()) } }
+            delay(60_000)
+        }
+    }
     LaunchedEffect(desktopNotice) {
         if (desktopNotice != null) {
             delay(1_800)

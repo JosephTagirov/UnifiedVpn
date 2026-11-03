@@ -22,6 +22,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.olcbox.app.notifications.AndroidDeviceNotifications
 import org.olcbox.app.data.datasource.AndroidLocationsRepository
 import org.olcbox.app.data.exporter.AndroidLogExporter
 import org.olcbox.app.data.importer.AndroidConfigImporter
@@ -66,6 +70,7 @@ class AppActivity : ComponentActivity() {
         })[AndroidVpnUiViewModel::class.java]
         val vpnManager = vpnUi.vpnManager
         val locationsRepository = AndroidLocationsRepository.get(applicationContext)
+        AndroidDeviceNotifications.schedule(applicationContext)
         val configImporter = AndroidConfigImporter(applicationContext)
         val logExporter = AndroidLogExporter(applicationContext)
         val updateService = AppUpdateService()
@@ -90,6 +95,12 @@ class AppActivity : ComponentActivity() {
             var appearanceSettings by remember { mutableStateOf(initialAppearanceSettings) }
             val scope = rememberCoroutineScope()
 
+            LaunchedEffect(Unit) {
+                while(true) {
+                    withContext(Dispatchers.IO) { runCatching { AndroidDeviceNotifications.get(applicationContext).pollOnce(vpnManager.subscriptionFetchProxy()) } }
+                    delay(60_000)
+                }
+            }
             LaunchedEffect(importLink) {
                 val source=importLink ?: return@LaunchedEffect
                 importLink=null

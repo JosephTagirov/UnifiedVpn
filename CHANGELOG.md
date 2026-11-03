@@ -1,3 +1,10 @@
+## 0.1.8 — 2026-11-03 (build 2026110305)
+
+- Added scoped owner messages for Android and Windows with system notifications, durable duplicate protection and delivery receipts.
+- Added automatic reminders three days and one day before subscription expiry; extended terms invalidate old reminders.
+- Android checks messages in the background using JobScheduler; delivery timing depends on Android scheduling and notification permissions.
+- No changes to VPN engines.
+
 # Changelog
 
 Все существенные изменения Unified VPN / Olcbox фиксируются в этом файле.
