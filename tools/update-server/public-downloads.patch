@@ -1,0 +1,13 @@
+--- a/downloads.py
++++ b/downloads.py
+@@ -31,8 +31,8 @@
+     aliases={'UnifiedVPN-Windows-latest.zip':('windows','.zip'),'UnifiedVPN-Windows-latest.exe':('windows','.exe'),'UnifiedVPN-Android-latest.apk':('android','.apk')}
+     if name in aliases:
+         try:
+-            owner=BASE/'release-owner.json'
+-            release=json.loads(owner.read_text()) if owner.is_file() else release_store.latest()
++            release=release_store.latest()
++            if any(a.get('name','').startswith('UnifiedVPN-owner-') for a in release['assets']):raise ValueError('Owner build in public release')
+             platform,extension=aliases[name]
+             asset=next(a for a in release['assets'] if platform in urlsplit(a['browser_download_url']).path.rsplit('/',1)[-1].lower() and urlsplit(a['browser_download_url']).path.lower().endswith(extension))
+             target=urlsplit(asset['browser_download_url']).path
