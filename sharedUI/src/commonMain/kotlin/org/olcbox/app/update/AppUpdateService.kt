@@ -64,7 +64,8 @@ class AppUpdateService(
     private val mirror: ReleaseMirror = ReleaseMirror.GitHub,
     private val currentVersion: String = CurrentAppInfo.value.version,
     private val currentBuild: Long = CurrentAppInfo.value.build,
-    private val platform: UpdatePlatform = UpdatePlatform.current()
+    private val platform: UpdatePlatform = UpdatePlatform.current(),
+    private val ownerEdition: Boolean = currentUpdateOwnerEdition()
 ) {
     suspend fun check(
         channel: ReleaseChannel,
@@ -72,15 +73,21 @@ class AppUpdateService(
     ): Result<AppUpdateInfo> = runCatching {
         val releases = coroutineScope {
             val server = async { runCatching { fetchServerRelease(channel, proxy) }.also { if(it.exceptionOrNull() is CancellationException) throw it.exceptionOrNull()!! } }
-            val github = async { runCatching { fetchRelease(channel, proxy) }.also { if(it.exceptionOrNull() is CancellationException) throw it.exceptionOrNull()!! } }
+            val github = async { runCatching {
+                check(!ownerEdition) { "Owner updates are published on the personal server" }
+                fetchRelease(channel, proxy)
+            }.also { if(it.exceptionOrNull() is CancellationException) throw it.exceptionOrNull()!! } }
             listOfNotNull(server.await().getOrNull(),github.await().getOrNull())
         }
-        val release = releases.filter { selectAsset(it.assets,platform)!=null }.sortedWith { a,b ->
+        val compatibleReleases = if (ownerEdition) releases.map { it.copy(assets=it.assets.filter { asset ->
+            asset.name.startsWith("UnifiedVPN-owner-")
+        }) } else releases
+        val release = compatibleReleases.filter { selectAsset(it.assets,platform)!=null }.sortedWith { a,b ->
             val versionDifference=compareVersions(b.tagName.removePrefix("v"),a.tagName.removePrefix("v"))
             if(versionDifference!=0)versionDifference else
                 (assetBuildNumber(selectAsset(b.assets,platform)!!.name) ?: 0).compareTo(assetBuildNumber(selectAsset(a.assets,platform)!!.name) ?: 0)
         }.firstOrNull()
-            ?: error("Не удалось проверить обновления ни на сервере, ни в GitHub")
+            ?: error(if (ownerEdition) "Не удалось проверить обновления редакции владельца на сервере" else "Не удалось проверить обновления ни на сервере, ни в GitHub")
         val primary = selectAsset(release.assets, platform)
             ?: error(
                 "No ${platform.assetToken.joinToString(" + ")} update asset in ${release.tagName}. " +
@@ -90,7 +97,7 @@ class AppUpdateService(
                             .orEmpty()
             )
 
-        val alternatives = releases.filter { it.tagName==release.tagName }.flatMap { it.assets }
+        val alternatives = compatibleReleases.filter { it.tagName==release.tagName }.flatMap { it.assets }
             .filter { it.name==primary.name && it.digest!=null && it.digest==primary.digest && it.browserDownloadUrl!=primary.downloadUrl }
             .map { it.browserDownloadUrl }.distinct()
         val asset = primary.copy(fallbackUrls=alternatives)
@@ -128,7 +135,8 @@ class AppUpdateService(
         val client=if(proxy==null) httpClient else createUpdateHttpClient(proxy)
         return try {
             withProxyAuthentication(proxy) {
-                val response=client.get("https://panel.meesharr.space/vpn-control/updates/stable.json")
+                val feed=if(ownerEdition) "owner" else "stable"
+                val response=client.get("https://panel.meesharr.space/vpn-control/updates/$feed.json")
                 require(response.status.value in 200..299) { "Server update request failed" }
                 json.decodeFromString(GithubRelease.serializer(),response.bodyAsText())
             }
@@ -360,6 +368,7 @@ data class UpdatePlatform(
 }
 
 expect fun currentUpdatePlatform(): UpdatePlatform
+expect fun currentUpdateOwnerEdition(): Boolean
 
 private val knownAndroidArchTokens = setOf(
     "armeabi-v7a",

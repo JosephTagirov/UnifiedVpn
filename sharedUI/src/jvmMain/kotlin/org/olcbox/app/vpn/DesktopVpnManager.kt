@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
@@ -20,6 +21,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import org.olcbox.app.data.logging.diagnosticOlcRtcRoomReference
 import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.logging.sanitizeOlcRtcDiagnosticOutput
@@ -131,6 +133,7 @@ class DesktopVpnManager internal constructor(
 
     override fun startVpn() {
         val requestGeneration = ++generation
+        operationJob?.cancel()
         operationJob = scope.launch {
             mutex.withLock {
                 if (requestGeneration != generation) return@withLock
@@ -156,6 +159,7 @@ class DesktopVpnManager internal constructor(
 
     override fun stopVpn() {
         generation++
+        operationJob?.cancel()
         operationJob = scope.launch {
             mutex.withLock {
                 stopDesktopMode(finalStatus = true)
@@ -229,6 +233,7 @@ class DesktopVpnManager internal constructor(
     fun close() {
         runBlocking {
             generation++
+            operationJob?.cancel()
 
             mutex.withLock {
                 stopDesktopMode(finalStatus = true)
@@ -668,7 +673,7 @@ class DesktopVpnManager internal constructor(
         throw lastException ?: error("olcRTC binary failed to start")
     }
 
-    private suspend fun stopDesktopMode(finalStatus: Boolean) {
+    private suspend fun stopDesktopMode(finalStatus: Boolean): Unit = withContext(NonCancellable) {
         connectedLatencySession = null
         openFluxPingTunnel = null
         _activeRoutingMode.value = null
@@ -677,7 +682,7 @@ class DesktopVpnManager internal constructor(
         if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null && adBlockingProxy == null) {
             cancelProcessJobs()
             activeSocksProxySettings = null
-            return
+            return@withContext
         }
 
         setStatus(VpnStatus.Stopping)
@@ -1014,7 +1019,7 @@ class DesktopVpnManager internal constructor(
                 if (isDesktopOpenFluxReady(line)) ready.complete(Unit)
                 line.startsWith("OPENFLUX_BROWSER_VERIFY")
             }
-        ).also { if (openFlux.isSession) sessionControlProcess = it }
+        ).also { sessionControlProcess = it }
     }
 
     private fun writeOlcRtcClientConfig(command: OlcRtcCommand): Path {
@@ -1289,14 +1294,16 @@ class DesktopVpnManager internal constructor(
             it.destroy()
         }
 
-        target.destroy()
+        // Process.destroy() also closes Java's pipe streams and can wait for a
+        // blocked reader. Signal the owned process handle before draining pipes.
+        target.toHandle().destroy()
 
         if (!target.waitFor(PROCESS_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
             target.toHandle().descendants().forEach {
                 it.destroyForcibly()
             }
 
-            target.destroyForcibly()
+            target.toHandle().destroyForcibly()
             target.waitFor(PROCESS_KILL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         }
     }

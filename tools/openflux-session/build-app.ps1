@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $pin='f492a1a33b7581ad8f88118f97e0b866adda3cdc'
 if(-not $SourcePath){$SourcePath=Join-Path $repo '.downloads\openflux\upstream-v0.17.1-20261101'}
-if(-not $ArtifactsPath){$ArtifactsPath=Join-Path $repo '.downloads\openflux\session-app-2026110105'}
+if(-not $ArtifactsPath){$ArtifactsPath=Join-Path $repo '.downloads\openflux\session-app-20261103-stop'}
 $SourcePath=(Resolve-Path -LiteralPath $SourcePath).Path;$ArtifactsPath=[IO.Path]::GetFullPath($ArtifactsPath)
 if((& git -C $SourcePath rev-parse HEAD).Trim() -ne $pin){throw 'OpenFlux source pin mismatch'}
 $destination=Join-Path $SourcePath 'cmd\unified-session';New-Item -ItemType Directory -Force -Path $destination|Out-Null
@@ -14,7 +14,7 @@ foreach($name in @('GOTOOLCHAIN','GOMAXPROCS','GOOS','GOARCH','GOARM','CGO_ENABL
 Push-Location -LiteralPath $SourcePath
 try{
  $env:GOTOOLCHAIN='go1.26.6';$env:GOMAXPROCS='2';$env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
- Invoke-Go @('test','-p=2','-short','./transport','./tunnel','./socks5','./share','./cmd/unified-session')
+ Invoke-Go @('test','-p=2','-short','-timeout=5m','./transport','./tunnel','./socks5','./share','./cmd/unified-session')
  if($TestsOnly){return}
  New-Item -ItemType Directory -Force -Path $ArtifactsPath|Out-Null
  $files=[ordered]@{}
@@ -23,7 +23,7 @@ try{
   Invoke-Go @('build','-p=2','-trimpath','-buildvcs=false','-ldflags=-s -w','-o',(Join-Path $ArtifactsPath $name),'./cmd/unified-session')
   $files[$name]=(Get-FileHash -LiteralPath (Join-Path $ArtifactsPath $name) -Algorithm SHA256).Hash.ToLowerInvariant()
  }
- $expected='unified-openflux-session 3 upstream='+$pin+' protocol=upstream-openflux-session'
+ $expected='unified-openflux-session 4 upstream='+$pin+' protocol=upstream-openflux-session'
  if((& (Join-Path $ArtifactsPath 'openflux-session-windows-amd64.exe') --version).Trim() -ne $expected){throw 'OpenFlux provenance mismatch'}
  if(-not $SkipAndroid){
   if(-not $AndroidNdk){$AndroidNdk=(Get-ChildItem -LiteralPath (Join-Path $env:USERPROFILE 'Android\Sdk\ndk') -Directory|Sort-Object Name -Descending|Select-Object -First 1).FullName}

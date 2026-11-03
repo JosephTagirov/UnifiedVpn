@@ -5,10 +5,18 @@ This project uses one Android `VpnService` and switches the active transport by 
 ## Implemented paths
 
 - `olcrtc://` and existing Olcbox JSON profiles use the original olcRTC mobile engine plus `hev-socks5-tunnel`.
-- `vless://` profiles are imported and use `sing-box` for its supported transports or Xray for XHTTP/SplitHTTP.
+- `vless://` profiles use the same Xray configuration builder on Android and Windows for `tcp`/`raw`, `ws`/`websocket`, `grpc`, `httpupgrade`, `xhttp`/`splithttp`. Android retains sing-box for its additional HTTP/H2/QUIC transports.
 - Amnezia WireGuard-style profiles are imported and can be started through the same `sing-box` + `tun2socks` path.
 
 ## Experimental OpenFlux
+
+Current lifecycle wrapper: classic 9 and Session 4. Both accept STOP through
+their inherited control pipe; pipe EOF also cancels the client. Cancellation
+interrupts document verification, peer readiness and pending tunnel dials.
+The executable allows 1.5 seconds for normal shutdown before terminating its
+own process. Windows cancels the pending startup job before serializing cleanup.
+This lifecycle change preserves the existing wire formats and does not make an
+unavailable document editor or server usable.
 
 The local 0.0.14 / 2026092406 candidate integrates [OpenFlux](https://github.com/p1neappleXpress/OpenFlux)
 at `d34dc8caa70ca059cd80d8f5753499361052dabc` through Yandex Documents.
@@ -106,7 +114,16 @@ In Android TUN mode, olcRTC and VLESS add a managed local sing-box bridge betwee
 
 AWG does not use the extra bridge: its sing-box WireGuard endpoint already carries DNS and general UDP through the tunnel, so `tun2socks` connects to the AWG SOCKS inbound directly.
 
-The VLESS adapter supports `tcp`/`raw`, `ws`, `grpc`, `http`/`h2`, `httpupgrade`, and `quic` through sing-box. XHTTP links (`type=xhttp`/`type=splithttp`) use the pinned official Xray `26.10.31` core because the packaged sing-box AWG core does not implement XHTTP.
+The VLESS adapter uses pinned official Xray `26.10.31` for the standard shared
+transports above, including XHTTP. Android's HTTP/H2/QUIC fallback uses sing-box.
+Android adds its existing IPv4 bootstrap DNS policy to the shared configuration;
+server hostname resolution remains on the physical network before capture.
+User destination traffic and DNS continue through the existing tunnel/bridge.
+
+For a manual VK Calls profile, the room field offers **Create a VK Calls link**.
+Create a call in VK, copy its invitation, and configure the same room on the
+server and clients. A randomly generated URL or a new independent call cannot
+join an already configured server. Imported subscriptions retain their room.
 
 XHTTP share-link `extra` is preserved, including nested headers, XMUX and separate
 `downloadSettings`. Windows TUN pins both upload and download endpoints before

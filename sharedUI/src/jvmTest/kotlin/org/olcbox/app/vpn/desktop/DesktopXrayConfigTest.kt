@@ -160,7 +160,7 @@ class DesktopXrayConfigTest {
             val error = assertFailsWith<IllegalArgumentException> {
                 DesktopXrayConfig.build(profile, DesktopSocksProxySettings())
             }
-            assertTrue(error.message.orEmpty().contains("Unsupported desktop VLESS transport"))
+            assertTrue(error.message.orEmpty().contains("Unsupported VLESS transport"))
         }
     }
 

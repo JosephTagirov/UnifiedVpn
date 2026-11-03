@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
-    "net/url"
 	"sync"
 	"syscall"
 	"time"
@@ -51,6 +51,9 @@ func main() {
 	utils.SetLevel(0)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	shutdownDone := make(chan struct{})
+	defer close(shutdownDone)
+	go watchShutdown(ctx, shutdownDone, 1500*time.Millisecond, func() { os.Exit(0) })
 	if *control {
 		go stopOnInput(os.Stdin, cancel)
 	}
@@ -84,11 +87,11 @@ func run(ctx context.Context, c configuration) error {
 		return errors.New("Session initialization failed")
 	}
 	var params map[string]interface{}
-    if c.Transport == "direct" {
-        endpoint, _ := url.Parse(c.DocumentURL)
-        params = map[string]interface{}{"dial": endpoint.Host}
-    }
-    carrier, err := registry.New(c.Transport, c.DocumentURL, params, registry.Options{Base: transport.DefaultConfig(), StrictDirect: true})
+	if c.Transport == "direct" {
+		endpoint, _ := url.Parse(c.DocumentURL)
+		params = map[string]interface{}{"dial": endpoint.Host}
+	}
+	carrier, err := registry.New(c.Transport, c.DocumentURL, params, registry.Options{Base: transport.DefaultConfig(), StrictDirect: true})
 	if err != nil {
 		return errors.New("Session carrier initialization failed")
 	}

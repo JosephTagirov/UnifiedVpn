@@ -44,6 +44,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -60,6 +61,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -260,6 +262,10 @@ fun LocationSettingsScreen(
                             imeAction = ImeAction.Next
                         )
                     )
+                }
+
+                if (config.isVkCalls()) {
+                    item { VkCallsRoomHelp(enabled = !isSaving) }
                 }
 
                 item {
@@ -481,6 +487,31 @@ fun LocationSettingsScreen(
                 TextButton(onClick = { pendingOpenFluxShare = null }) { Text("Cancel") }
             }
         )
+    }
+}
+
+@Composable
+private fun VkCallsRoomHelp(enabled: Boolean) {
+    val uriHandler = LocalUriHandler.current
+    var openFailed by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = { openFailed = runCatching { uriHandler.openUri("https://vk.com/calls") }.isFailure },
+            enabled = enabled,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Rounded.Link, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Create a VK Calls link")
+        }
+        Text(
+            "In VK Calls, create a call and copy its invitation link into Room URL. " +
+                "The server and all clients must use the same link; creating a new call for an existing subscription will not reconnect its server.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (openFailed) Text("Open vk.com/calls in your browser to create a call.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
     }
 }
 

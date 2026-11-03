@@ -3,12 +3,16 @@ package org.olcbox.app.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,9 +63,15 @@ fun ApplicationUpdateOfferSheet(
                 .padding(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+                        Text("↑", fontSize = 30.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "Unified VPN update available",
+                    text = "Update UnifiedVPN",
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -70,11 +80,12 @@ fun ApplicationUpdateOfferSheet(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                }
             }
 
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
@@ -83,7 +94,7 @@ fun ApplicationUpdateOfferSheet(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = info.asset.name,
+                        text = "Your settings and subscriptions will be kept",
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp
@@ -94,6 +105,9 @@ fun ApplicationUpdateOfferSheet(
                         fontSize = 13.sp
                     )
                     if (downloadProgress != null) {
+                        Text("${(downloadProgress.coerceIn(0f, 1f) * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.height(4.dp))
                         LinearProgressIndicator(
                             progress = { downloadProgress.coerceIn(0f, 1f) },
@@ -103,7 +117,9 @@ fun ApplicationUpdateOfferSheet(
                 }
             }
 
-            Text("Основной источник — сервер. GitHub — резерв для того же файла и описания изменений.",style=MaterialTheme.typography.bodySmall)
+            Text("The download is verified before installation. UnifiedVPN may briefly close to apply the update.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
             TextButton(onClick={runCatching {uriHandler.openUri(info.htmlUrl)}}) { Text("Что нового ↗") }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(
@@ -118,7 +134,7 @@ fun ApplicationUpdateOfferSheet(
                     modifier = Modifier.weight(1f),
                     enabled = downloadProgress == null
                 ) {
-                    Text("Download")
+                    Text(if (downloadProgress == null) "Download and install" else "Downloading…")
                 }
             }
         }

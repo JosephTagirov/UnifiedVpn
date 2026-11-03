@@ -54,10 +54,14 @@ type stdioBrowserBootstrap struct {
 	lines  chan browserLine
 	done   chan struct{}
 	closed sync.Once
+	onStop context.CancelFunc
 }
 
-func newStdioBrowserBootstrap(input io.ReadCloser, output io.Writer) *stdioBrowserBootstrap {
+func newStdioBrowserBootstrap(input io.ReadCloser, output io.Writer, stop ...context.CancelFunc) *stdioBrowserBootstrap {
 	b := &stdioBrowserBootstrap{input: input, output: output, lines: make(chan browserLine, 1), done: make(chan struct{})}
+	if len(stop) != 0 {
+		b.onStop = stop[0]
+	}
 	go b.readLines()
 	return b
 }
@@ -71,9 +75,21 @@ func (b *stdioBrowserBootstrap) Close() {
 
 func (b *stdioBrowserBootstrap) readLines() {
 	defer close(b.lines)
+	defer func() {
+		if b.onStop != nil {
+			select {
+			case <-b.done: // Internal cleanup must preserve a startup failure.
+			default:
+				b.onStop()
+			}
+		}
+	}()
 	scanner := bufio.NewScanner(b.input)
 	scanner.Buffer(make([]byte, 4096), browserReplyLimit+2)
 	for scanner.Scan() {
+		if bytes.Equal(scanner.Bytes(), []byte("STOP")) || bytes.Equal(scanner.Bytes(), []byte("STOP\r")) {
+			return
+		}
 		if len(scanner.Bytes()) > browserReplyLimit {
 			b.deliver(browserLine{err: errBrowserReply})
 			return

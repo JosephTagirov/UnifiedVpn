@@ -43,6 +43,37 @@ func newUnifiedLifecyclePair(t *testing.T, dial func(context.Context, string) (n
 	return client, stopServer
 }
 
+func TestUnifiedCancelInterruptsPendingDialWithoutClosingStack(t *testing.T) {
+	entered := make(chan struct{})
+	client, _ := newUnifiedLifecyclePair(t, func(ctx context.Context, _ string) (net.Conn, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	result := make(chan error, 1)
+	go func() {
+		conn, err := client.UnifiedDialContext(context.Background(), unifiedLifecycleDestination)
+		if conn != nil {
+			conn.Close()
+		}
+		result <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dial did not reach peer")
+	}
+	client.UnifiedCancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("cancelled dial succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending dial survived shutdown cancellation")
+	}
+}
+
 func TestUnifiedTunnelRefusedDestinationDoesNotAcceptClient(t *testing.T) {
 	dialed := make(chan string, 1)
 	client, _ := newUnifiedLifecyclePair(t, func(_ context.Context, address string) (net.Conn, error) {

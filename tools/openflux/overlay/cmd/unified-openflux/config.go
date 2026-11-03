@@ -14,7 +14,7 @@ import (
 	"unicode"
 )
 
-const versionText = "unified-openflux 8 upstream=d34dc8caa70ca059cd80d8f5753499361052dabc protocol=unified-openflux-aesgcm-v1"
+const versionText = "unified-openflux 9 upstream=d34dc8caa70ca059cd80d8f5753499361052dabc protocol=unified-openflux-aesgcm-v1"
 
 const (
 	legacyWireCodec = "legacy-lz4-v1"

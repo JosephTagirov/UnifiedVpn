@@ -35,14 +35,18 @@ func TestConfigurationSafety(t *testing.T) {
 }
 
 func TestDirectEncryptedConfig(t *testing.T) {
-    c := validConfiguration()
-    c.Transport = "direct"
-    c.DocumentURL = "tcp://151.243.209.234:50000"
-    if err := c.validate(); err != nil { t.Fatal(err) }
-    for _, endpoint := range []string{"tcp://127.0.0.1:50000", "tcp://10.0.0.1:50000", "tcp://151.243.209.234:22", "tcp://151.243.209.234:50000/path", "https://151.243.209.234:50000"} {
-        c.DocumentURL = endpoint
-        if c.validate() == nil { t.Fatal("unsafe direct endpoint accepted") }
-    }
+	c := validConfiguration()
+	c.Transport = "direct"
+	c.DocumentURL = "tcp://151.243.209.234:50000"
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []string{"tcp://127.0.0.1:50000", "tcp://10.0.0.1:50000", "tcp://151.243.209.234:22", "tcp://151.243.209.234:50000/path", "https://151.243.209.234:50000"} {
+		c.DocumentURL = endpoint
+		if c.validate() == nil {
+			t.Fatal("unsafe direct endpoint accepted")
+		}
+	}
 }
 
 func TestStdinStopAndEof(t *testing.T) {

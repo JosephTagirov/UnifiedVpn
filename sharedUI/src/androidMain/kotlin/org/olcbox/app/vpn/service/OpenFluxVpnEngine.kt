@@ -174,7 +174,6 @@ internal class OpenFluxVpnEngine(
                             files.workDirectory
                         ),
                         configFile = configFile,
-                        sessionControl = config.isSession,
                         browserLease = verifiedLease,
                         browserScope = CoroutineScope(coroutineContext.minusKey(Job) + SupervisorJob())
                     ).also { running = it }
@@ -343,7 +342,7 @@ internal class OpenFluxVpnEngine(
         started.browserScope.cancel()
         val process = started.process
         try {
-            if (started.sessionControl && process.isAlive) {
+            if (process.isAlive) {
                 runCatching {
                     process.outputStream.write("STOP\n".toByteArray(Charsets.US_ASCII))
                     process.outputStream.flush()
@@ -379,7 +378,6 @@ internal class OpenFluxVpnEngine(
     private data class RunningOpenFlux(
         val process: Process,
         val configFile: File,
-        val sessionControl: Boolean,
         val browserLease: OpenFluxBrowserLease?,
         val browserScope: CoroutineScope,
         val ready: AtomicBoolean = AtomicBoolean(false),

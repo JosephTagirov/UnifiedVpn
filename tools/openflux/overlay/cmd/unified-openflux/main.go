@@ -46,10 +46,13 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	shutdownDone := make(chan struct{})
+	defer close(shutdownDone)
+	go watchShutdown(ctx, shutdownDone, 1500*time.Millisecond, func() { os.Exit(0) })
 	var browser *stdioBrowserBootstrap
 	var provider yandex.BrowserCookieProvider
 	if *bootstrap {
-		browser = newStdioBrowserBootstrap(os.Stdin, os.Stdout)
+		browser = newStdioBrowserBootstrap(os.Stdin, os.Stdout, cancel)
 		provider = browser.Cookies
 	}
 	if *checkDocument {
@@ -70,7 +73,7 @@ func main() {
 	if browser != nil {
 		browser.Close()
 	}
-	if err != nil {
+	if err != nil && ctx.Err() == nil {
 		fatal(err)
 	}
 }
@@ -135,13 +138,19 @@ func runWithBootstrap(ctx context.Context, c configuration, provider yandex.Brow
 	if err != nil {
 		return errors.New("cannot initialize OpenFlux network stack")
 	}
-	defer network.UnifiedClose()
+	// Cancel HTTP, peer waits and outstanding tunnel dials before waiting for
+	// transport deliveries. Otherwise a pending dial can hold shutdown open.
+	defer func() {
+		cancelRun()
+		network.UnifiedCancel()
+		_ = session.Stop()
+		network.UnifiedClose()
+	}()
 	if err := session.Start(); err != nil {
 		// Volga authenticates synchronously; always cancel bootstrap on failed startup.
 		_ = session.Stop()
 		return err
 	}
-	defer session.Stop()
 	fmt.Println("OPENFLUX_ENCRYPTION AES-256-GCM")
 	if serverMode {
 		fmt.Println("OPENFLUX_SERVER_WAITING")

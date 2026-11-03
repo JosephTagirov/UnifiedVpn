@@ -10,6 +10,8 @@ import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.vpn.AdBlockingConfig
 import org.olcbox.app.vpn.AdBlockingRules
+import org.olcbox.app.vpn.XraySocksSettings
+import org.olcbox.app.vpn.XrayVlessConfig
 import org.olcbox.app.vpn.VkCallsRuntimeConfig
 import org.olcbox.app.vpn.WireGuardConfigValues
 import org.olcbox.app.vpn.parseXhttpExtra
@@ -359,7 +361,7 @@ private class SingBoxVlessEngine(
             ?: profile.uri?.takeIf { it.startsWith("vless://", ignoreCase = true) }
             ?: throw IllegalStateException("VLESS profile does not contain a vless:// URI")
         val outbound = parseVlessUri(uri)
-        val useXray = outbound.transport in XRAY_VLESS_TRANSPORTS
+        val useXray = XrayVlessConfig.supports(profile)
         val engineName = if (useXray) "xray" else "sing-box"
         val executableSource = findEngineExecutable(context, engineName)
             ?: throw IllegalStateException(
@@ -373,11 +375,11 @@ private class SingBoxVlessEngine(
             copyAsset(context, executableSource.assetPath.orEmpty(), target)
             target.setExecutable(true, false)
         }
+        stop()
         val configFile = File(workDir, "vless-$socksPort.json").also { file ->
-            file.writeText(if (useXray) buildXrayConfig(outbound) else buildSingBoxConfig(outbound))
+            file.writeText(if (useXray) buildXrayConfig() else buildSingBoxConfig(outbound))
         }
 
-        stop()
         runtimeConfig = configFile
         activeEngineName = engineName
         val command = if (useXray) {
@@ -430,136 +432,10 @@ private class SingBoxVlessEngine(
         throw IllegalStateException("$activeEngineName SOCKS port $socksPort did not become ready")
     }
 
-    private fun buildXrayConfig(outbound: VlessOutbound): String {
-        val inboundSettings = JSONObject().put("udp", true)
-        if (username.isBlank()) {
-            inboundSettings.put("auth", "noauth")
-        } else {
-            inboundSettings
-                .put("auth", "password")
-                .put(
-                    "accounts",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("user", username)
-                            .put("pass", password)
-                    )
-                )
-        }
-        val inbound = JSONObject()
-            .put("listen", socksHost)
-            .put("port", socksPort)
-            .put("protocol", "socks")
-            .put("settings", inboundSettings)
-        val user = JSONObject()
-            .put("id", outbound.uuid)
-            .put("encryption", outbound.encryption ?: "none")
-        outbound.flow?.let { user.put("flow", it) }
-        val streamSettings = JSONObject()
-            .put("network", if(outbound.transport == "ws") "ws" else "xhttp")
-            .put("security", outbound.security ?: "none")
-            .put(
-                "sockopt",
-                JSONObject().put("domainStrategy", XRAY_BOOTSTRAP_DNS_STRATEGY)
-            )
-            .put(
-                "xhttpSettings",
-                JSONObject()
-                    .put("path", outbound.path ?: "/")
-                    .also { settings ->
-                        outbound.hostHeader?.let { settings.put("host", it) }
-                        outbound.mode?.let { settings.put("mode", it) }
-                        outbound.extra?.let { settings.put("extra", JSONObject(it)) }
-                    }
-            )
-
-        if (outbound.transport == "ws") {
-            streamSettings.remove("xhttpSettings")
-            streamSettings.put("wsSettings",JSONObject().put("path",outbound.path ?: "/").also { ws ->
-                outbound.hostHeader?.let { ws.put("headers",JSONObject().put("Host",it)) }
-            })
-        }
-
-        when (outbound.security) {
-            "reality" -> streamSettings.put(
-                "realitySettings",
-                JSONObject()
-                    .put("show", false)
-                    .also { reality ->
-                        outbound.sni?.let { reality.put("serverName", it) }
-                        outbound.fingerprint?.let { reality.put("fingerprint", it) }
-                        outbound.publicKey?.let { reality.put("publicKey", it) }
-                        outbound.shortId?.let { reality.put("shortId", it) }
-                        outbound.spiderX?.let { reality.put("spiderX", it) }
-                    }
-            )
-            "tls" -> streamSettings.put(
-                "tlsSettings",
-                JSONObject().also { tls ->
-                    outbound.sni?.let { tls.put("serverName", it) }
-                    outbound.fingerprint?.let { tls.put("fingerprint", it) }
-                    outbound.alpn
-                        ?.takeIf(List<String>::isNotEmpty)
-                        ?.let { tls.put("alpn", JSONArray(it)) }
-                    outbound.allowInsecure?.let { tls.put("allowInsecure", it) }
-                }
-            )
-        }
-        val proxy = JSONObject()
-            .put("protocol", "vless")
-            .put("tag", "proxy")
-            .put(
-                "settings",
-                JSONObject().put(
-                    "vnext",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("address", outbound.host)
-                            .put("port", outbound.port)
-                            .put("users", JSONArray().put(user))
-                    )
-                )
-            )
-            .put("streamSettings", streamSettings)
-
-        return JSONObject()
-            .put(
-                "log",
-                JSONObject()
-                    .put("loglevel", "warning")
-                    .put("dnsLog", false)
-            )
-            .put(
-                "dns",
-                JSONObject()
-                    .put("servers", JSONArray(XRAY_BOOTSTRAP_DNS_SERVERS))
-                    .put("queryStrategy", XRAY_BOOTSTRAP_DNS_STRATEGY)
-            )
-            .put("inbounds", JSONArray().put(inbound))
-            .put(
-                "outbounds",
-                JSONArray()
-                    .put(proxy)
-                    .put(JSONObject().put("protocol", "freedom").put("tag", "direct"))
-            )
-            .put(
-                "routing",
-                JSONObject()
-                    .put("domainStrategy", "AsIs")
-                    .put(
-                        "rules",
-                        JSONArray().put(
-                            JSONObject()
-                                .put("type", "field")
-                                .put("ip", JSONArray(XRAY_BOOTSTRAP_DNS_SERVERS))
-                                .put("port", "53")
-                                .put("network", "udp,tcp")
-                                .put("outboundTag", "direct")
-                        )
-                    )
-            )
-            .toString(2)
-    }
+    private fun buildXrayConfig(): String = XrayVlessConfig.build(
+        profile, XraySocksSettings(socksHost, socksPort, username, password),
+        bootstrapDnsServers = XRAY_BOOTSTRAP_DNS_SERVERS.toList()
+    )
 
     private fun buildSingBoxConfig(outbound: VlessOutbound): String {
         val inbound = buildSingBoxSocksInbound(socksHost, socksPort, username, password)
@@ -715,11 +591,11 @@ private class SingBoxWireGuardEngine(
             copyAsset(context, executableSource.assetPath.orEmpty(), target)
             target.setExecutable(true, false)
         }
+        stop()
         val configFile = File(workDir, "wireguard-$socksPort.json").also { file ->
             file.writeText(buildSingBoxConfig(outbound))
         }
 
-        stop()
         runtimeConfig = configFile
         process = ProcessBuilder(
             executable.absolutePath,
@@ -1372,9 +1248,7 @@ private const val SOCKS_READY_POLL_MS = 150L
 private const val ENGINE_STOP_TIMEOUT_MS = 1_500L
 private const val ENGINE_FORCE_STOP_TIMEOUT_MS = 1_000L
 private const val MAX_DECOMPRESSED_PROFILE_SIZE = 4 * 1024 * 1024
-private val XRAY_VLESS_TRANSPORTS = setOf("xhttp", "splithttp", "ws")
 private val XRAY_BOOTSTRAP_DNS_SERVERS = listOf("1.1.1.1", "8.8.8.8")
-private const val XRAY_BOOTSTRAP_DNS_STRATEGY = "UseIPv4"
 private const val PRIMARY_DNS = "\$PRIMARY_DNS"
 private const val SECONDARY_DNS = "\$SECONDARY_DNS"
 private val WIREGUARD_INTERFACE_SECTION = Regex(

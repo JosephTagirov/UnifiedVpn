@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.5">v0.1.5 · build 2026110204</a> &nbsp; / &nbsp;
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.6">v0.1.6 · build 2026110301</a> &nbsp; / &nbsp;
   Alpha &nbsp; / &nbsp;
   <a href="LICENSE">MIT License</a>
 </p>
@@ -30,22 +30,28 @@
 ## Скачать приложение
 
 <p align="center">
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/UnifiedVPN-0.1.5-build.2026110204-android-universal.apk"><img src="docs/assets/download-android.svg" alt="Скачать UnifiedVPN для Android — APK, Android 6 и новее" width="300" height="84"></a>
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/UnifiedVPN-0.1.5-build.2026110204-windows-amd64-installer.exe"><img src="docs/assets/download-windows.svg" alt="Скачать UnifiedVPN для Windows — установщик EXE, x64" width="300" height="84"></a>
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/UnifiedVPN-0.1.6-build.2026110301-android-universal.apk"><img src="docs/assets/download-android.svg" alt="Скачать UnifiedVPN для Android — APK, Android 6 и новее" width="300" height="84"></a>
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/UnifiedVPN-0.1.6-build.2026110301-windows-amd64-installer.exe"><img src="docs/assets/download-windows.svg" alt="Скачать UnifiedVPN для Windows — установщик EXE, x64" width="300" height="84"></a>
 </p>
 
 | Android 6+ | Windows x64 |
 | :--- | :--- |
-| [**Скачать APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/UnifiedVPN-0.1.5-build.2026110204-android-universal.apk) | [**Скачать установщик EXE**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/UnifiedVPN-0.1.5-build.2026110204-windows-amd64-installer.exe) |
-| Откройте APK на телефоне. При обновлении устанавливайте поверх прежней версии, без удаления приложения. | Закройте UnifiedVPN, включая значок в трее, и запустите установщик. [Portable ZIP](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/UnifiedVPN-0.1.5-build.2026110204-portable-manual.zip) можно распаковать в отдельную папку. |
+| [**Скачать APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/UnifiedVPN-0.1.6-build.2026110301-android-universal.apk) | [**Скачать установщик EXE**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/UnifiedVPN-0.1.6-build.2026110301-windows-amd64-installer.exe) |
+| Откройте APK на телефоне. При обновлении устанавливайте поверх прежней версии, без удаления приложения. | Закройте UnifiedVPN, включая значок в трее, и запустите установщик. [Portable ZIP](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/UnifiedVPN-0.1.6-build.2026110301-portable-manual.zip) можно распаковать в отдельную папку. |
 
 <p align="center">
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.5">Что нового и ограничения</a> ·
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.6">Что нового и ограничения</a> ·
   <a href="https://github.com/JosephTagirov/UnifiedVpn/releases">Все версии</a> ·
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/SHA256-build-2026110204.json">Контрольные суммы SHA-256</a>
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/SHA256-build-2026110301.json">Контрольные суммы SHA-256</a>
 </p>
 
-> **Альфа-версия.** Скорость и доступность зависят от сети. Проверка Яндекса в OpenFlux пока нестабильна. В 0.1.5 доступны Android APK, Windows EXE и portable ZIP; нового Linux-пакета и собственного iOS-приложения в этой поставке нет.
+> **Альфа-версия.** Скорость и доступность зависят от сети. Проверка Яндекса в OpenFlux пока нестабильна. В 0.1.6 доступны Android APK, Windows EXE и portable ZIP; нового Linux-пакета и собственного iOS-приложения в этой поставке нет.
+
+В 0.1.6 унифицированы настройки VLESS/XHTTP для Android и Windows,
+ускорено отключение OpenFlux, добавлена подсказка создания ссылки VK Calls
+и новое окно установки Windows с проверкой уже установленной версии.
+Подробности: [изменения](CHANGELOG.md), [установка](docs/WINDOWS_SETUP.md),
+[механизм адблока](docs/AD_BLOCKING.md) и [проверки](docs/testing/vless-openflux-installer-2026110301.md).
 
 <a id="features"></a>
 
@@ -67,11 +73,11 @@
 
 Приложение работает с вашими профилями и подписками. Для подключения нужна готовая конфигурация от администратора или вашего сервера.
 
-### В выпуске 0.1.5
+### В выпуске 0.1.6
 
 В одной сборке объединены **блокировка рекламы**, обновлённый **OpenFlux** и кнопка **«Обновить подписку»**. Добавлены проверка другого активного VPN, автоматический выбор прокси, VPN/TUN для AWG и VLESS и исправления XHTTP. Адблокер включён по умолчанию и отключается в настройках подключения после переподключения.
 
-Все 852 JVM/Android host-теста прошли; VLESS/XHTTP проверен с включённым адблокером в итоговом Windows-пакете. Получение конфигурации старого редактора Яндекса прошло один раз, повтор завершился тайм-аутом: устойчивое OpenFlux-соединение через новые документы и Volga пока не подтверждено. Итоговый APK на физическом Android ещё не проверен. Подробнее — [проверки объединённой сборки](docs/testing/combined-release-2026110204.md).
+Все 852 JVM/Android host-теста прошли; VLESS/XHTTP проверен с включённым адблокером в итоговом Windows-пакете. Получение конфигурации старого редактора Яндекса прошло один раз, повтор завершился тайм-аутом: устойчивое OpenFlux-соединение через новые документы и Volga пока не подтверждено. Итоговый APK на физическом Android ещё не проверен. Подробнее — [проверки объединённой сборки](docs/testing/combined-release-2026110301.md).
 
 ### Из предыдущего выпуска 0.1.4
 
@@ -115,15 +121,15 @@
 
 **UnifiedVPN** is an Android-first VPN client with **olcRTC, VLESS, AmneziaWG and experimental OpenFlux** profiles. Import a subscription or a configuration and manage your connections from one interface.
 
-**Current release: [v0.1.5 · build 2026110204](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.5).**
+**Current release: [v0.1.6 · build 2026110301](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.6).**
 
-- [**Download Android APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/UnifiedVPN-0.1.5-build.2026110204-android-universal.apk) — Android 6+. Install over the existing app when updating.
-- [**Download Windows installer**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/UnifiedVPN-0.1.5-build.2026110204-windows-amd64-installer.exe) — x64. Close UnifiedVPN before updating. [Portable ZIP](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/UnifiedVPN-0.1.5-build.2026110204-portable-manual.zip) is also available.
-- [**SHA-256 checksums**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.5/SHA256-build-2026110204.json).
+- [**Download Android APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/UnifiedVPN-0.1.6-build.2026110301-android-universal.apk) — Android 6+. Install over the existing app when updating.
+- [**Download Windows installer**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/UnifiedVPN-0.1.6-build.2026110301-windows-amd64-installer.exe) — x64. Close UnifiedVPN before updating. [Portable ZIP](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/UnifiedVPN-0.1.6-build.2026110301-portable-manual.zip) is also available.
+- [**SHA-256 checksums**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.6/SHA256-build-2026110301.json).
 
 To get started, install the app, use **+** to import your subscription or profile, select a profile and connect. A configuration from your administrator or your own server is required.
 
-Release 0.1.5 combines local ad blocking, updated OpenFlux diagnostics and a home-screen subscription refresh button. All 852 JVM/Android host tests passed; packaged Windows VLESS/XHTTP HTTPS worked with filtering enabled. **This is alpha software:** Yandex verification remains intermittent, stable OpenFlux traffic through the new documents and Volga is unverified, and the final APK has not been tested on physical Android. Availability and speed depend on the network. See the [release notes](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.5) for tested scenarios and limitations.
+Release 0.1.6 combines local ad blocking, updated OpenFlux diagnostics and a home-screen subscription refresh button. All 852 JVM/Android host tests passed; packaged Windows VLESS/XHTTP HTTPS worked with filtering enabled. **This is alpha software:** Yandex verification remains intermittent, stable OpenFlux traffic through the new documents and Volga is unverified, and the final APK has not been tested on physical Android. Availability and speed depend on the network. See the [release notes](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.6) for tested scenarios and limitations.
 
 [Technical reference](docs/REFERENCE.md#english) · [Engines](docs/ENGINES.md) · [Issues](https://github.com/JosephTagirov/UnifiedVpn/issues)
 

@@ -10,10 +10,10 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $upstream = 'd34dc8caa70ca059cd80d8f5753499361052dabc'
 $protocol = 'unified-openflux-aesgcm-v1'
-$versionText = "unified-openflux 8 upstream=$upstream protocol=$protocol"
+$versionText = "unified-openflux 9 upstream=$upstream protocol=$protocol"
 if (-not $SourcePath) { $SourcePath = Join-Path $repo ('.downloads\openflux\source-' + $upstream.Substring(0, 12)) }
 $SourcePath = [IO.Path]::GetFullPath($SourcePath)
-if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $repo '.downloads\openflux\artifacts-wrapper8-20261102-viewer' }
+if (-not $ArtifactsPath) { $ArtifactsPath = Join-Path $repo '.downloads\openflux\artifacts-wrapper9-20261103-stop' }
 $artifacts = [IO.Path]::GetFullPath($ArtifactsPath)
 
 function Invoke-Checked {

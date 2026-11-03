@@ -23,7 +23,6 @@ function New-PolicyFixture {
             @('CostInitialize', '', '800'),
             @('WixCloseApplications', 'NOT REMOVE~="ALL"', '1397'),
             @('UnifiedVpnRequireClosed', 'NOT REMOVE~="ALL" AND UNIFIEDVPN_APP_RUNNING', '1398'),
-            @('UnifiedVpnRequireReboot', 'NOT REMOVE~="ALL" AND MsiSystemRebootPending', '1399'),
             @('InstallValidate', '', '1400'),
             @('InstallInitialize', '', '1500'),
             @('RemoveExistingProducts', '', '1501'),
@@ -31,8 +30,7 @@ function New-PolicyFixture {
         )
         Actions = @(
             @('WixCloseApplications', '1', 'WixCA', 'WixCloseApplications'),
-            @('UnifiedVpnRequireClosed', '19', '', 'Close UnifiedVPN, then run this installer again.'),
-            @('UnifiedVpnRequireReboot', '19', '', 'Restart Windows before installing UnifiedVPN.')
+            @('UnifiedVpnRequireClosed', '19', '', 'Close UnifiedVPN, then run this installer again.')
         )
         Detectors = @(
             ,@('UnifiedVpnDetectRunningApp', 'UnifiedVPN.exe', 'NOT REMOVE~="ALL"', '0', 'UNIFIEDVPN_APP_RUNNING', '', '')
@@ -57,19 +55,19 @@ function Test-Policy([string]$Name, [scriptblock]$Mutate, [string]$ExpectedError
 }
 
 Test-Policy 'supported replacement order with detection-only guard' { param($f) }
-Test-Policy 'legacy removal before costing' { param($f) $f.Sequence[6][2] = '799' } '*sequence is unsafe*'
-Test-Policy 'removal outside transaction' { param($f) $f.Sequence[6][2] = '1499' } '*sequence is unsafe*'
-Test-Policy 'removal after script generation' { param($f) $f.Sequence[6][2] = '1601' } '*sequence is unsafe*'
+Test-Policy 'legacy removal before costing' { param($f) $f.Sequence[5][2] = '799' } '*sequence is unsafe*'
+Test-Policy 'removal outside transaction' { param($f) $f.Sequence[5][2] = '1499' } '*sequence is unsafe*'
+Test-Policy 'removal after script generation' { param($f) $f.Sequence[5][2] = '1601' } '*sequence is unsafe*'
 Test-Policy 'missing detector action' { param($f) $f.Sequence = @($f.Sequence | Where-Object { $_[0] -ne 'WixCloseApplications' }) } '*sequence is unsafe*'
 Test-Policy 'guard after validation' { param($f) $f.Sequence[2][2] = '1401' } '*sequence is unsafe*'
 Test-Policy 'duplicate sequence action' { param($f) $f.Sequence += ,@('CostInitialize', '', '801') } '*Duplicate MSI sequence*'
 Test-Policy 'guard must run in silent execute sequence' { param($f) $f.Sequence[1][1] = 'UILevel > 2' } '*preflight condition changed*'
 Test-Policy 'running application condition cannot be disabled' { param($f) $f.Sequence[2][1] = '0' } '*preflight condition changed*'
-Test-Policy 'reboot condition cannot be disabled' { param($f) $f.Sequence[3][1] = '0' } '*preflight condition changed*'
+Test-Policy 'unrelated pending reboot must not block installation' { param($f) $f.Actions += ,@('UnifiedVpnRequireReboot','19','','Restart Windows') } '*pending Windows reboot*'
 Test-Policy 'uninstall bypass is intentional' { param($f) $f.Sequence[2][1] = 'UNIFIEDVPN_APP_RUNNING' } '*preflight condition changed*'
 Test-Policy 'missing stop action' { param($f) $f.Actions = @($f.Actions | Where-Object { $_[0] -ne 'UnifiedVpnRequireClosed' }) } '*must stop with an actionable error*'
 Test-Policy 'stop action must be MSI error type' { param($f) $f.Actions[1][1] = '51' } '*must stop with an actionable error*'
-Test-Policy 'empty stop message' { param($f) $f.Actions[2][3] = '' } '*must stop with an actionable error*'
+Test-Policy 'empty stop message' { param($f) $f.Actions[1][3] = '' } '*must stop with an actionable error*'
 Test-Policy 'message tells user how to retry' { param($f) $f.Actions[1][3] = 'Installation cannot continue.' } '*messages must explain*'
 Test-Policy 'detector return code cannot be ignored' { param($f) $f.Actions[0][1] = '65' } '*must be immediate and checked*'
 Test-Policy 'detector cannot be deferred' { param($f) $f.Actions[0][1] = '1025' } '*must be immediate and checked*'

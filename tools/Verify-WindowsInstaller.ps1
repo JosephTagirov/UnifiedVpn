@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)][ValidateRange(1, [long]::MaxValue)][long]$ExpectedBuild,
     [string]$ExpectedName = 'UnifiedVPN',
     [string]$ExpectedVendor = 'Unknown',
-    [guid]$ExpectedUpgradeCode = '6f0aaf78-dbed-4745-9d95-9e63f10a30de'
+    [guid]$ExpectedUpgradeCode = '6f0aaf78-dbed-4745-9d95-9e63f10a30de',
+    [string]$ExportMsiPath
 )
 
 Set-StrictMode -Version Latest
@@ -65,6 +66,22 @@ public static class UnifiedVpnMsiPayload {
         if (info.Length < 512 || info.Length > 1024L * 1024 * 1024)
             throw new InvalidDataException("Unexpected installer size");
         byte[] bytes = File.ReadAllBytes(input);
+        // UnifiedVPN's branded bootstrapper appends the audited MSI and a SHA-256 footer.
+        long footer = bytes.LongLength - 56;
+        if (footer > 512 && System.Text.Encoding.ASCII.GetString(bytes, (int)footer, 16) == "UVPNMSIPAYLOAD01") {
+            long length = BitConverter.ToInt64(bytes, (int)footer + 16);
+            long payload = footer - length;
+            if (length < 512 || length > 1024L * 1024 * 1024 || payload < 512)
+                throw new InvalidDataException("Invalid branded installer payload");
+            using (var sha = System.Security.Cryptography.SHA256.Create()) {
+                byte[] actual = sha.ComputeHash(bytes, (int)payload, (int)length);
+                for (int i=0; i<32; i++) if (actual[i] != bytes[(int)footer+24+i])
+                    throw new InvalidDataException("Branded installer payload digest mismatch");
+            }
+            using (var stream = new FileStream(output, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                stream.Write(bytes, (int)payload, (int)length);
+            return;
+        }
         if (U16(bytes, 0) != 0x5a4d)
             throw new InvalidDataException("Installer is not a PE executable");
         uint pe = U32(bytes, 0x3c);
@@ -146,7 +163,7 @@ function Assert-WindowsReplacementPolicy(
         $conditions[$row[0]] = $row[1]
     }
     $ordered = @('CostInitialize', 'WixCloseApplications', 'UnifiedVpnRequireClosed',
-        'UnifiedVpnRequireReboot', 'InstallValidate', 'InstallInitialize', 'RemoveExistingProducts', 'ProcessComponents')
+        'InstallValidate', 'InstallInitialize', 'RemoveExistingProducts', 'ProcessComponents')
     $previous = 0
     foreach ($action in $ordered) {
         if (-not $sequence.ContainsKey($action) -or $sequence[$action] -le $previous) {
@@ -158,7 +175,6 @@ function Assert-WindowsReplacementPolicy(
     $expectedConditions = @{
         WixCloseApplications = $installOrRepair
         UnifiedVpnRequireClosed = "$installOrRepair AND UNIFIEDVPN_APP_RUNNING"
-        UnifiedVpnRequireReboot = "$installOrRepair AND MsiSystemRebootPending"
     }
     foreach ($action in $expectedConditions.Keys) {
         if ($conditions[$action] -cne $expectedConditions[$action]) {
@@ -170,14 +186,16 @@ function Assert-WindowsReplacementPolicy(
         if ($customActions.ContainsKey($row[0])) { throw 'Duplicate MSI custom action' }
         $customActions[$row[0]] = $row
     }
-    foreach ($action in @('UnifiedVpnRequireClosed', 'UnifiedVpnRequireReboot')) {
+    if ($sequence.ContainsKey('UnifiedVpnRequireReboot') -or $customActions.ContainsKey('UnifiedVpnRequireReboot')) {
+        throw 'An unrelated pending Windows reboot must not block UnifiedVPN installation'
+    }
+    foreach ($action in @('UnifiedVpnRequireClosed')) {
         $row = $customActions[$action]
         if ($null -eq $row -or [int]$row[1] -ne 19 -or $row[2] -ne '' -or [string]::IsNullOrWhiteSpace($row[3])) {
             throw "MSI preflight must stop with an actionable error: $action"
         }
     }
-    if ($customActions['UnifiedVpnRequireClosed'][3] -notlike '*Close UnifiedVPN*' -or
-        $customActions['UnifiedVpnRequireReboot'][3] -notlike '*Restart Windows*') {
+    if ($customActions['UnifiedVpnRequireClosed'][3] -notlike '*Close UnifiedVPN*') {
         throw 'MSI preflight messages must explain how to retry safely'
     }
     $detectAction = $customActions['WixCloseApplications']
@@ -235,6 +253,7 @@ try {
     if ($properties['ProductName'] -cne $ExpectedName -or $properties['Manufacturer'] -cne $ExpectedVendor) {
         throw 'MSI application identity does not match'
     }
+    if ($properties['REBOOT'] -cne 'ReallySuppress') { throw 'MSI must suppress automatic Windows reboots' }
 
     $ranges = Read-MsiRows $database 'SELECT `UpgradeCode`, `VersionMin`, `VersionMax`, `Attributes`, `ActionProperty` FROM `Upgrade`' 5
     if ($ranges.Count -ne 2) { throw 'Expected exactly two MSI upgrade ranges' }
@@ -272,10 +291,14 @@ try {
         SameVersionUpgrade = $true
         SafeReplacementSequence = $true
         RunningApplicationGuard = 'detect-only'
-        PendingFileRebootGuard = $true
+        PendingFileRebootGuard = $false
+        AutomaticRebootSuppressed = $true
         InstallerSha256 = Get-Sha256 $source
         MsiSha256 = Get-Sha256 $msi
     } | ConvertTo-Json -Compress
+    if (-not [string]::IsNullOrWhiteSpace($ExportMsiPath)) {
+        [IO.File]::Copy($msi, [IO.Path]::GetFullPath($ExportMsiPath), $false)
+    }
 } finally {
     Release-ComObject $database
     Release-ComObject $installer

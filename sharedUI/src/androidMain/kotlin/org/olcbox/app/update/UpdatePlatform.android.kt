@@ -2,6 +2,8 @@ package org.olcbox.app.update
 
 import android.os.Build
 
+actual fun currentUpdateOwnerEdition(): Boolean = System.getProperty("unifiedvpn.ownerCabinet") == "true"
+
 actual fun currentUpdatePlatform(): UpdatePlatform {
     val arch = when (Build.SUPPORTED_ABIS.firstOrNull().orEmpty()) {
         "armeabi-v7a", "armeabi" -> "armeabi-v7a"

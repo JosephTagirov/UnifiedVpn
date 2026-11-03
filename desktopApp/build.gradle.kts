@@ -446,19 +446,13 @@ abstract class BuildAwareWindowsInstallerTask @Inject constructor(format: Target
             "Id" to "UnifiedVpnRequireClosed",
             "Error" to "Close UnifiedVPN, including its tray icon, then run this installer again. Other VPN applications do not need to be closed.",
         ))
-        append(product, "CustomAction", mapOf(
-            "Id" to "UnifiedVpnRequireReboot",
-            "Error" to "Windows has pending file operations. Restart Windows before installing UnifiedVPN, then run this installer again.",
-        ))
+        append(product, "Property", mapOf("Id" to "REBOOT", "Value" to "ReallySuppress"))
         append(executeSequence, "Custom", mapOf(
             "Action" to "WixCloseApplications", "Before" to "UnifiedVpnRequireClosed",
         ), installOrRepair)
         append(executeSequence, "Custom", mapOf(
-            "Action" to "UnifiedVpnRequireClosed", "Before" to "UnifiedVpnRequireReboot",
+            "Action" to "UnifiedVpnRequireClosed", "Before" to "InstallValidate",
         ), "$installOrRepair AND $runningProperty")
-        append(executeSequence, "Custom", mapOf(
-            "Action" to "UnifiedVpnRequireReboot", "Before" to "InstallValidate",
-        ), "$installOrRepair AND MsiSystemRebootPending")
 
         val output = jpackageResources.get().asFile.resolve("main.wxs")
         output.parentFile.mkdirs()
@@ -506,6 +500,20 @@ abstract class BuildAwareWindowsInstallerTask @Inject constructor(format: Target
         check(process.exitValue() == 0) { "Windows installer policy verification failed:\n$output" }
         logger.lifecycle("Verified compiled Windows installer identity, upgrade ordering, and non-destructive preflight guards")
     }
+
+    fun brandInstaller() {
+        if (targetFormat != TargetFormat.Exe) return
+        val installer = destinationDir.get().asFile.listFiles().orEmpty().single { it.extension.equals("exe", true) }
+        val powershell = File(requireNotNull(System.getenv("SystemRoot")), "System32/WindowsPowerShell/v1.0/powershell.exe")
+        val process = ProcessBuilder(powershell.absolutePath, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", project.rootProject.file("tools/Build-WindowsInstaller.ps1").absolutePath,
+            "-InstallerPath", installer.absolutePath, "-Version", packageVersion.get(),
+            "-Build", unifiedVpnBuild.get().toString(), "-ProductCode", productCode(),
+            "-Vendor", packageVendor.getOrElse("Unknown"),
+            "-Edition", if (project.providers.gradleProperty("ownerEdition").orElse("false").get().toBoolean()) "Owner edition" else "Public edition"
+        ).inheritIO().start()
+        check(process.waitFor(120, TimeUnit.SECONDS) && process.exitValue() == 0) { "Branded Windows installer build failed" }
+    }
 }
 
 val defaultOlcRtcRepo = rootProject.layout.projectDirectory.asFile.parentFile
@@ -529,19 +537,19 @@ val xrayVersion = providers.gradleProperty("olcbox.xrayVersion").orElse("26.3.27
 val expectedAwgCoreCommit = providers.gradleProperty("olcbox.awgCoreSha")
 val expectedXrayCommit = providers.gradleProperty("olcbox.xraySha")
 val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts-wrapper8-20261102-viewer")
+    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts-wrapper9-20261103-stop")
 )
 val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
 val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
-val expectedOpenFluxWrapper = 8
+val expectedOpenFluxWrapper = 9
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
 val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026110105")
+    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-20261103-stop")
 )
 val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
 val expectedOpenFluxSessionUpstream = "f492a1a33b7581ad8f88118f97e0b866adda3cdc"
 val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
-val expectedOpenFluxSessionVersion = "unified-openflux-session 3 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 4 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 val singBoxAwgRepoDir = providers.environmentVariable("SING_BOX_AWG_REPO")
     .map { rootProject.file(it) }
     .orElse(rootProject.layout.projectDirectory.dir(".downloads/sing-box-awg/source").asFile)
@@ -1221,6 +1229,7 @@ if (currentBuildOs.isWindows) {
                 dependsOn(inheritedDependencies)
                 unifiedVpnBuild.set(desktopBuildNumber.toLong())
                 installerVerifier.set(rootProject.layout.projectDirectory.file("tools/Verify-WindowsInstaller.ps1"))
+                inputs.files(rootProject.fileTree("desktopApp/src/windowsInstaller"), rootProject.file("tools/Build-WindowsInstaller.ps1"))
                 javaHome.set(original.javaHome)
                 files.from(original.files)
                 mangleJarFilesNames.set(original.mangleJarFilesNames)
@@ -1253,7 +1262,7 @@ if (currentBuildOs.isWindows) {
                 freeArgs.set(original.freeArgs)
                 // Snapshot the output value, not its producer, to avoid an alias dependency cycle.
                 destinationDir.set(outputDirectory)
-                doLast { verifyInstallerPolicy() }
+                doLast { brandInstaller(); verifyInstallerPolicy() }
             }
             // Keep Compose's public task names, but never run their output-directory cleanup.
             original.enabled = false

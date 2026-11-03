@@ -127,6 +127,10 @@ fun localizeUiText(text: String, language: String): String {
 }
 
 private val russianExactText = mapOf(
+    "Create a VK Calls link" to "Создать ссылку VK Звонков",
+    "In VK Calls, create a call and copy its invitation link into Room URL. The server and all clients must use the same link; creating a new call for an existing subscription will not reconnect its server." to
+        "В VK Звонках создайте звонок, скопируйте ссылку-приглашение и вставьте её в поле ссылки на комнату. На сервере и у всех клиентов должна быть одна ссылка. Новый звонок сам по себе не переключит сервер существующей подписки.",
+    "Open vk.com/calls in your browser to create a call." to "Откройте vk.com/calls в браузере и создайте звонок.",
     OpenFluxConnectionErrors.DOCUMENT_VIEWER to
         "Яндекс открыл страницу просмотра файла вместо редактора. Обновите подписку OpenFlux или попросите её владельца предоставить рабочую ссылку на редактируемый документ.",
     "Update subscription" to "Обновить подписку",
@@ -544,6 +548,11 @@ private val russianExactText = mapOf(
     "Unified VPN cannot run as administrator. Restart it normally. Windows TUN is temporarily unavailable; use System proxy or Local SOCKS." to
         "Unified VPN нельзя запускать от имени администратора. Перезапустите приложение обычным способом. Windows TUN временно недоступен; используйте системный прокси или локальный SOCKS.",
     "Unified VPN update available" to "Доступно обновление Unified VPN",
+    "Update UnifiedVPN" to "Обновление UnifiedVPN",
+    "Your settings and subscriptions will be kept" to "Настройки и подписки сохранятся",
+    "The download is verified before installation. UnifiedVPN may briefly close to apply the update." to "Перед установкой проверим файл. Для обновления UnifiedVPN может ненадолго закрыться.",
+    "Download and install" to "Скачать и установить",
+    "Downloading…" to "Скачивание…",
     "Unified VPN update check failed" to "Не удалось проверить обновление Unified VPN",
     "Unsaved change" to "Несохранённое изменение",
     "Update Settings" to "Настройки обновлений",

@@ -311,7 +311,7 @@ val androidAbiFilters = providers.gradleProperty("olcbox.android.abiFilters")
     }
     .getOrElse(defaultAndroidAbiFilters)
 val openFluxArtifactDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts-wrapper8-20261102-viewer")
+    providers.gradleProperty("openflux.artifactDir").getOrElse(".downloads/openflux/artifacts-wrapper9-20261103-stop")
 )
 // Android KMP resources are not automatically exposed as app assets by this AGP setup.
 val stageSharedComposeAssets = tasks.register<StageOpenFluxAndroidLibrariesTask>("stageSharedComposeAssets") {
@@ -355,15 +355,15 @@ val stageVkCallsNotices = tasks.register<StageOpenFluxAndroidLibrariesTask>("sta
 val openFluxManifest = openFluxArtifactDirectory.file("manifest.json")
 val generatedOpenFluxJniLibs = layout.buildDirectory.dir("generated/openfluxJniLibs")
 val expectedOpenFluxUpstream = "d34dc8caa70ca059cd80d8f5753499361052dabc"
-val expectedOpenFluxWrapper = 8
+val expectedOpenFluxWrapper = 9
 val expectedOpenFluxProtocol = "unified-openflux-aesgcm-v1"
 val openFluxSessionDirectory = rootProject.layout.projectDirectory.dir(
-    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-2026110105")
+    providers.gradleProperty("openflux.sessionArtifactDir").getOrElse(".downloads/openflux/session-app-20261103-stop")
 )
 val openFluxSessionManifest = openFluxSessionDirectory.file("manifest.json")
 val expectedOpenFluxSessionUpstream = "f492a1a33b7581ad8f88118f97e0b866adda3cdc"
 val expectedOpenFluxSessionProtocol = "upstream-openflux-session"
-val expectedOpenFluxSessionVersion = "unified-openflux-session 3 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
+val expectedOpenFluxSessionVersion = "unified-openflux-session 4 upstream=$expectedOpenFluxSessionUpstream protocol=$expectedOpenFluxSessionProtocol"
 
 fun verifyOpenFluxAndroidArtifact(binary: File, artifactName: String, manifestFile: File, abi: String, session: Boolean = false) {
     check(binary.isFile && binary.length() > 0L && !Files.isSymbolicLink(binary.toPath())) {

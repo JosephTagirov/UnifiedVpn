@@ -1,0 +1,16 @@
+--- a/server.py
++++ b/server.py
+@@ -279,0 +280 @@
++            if path==PREFIX+'/updates/owner.json':return self.reply(200,release_store.owner_latest())
+--- a/release_store.py
++++ b/release_store.py
+@@ -10,0 +11,9 @@
++
++def owner_latest():
++    p=BASE/'release-owner.json'
++    if not p.is_file():raise ValueError('Редакция владельца пока не опубликована')
++    release=json.loads(p.read_text())
++    assets=release.get('assets',[])
++    if not assets or any(not a.get('name','').startswith('UnifiedVPN-owner-') for a in assets):
++        raise ValueError('Invalid owner release')
++    return release

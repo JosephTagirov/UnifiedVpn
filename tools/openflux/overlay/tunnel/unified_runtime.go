@@ -136,6 +136,9 @@ func (t *UnifiedTCPTunnel) UnifiedReady() error {
 	return nil
 }
 
+// Cancel pending outbound dials before the transport drains its callbacks.
+func (t *UnifiedTCPTunnel) UnifiedCancel() { t.cancel() }
+
 func (t *UnifiedTCPTunnel) UnifiedClose() {
 	t.closeOnce.Do(func() {
 		t.cancel()
@@ -148,6 +151,10 @@ func (t *UnifiedTCPTunnel) UnifiedClose() {
 // The caller resolves destination names over tunnel TCP. Do not use the
 // upstream DialTCP's local-system resolver for user destination names.
 func (t *UnifiedTCPTunnel) UnifiedDialContext(ctx context.Context, address string) (net.Conn, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(t.ctx, cancel)
+	defer stop()
+	defer cancel()
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, errors.New("invalid tunnel destination")

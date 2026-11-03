@@ -1,5 +1,7 @@
 package org.olcbox.app.update
 
+actual fun currentUpdateOwnerEdition(): Boolean = System.getProperty("unifiedvpn.ownerCabinet") == "true"
+
 actual fun currentUpdatePlatform(): UpdatePlatform {
     val osName = System.getProperty("os.name", "").lowercase()
     val os = when {
