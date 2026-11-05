@@ -1,0 +1,21 @@
+[Unit]
+Description=UnifiedVPN private exit health
+Requires=unifiedvpn-cascade-link.service
+After=unifiedvpn-cascade-link.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-cascade/health.py
+Restart=on-failure
+RestartSec=5
+Nice=10
+CPUQuota=5%
+MemoryMax=64M
+TasksMax=16
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=full
+PrivateTmp=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

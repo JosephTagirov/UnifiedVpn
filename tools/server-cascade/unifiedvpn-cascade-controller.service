@@ -1,0 +1,23 @@
+[Unit]
+Description=UnifiedVPN adaptive cascade controller
+Requires=unifiedvpn-cascade-link.service
+After=unifiedvpn-cascade-link.service docker.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-cascade/controller.py
+ExecStop=/usr/bin/python3 /opt/unifiedvpn-cascade/link.py disable
+Restart=on-failure
+RestartSec=5
+Nice=10
+CPUQuota=8%
+MemoryMax=96M
+TasksMax=32
+RuntimeDirectory=unifiedvpn-cascade
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=full
+PrivateTmp=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_READ_SEARCH
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=UnifiedVPN private inter-node link
+Wants=network-online.target
+After=network-online.target docker.service ufw.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-cascade/link.py up
+ExecStop=/usr/bin/python3 /opt/unifiedvpn-cascade/link.py disable
+
+[Install]
+WantedBy=multi-user.target

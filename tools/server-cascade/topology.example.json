@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "nodes": [
+    {"id": "foreign-a", "role": "foreign", "publicAddress": "192.0.2.10", "enabled": true},
+    {"id": "foreign-b", "role": "foreign", "publicAddress": "192.0.2.20", "enabled": true},
+    {"id": "ru-a", "role": "ru-ingress", "publicAddress": null, "enabled": false, "minimumCpu": 1, "recommendedRamMiB": 2048},
+    {"id": "ru-b", "role": "ru-ingress", "publicAddress": null, "enabled": false, "minimumCpu": 1, "recommendedRamMiB": 2048}
+  ],
+  "currentCascade": {"entry": "foreign-a", "exit": "foreign-b", "transport": "wireguard-peer-only", "decision": "new-connections-only"},
+  "futurePaths": [
+    {"entry": "ru-a", "exit": "foreign-a", "enabled": false},
+    {"entry": "ru-a", "exit": "foreign-b", "enabled": false},
+    {"entry": "ru-b", "exit": "foreign-a", "enabled": false},
+    {"entry": "ru-b", "exit": "foreign-b", "enabled": false}
+  ],
+  "directForeignOptions": ["foreign-a", "foreign-b"],
+  "futureTransport": {"crossBorder": "authenticated-vless-tls", "port": 443, "certificateVerification": true, "credentials": "provision-per-node-privately"},
+  "futureSelection": {"activeIngressCount": 1, "activeExitCount": 1, "requiredHealthySamples": 3, "preserveEstablishedConnections": true, "scoreInputs": ["httpsPayloadSuccess", "rttMedian", "rttP95", "packetLoss", "cpuBusyPct", "availableMiB"]},
+  "activationRequires": ["real-ru-addresses", "distinct-provider-asn-check", "pinned-host-keys", "valid-tls-certificates", "authenticated-exit-accounts", "account-and-quota-sync", "subscription-backup-entries", "home-and-mobile-traffic-tests"]
+}
