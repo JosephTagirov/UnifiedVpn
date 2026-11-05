@@ -24,6 +24,10 @@ Inspect `/var/lib/unifiedvpn-cascade/status.json` locally as root. `python3 link
 
 Run the policy regression checks with `python3 -m unittest discover -s . -p 'test_*.py'`.
 
+## Owner metrics integration
+
+The integrations directory contains the collector and React view used by the existing owner-only control panel. The collector exposes an allowlist of operational fields and marks stale controller data. Connect it through the control panel's authenticated owner API. The view expects the existing control-api module. These sources describe that integration and accompany the installed panel update.
+
 ## Prepared two-by-two expansion
 
 The adjacent topology template describes two future Russian ingress nodes and two foreign exits, including direct foreign access. A connection uses one chosen ingress and one chosen exit. The four possible RU-to-foreign paths are alternatives. A second RU node adds provider and address redundancy.
