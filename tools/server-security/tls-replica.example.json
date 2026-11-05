@@ -1,0 +1,9 @@
+{
+  "archive": "/root/unifiedvpn-node-backups/new-primary.tar.gz",
+  "directory": "/etc/unifiedvpn-tls/standby",
+  "group": "caddy",
+  "certificates": [
+    {"name": "panel", "hostname": "panel.example.net", "certificateMember": "etc/unifiedvpn-tls/fullchain.pem", "keyMember": "etc/unifiedvpn-tls/privkey.pem"},
+    {"name": "telegram", "hostname": "telegram.example.net", "certificateMember": "etc/letsencrypt/live/telegram.example.net/fullchain.pem", "keyMember": "etc/letsencrypt/live/telegram.example.net/privkey.pem"}
+  ]
+}

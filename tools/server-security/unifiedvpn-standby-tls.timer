@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep standby TLS certificates current
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+AccuracySec=5min
+Persistent=yes
+
+[Install]
+WantedBy=timers.target

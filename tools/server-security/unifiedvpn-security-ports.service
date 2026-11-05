@@ -1,0 +1,20 @@
+[Unit]
+Description=UnifiedVPN management port protection
+After=network-online.target docker.service ufw.service unifiedvpn-cascade-link.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-security/firewall.py
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+MemoryMax=48M
+CPUQuota=15%
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Validate and synchronize standby TLS certificates
+After=network-online.target caddy.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-security/standby_tls.py --reload
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/etc/unifiedvpn-tls/standby
+PrivateTmp=yes
+CPUQuota=15%
+MemoryMax=192M
