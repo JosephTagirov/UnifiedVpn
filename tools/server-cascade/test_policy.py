@@ -10,6 +10,7 @@ class PolicyTests(unittest.TestCase):
             "freeDiskMiB": 10000,
             "cpuBusyPct": 30,
             "internetOk": True,
+            "internetAgeSeconds": 3,
         }
 
     def test_probe_failure_and_operator_test_choose_direct(self):
@@ -38,6 +39,12 @@ class PolicyTests(unittest.TestCase):
         result = decide(self.entry, self.exit)
         self.assertTrue(result.enabled)
         self.assertEqual(result.rate_mbit, 72)
+
+    def test_probe_expiry_uses_exit_age_instead_of_cross_host_wall_clock(self):
+        self.exit["checkedAt"] = 9999999999
+        self.assertTrue(decide(self.entry, self.exit).enabled)
+        self.exit["internetAgeSeconds"] = 90
+        self.assertFalse(decide(self.entry, self.exit).enabled)
 
 
 if __name__ == "__main__":

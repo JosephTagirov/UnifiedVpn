@@ -258,12 +258,9 @@ def main():
             ) as response:
                 remote = json.load(response)
             delay = round((time.monotonic() - start) * 1000, 1)
-            now = time.time()
-            reachable = (
-                remote.get("nodeRole") == "exit"
-                and 0 <= now - remote["checkedAt"] < 30
-                and 0 <= now - remote.get("internetCheckedAt", 0) < 90
-            )
+            # The response is generated for this private request. Probe age is
+            # computed on the exit so small clock skew cannot disable routing.
+            reachable = remote.get("nodeRole") == "exit"
         except Exception:
             pass
         forced = False

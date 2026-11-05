@@ -63,7 +63,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path != "/health":
             self.send_error(404)
             return
-        data = json.dumps(dict(resources(), **internet, nodeRole="exit")).encode()
+        probe = dict(internet)
+        probe["internetAgeSeconds"] = max(0, time.time() - probe["internetCheckedAt"])
+        data = json.dumps(dict(resources(), **probe, nodeRole="exit")).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")

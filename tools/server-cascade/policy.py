@@ -17,6 +17,8 @@ def decide(local, remote, *, reachable=True, forced_failure=False):
         return Decision(False, "exit link unavailable", 32)
     if not remote.get("internetOk", False):
         return Decision(False, "exit HTTPS probes unavailable", 32)
+    if remote.get("internetAgeSeconds", float("inf")) >= 90:
+        return Decision(False, "exit HTTPS probe expired", 32)
     if local["availableMiB"] < 384 or remote["availableMiB"] < 640:
         return Decision(False, "memory reserve protected", 32)
     if local["freeDiskMiB"] < 512 or remote["freeDiskMiB"] < 1024:
