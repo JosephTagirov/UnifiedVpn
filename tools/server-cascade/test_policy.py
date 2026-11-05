@@ -46,6 +46,14 @@ class PolicyTests(unittest.TestCase):
         self.exit["internetAgeSeconds"] = 90
         self.assertFalse(decide(self.entry, self.exit).enabled)
 
+    def test_connection_table_pressure_on_either_node_protects_current_sessions(self):
+        for target in ["entry", "exit"]:
+            entry = dict(self.entry)
+            exit = dict(self.exit)
+            node = entry if target == "entry" else exit
+            node.update(conntrackCount=52429, conntrackMax=65536)
+            self.assertFalse(decide(entry, exit).enabled)
+
 
 if __name__ == "__main__":
     unittest.main()

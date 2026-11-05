@@ -23,7 +23,7 @@ def resources():
         for line in pathlib.Path("/proc/meminfo").read_text().splitlines()
         if ":" in line
     }
-    return {
+    result = {
         "cpuCount": os.cpu_count(),
         "cpuBusyPct": round(max(0, min(100, busy)), 1),
         "availableMiB": round(mem["MemAvailable"] / 1024),
@@ -32,6 +32,13 @@ def resources():
         "load1": round(os.getloadavg()[0], 2),
         "checkedAt": int(time.time()),
     }
+    netfilter = pathlib.Path("/proc/sys/net/netfilter")
+    try:
+        result["conntrackCount"] = int((netfilter / "nf_conntrack_count").read_text())
+        result["conntrackMax"] = int((netfilter / "nf_conntrack_max").read_text())
+    except OSError:
+        pass
+    return result
 
 
 internet = {"internetOk": False, "internetCheckedAt": 0}

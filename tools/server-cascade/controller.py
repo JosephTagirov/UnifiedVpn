@@ -13,6 +13,8 @@ FLOW = "UVPN_HOP_FLOW"
 PICK = "UVPN_HOP_PICK"
 OUT = "UVPN_HOP_OUT"
 PRE = "UVPN_HOP_PRE"
+XRAY_FLOW = "UVPN_HOP_XFLOW"
+XRAY_PICK = "UVPN_HOP_XPICK"
 WANTED = re.compile(
     r"^(?:x-ui|mtg|mtproxy|mtproxy-public|tproxy-server|unifiedvpn-vkcalls-[\w-]+|unifiedvpn-(?:jitsi|rtc|openflux)@[\w-]+)\.service$"
 )
@@ -27,6 +29,20 @@ EXCLUDED = [
     "224.0.0.0/4",
     "240.0.0.0/4",
 ]
+# Published by Telegram at https://core.telegram.org/resources/cidr.txt.
+# Applied only when a NEW flow is selected, after existing marks were restored.
+TELEGRAM_DIRECT = [
+    "91.108.56.0/22",
+    "91.108.4.0/22",
+    "91.108.8.0/22",
+    "91.108.16.0/22",
+    "91.108.12.0/22",
+    "149.154.160.0/20",
+    "91.105.192.0/23",
+    "91.108.20.0/22",
+    "185.76.151.0/24",
+]
+DIRECT_SERVICES = {"x-ui.service"}
 
 
 def lease(enabled):
@@ -95,24 +111,31 @@ def classifier():
     peers = [
         str(ipaddress.IPv4Address(cfg[key])) + "/32" for key in ["public", "peerPublic"]
     ]
-    for name in [FLOW, PICK, OUT, PRE]:
+    owned_chains = [FLOW, PICK, OUT, PRE, XRAY_FLOW, XRAY_PICK]
+    for name in owned_chains:
         chain("mangle", name)
     if command("ipset", "list", READY, check=False).returncode:
         command("ipset", "create", READY, "hash:net", "family", "inet", "timeout", "45")
     groups, containers = scopes()
-    lines = ["*mangle"] + ["-F " + name for name in [FLOW, PICK, OUT, PRE]]
+    lines = ["*mangle"] + ["-F " + name for name in owned_chains]
 
     def add(name, *args):
         lines.append("-A " + name + " " + " ".join(args))
 
-    add(FLOW, "-m", "conntrack", "--ctdir", "REPLY", "-j", "RETURN")
-    for network in EXCLUDED + peers:
-        add(FLOW, "-d", network, "-j", "RETURN")
-    add(FLOW, "-j", "CONNMARK", "--restore-mark", "--nfmask", MASK, "--ctmask", MASK)
-    for mark in [MARK, DIRECT]:
-        add(FLOW, "-m", "mark", "--mark", mark, "-j", "RETURN")
-    add(FLOW, "-m", "conntrack", "!", "--ctstate", "NEW", "-j", "RETURN")
-    add(FLOW, "-j", PICK)
+    for flow, selection in [(FLOW, PICK), (XRAY_FLOW, XRAY_PICK)]:
+        add(flow, "-m", "conntrack", "--ctdir", "REPLY", "-j", "RETURN")
+        for network in EXCLUDED + peers:
+            add(flow, "-d", network, "-j", "RETURN")
+        add(
+            flow, "-j", "CONNMARK", "--restore-mark", "--nfmask", MASK, "--ctmask", MASK
+        )
+        for mark in [MARK, DIRECT]:
+            add(flow, "-m", "mark", "--mark", mark, "-j", "RETURN")
+        add(flow, "-m", "conntrack", "!", "--ctstate", "NEW", "-j", "RETURN")
+        add(flow, "-j", selection)
+    # Keep new Xray flows direct and retain the marks of existing flows.
+    add(XRAY_PICK, "-j", "MARK", "--set-xmark", DIRECT)
+    add(XRAY_PICK, "-j", "CONNMARK", "--save-mark", "--nfmask", MASK, "--ctmask", MASK)
     add(PICK, "-j", "MARK", "--set-xmark", DIRECT)
     add(
         PICK,
@@ -126,6 +149,8 @@ def classifier():
         "--set-xmark",
         MARK,
     )
+    for network in TELEGRAM_DIRECT:
+        add(PICK, "-d", network, "-j", "MARK", "--set-xmark", DIRECT)
     add(PICK, "-j", "CONNMARK", "--save-mark", "--nfmask", MASK, "--ctmask", MASK)
     for unit, group in groups:
         match = ["-m", "cgroup", "--path", group]
@@ -139,7 +164,7 @@ def classifier():
             )
         ):
             add(OUT, *match, "-p", "udp", "-j", "RETURN")
-        add(OUT, *match, "-j", FLOW)
+        add(OUT, *match, "-j", XRAY_FLOW if unit in DIRECT_SERVICES else FLOW)
     add(PRE, "-i", IFACE, "-j", "RETURN")
     for name, bridge, address, ports in containers:
         match = ["-i", bridge, "-s", address + "/32"]
@@ -161,6 +186,7 @@ def classifier():
         rule("mangle", hook, "-m", "comment", "--comment", COMMENT, "-j", owned)
     return {
         "services": [unit for unit, _ in groups],
+        "directServices": [unit for unit, _ in groups if unit in DIRECT_SERVICES],
         "containers": [name for name, _, _, _ in containers],
     }
 
@@ -196,6 +222,8 @@ def rate(value):
             str(value) + "mbit",
             "ceil",
             str(value) + "mbit",
+            "quantum",
+            "15140",
         )
         command(
             "tc",
@@ -225,6 +253,8 @@ def rate(value):
             str(value) + "mbit",
             "ceil",
             str(value) + "mbit",
+            "quantum",
+            "15140",
         )
 
 

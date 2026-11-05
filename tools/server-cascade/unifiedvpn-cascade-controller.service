@@ -13,6 +13,7 @@ CPUQuota=8%
 MemoryMax=96M
 TasksMax=32
 RuntimeDirectory=unifiedvpn-cascade
+RuntimeDirectoryPreserve=restart
 NoNewPrivileges=yes
 ProtectHome=yes
 ProtectSystem=full

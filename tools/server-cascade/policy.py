@@ -19,6 +19,10 @@ def decide(local, remote, *, reachable=True, forced_failure=False):
         return Decision(False, "exit HTTPS probes unavailable", 32)
     if remote.get("internetAgeSeconds", float("inf")) >= 90:
         return Decision(False, "exit HTTPS probe expired", 32)
+    for node in [local, remote]:
+        maximum = node.get("conntrackMax", 0)
+        if maximum and node.get("conntrackCount", 0) >= maximum * 0.8:
+            return Decision(False, "connection tracking reserve protected", 32)
     if local["availableMiB"] < 384 or remote["availableMiB"] < 640:
         return Decision(False, "memory reserve protected", 32)
     if local["freeDiskMiB"] < 512 or remote["freeDiskMiB"] < 1024:
