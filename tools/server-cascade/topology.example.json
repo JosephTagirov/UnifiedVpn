@@ -1,20 +1,55 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "nodes": [
     {"id": "foreign-a", "role": "foreign", "publicAddress": "192.0.2.10", "enabled": true},
     {"id": "foreign-b", "role": "foreign", "publicAddress": "192.0.2.20", "enabled": true},
-    {"id": "ru-a", "role": "ru-ingress", "publicAddress": null, "enabled": false, "minimumCpu": 1, "recommendedRamMiB": 2048},
-    {"id": "ru-b", "role": "ru-ingress", "publicAddress": null, "enabled": false, "minimumCpu": 1, "recommendedRamMiB": 2048}
+    {"id": "ru-a", "role": "ru-ingress", "capabilities": ["vpn-ingress", "russian-egress"], "publicAddress": null, "enabled": false, "minimumCpu": 1, "recommendedRamMiB": 2048},
+    {"id": "ru-b", "role": "ru-ingress", "capabilities": ["vpn-ingress", "russian-egress"], "publicAddress": null, "enabled": false, "minimumCpu": 1, "recommendedRamMiB": 2048}
   ],
   "currentCascade": {"entry": "foreign-a", "exit": "foreign-b", "transport": "wireguard-peer-only", "decision": "new-connections-only"},
   "futurePaths": [
-    {"entry": "ru-a", "exit": "foreign-a", "enabled": false},
-    {"entry": "ru-a", "exit": "foreign-b", "enabled": false},
-    {"entry": "ru-b", "exit": "foreign-a", "enabled": false},
-    {"entry": "ru-b", "exit": "foreign-b", "enabled": false}
+    {"entry": "ru-a", "exit": "foreign-a", "destinationClass": "foreign", "enabled": false},
+    {"entry": "ru-a", "exit": "foreign-b", "destinationClass": "foreign", "enabled": false},
+    {"entry": "ru-b", "exit": "foreign-a", "destinationClass": "foreign", "enabled": false},
+    {"entry": "ru-b", "exit": "foreign-b", "destinationClass": "foreign", "enabled": false}
+  ],
+  "futureDomesticPaths": [
+    {"entry": "ru-a", "exit": "ru-a", "destinationClass": "russian", "transport": "direct", "enabled": false},
+    {"entry": "ru-b", "exit": "ru-b", "destinationClass": "russian", "transport": "direct", "enabled": false}
   ],
   "directForeignOptions": ["foreign-a", "foreign-b"],
   "futureTransport": {"crossBorder": "authenticated-vless-tls", "port": 443, "certificateVerification": true, "credentials": "provision-per-node-privately"},
-  "futureSelection": {"activeIngressCount": 1, "activeExitCount": 1, "requiredHealthySamples": 3, "preserveEstablishedConnections": true, "scoreInputs": ["httpsPayloadSuccess", "rttMedian", "rttP95", "packetLoss", "cpuBusyPct", "availableMiB"]},
-  "activationRequires": ["real-ru-addresses", "distinct-provider-asn-check", "pinned-host-keys", "valid-tls-certificates", "authenticated-exit-accounts", "account-and-quota-sync", "subscription-backup-entries", "home-and-mobile-traffic-tests"]
+  "futureSelection": {"activeIngressCount": 1, "activeForeignExitCount": 1, "domesticEgress": "active-ingress", "requiredHealthySamples": 3, "preserveEstablishedConnections": true, "scoreInputs": ["httpsPayloadSuccess", "rttMedian", "rttP95", "packetLoss", "cpuBusyPct", "availableMiB"]},
+  "futureDestinationRouting": {
+    "enabled": false,
+    "implementationState": "design-only",
+    "decisionPoint": "ru-ingress",
+    "scope": "vpn-client-data",
+    "defaultDestinationClass": "foreign",
+    "russianEgress": "active-ingress",
+    "foreignEgressPool": ["foreign-a", "foreign-b"],
+    "foreignExitUnavailable": "unavailable",
+    "classification": {
+      "order": ["owner-domain-overrides", "foreign-service-domains", "russian-service-domains", "geoip-ru", "foreign-default"],
+      "ownerDomainOverrides": [],
+      "foreignServiceDomains": ["geosite:google", "geosite:youtube", "geosite:telegram"],
+      "russianServiceDomains": ["geosite:category-ru"],
+      "russianIpNetworks": "geoip:ru",
+      "ruleAssetsRequireReview": true,
+      "sharedCdnExceptionsRequireReview": true
+    },
+    "dns": {
+      "russianServicesVia": "active-ingress",
+      "foreignServicesVia": "selected-foreign-exit",
+      "plainClientDns": "managed-on-ingress",
+      "encryptedClientDns": "available-domain-or-ip-classification"
+    },
+    "protocolIntegration": {
+      "vless": "xray-routing-on-ru-ingress",
+      "awg": "transparent-tcp-udp-gateway-on-ru-ingress",
+      "rtcAndOpenFlux": "decoded-client-data-through-same-routing-policy",
+      "ipv6": "same-policy-required-before-enabling"
+    }
+  },
+  "activationRequires": ["real-ru-addresses", "distinct-provider-asn-check", "pinned-host-keys", "valid-tls-certificates", "authenticated-exit-accounts", "account-and-quota-sync", "subscription-backup-entries", "reviewed-domain-and-geoip-assets", "awg-transparent-routing", "dns-and-ipv6-policy", "per-domain-egress-tests", "home-and-mobile-traffic-tests"]
 }
