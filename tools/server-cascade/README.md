@@ -4,6 +4,8 @@ This Linux IPv4 component selects an extra encrypted hop for new VPN connections
 
 The controller scopes traffic to named VPN service cgroups and the two managed AWG containers. Telegram bots, SSH, the web control service and the default host route retain their existing routing. RTC signaling/media UDP and VPN handshake source ports retain their ingress bindings. The implementation requires cgroup v2, xt_cgroup, ipset, iptables, WireGuard, iproute2 and Docker inspection access.
 
+Install `unifiedvpn-cascade-modules.conf` under `/etc/modules-load.d` so `nf_conntrack` loads before systemd applies the node's configured connection-tracking limit. The controller initializes its classifier and readiness set before its first health decision, including when it starts during the first minute after boot.
+
 ## Two-node installation
 
 Place the four Python modules together in `/opt/unifiedvpn-cascade`. Generate one WireGuard private key on each host. Keep `/etc/unifiedvpn-cascade/wireguard.conf` root-owned with mode 0600. Exchange public keys over pinned SSH. Configure an interface listen port and one peer. The primary peer's AllowedIPs is `0.0.0.0/0`, the exit peer's AllowedIPs is the primary private IPv4 `/32`. Route installation is performed by link.py, so wg-quick automatic route replacement must be disabled.

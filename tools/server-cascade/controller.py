@@ -273,8 +273,8 @@ def main():
     enabled = False
     good = 0
     last_rate = 0
-    last_scope = 0
-    scope = {}
+    scope = classifier()
+    last_scope = time.monotonic()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     while True:
         local = resources()
