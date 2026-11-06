@@ -1,0 +1,45 @@
+map $uri $uvpn_tproxy_endpoint {
+ default other;
+ / entry;
+ /api/v1/session session;
+ /api/v1/up up;
+ /api/v1/down down;
+ /api/v1/ws ws;
+}
+map "$uvpn_tproxy_endpoint:$status" $uvpn_tproxy_log_failure {
+ default 0;
+ ~^(entry|session|up|down|ws):[45] 1;
+}
+log_format uvpn_tproxy_diagnostic '$time_iso8601 connection=$connection endpoint=$uvpn_tproxy_endpoint '
+ 'method=$request_method status=$status protocol=$server_protocol '
+ 'seconds=$request_time upstream_seconds=$upstream_response_time bytes=$body_bytes_sent';
+map $http_upgrade $tproxy_connection {
+ default upgrade;
+ "" "";
+}
+server {
+ listen 127.0.0.1:10444 ssl proxy_protocol;
+ http2 on;
+ set_real_ip_from 127.0.0.1;
+ real_ip_header proxy_protocol;
+ server_name telegram.example.net;
+ ssl_certificate /etc/letsencrypt/live/telegram.example.net/fullchain.pem;
+ ssl_certificate_key /etc/letsencrypt/live/telegram.example.net/privkey.pem;
+ ssl_protocols TLSv1.2 TLSv1.3;
+ access_log /var/log/nginx/tproxy-diagnostics.log uvpn_tproxy_diagnostic buffer=32k flush=10s if=$uvpn_tproxy_log_failure;
+ error_log /var/log/nginx/tproxy-error.log crit;
+ client_max_body_size 2m;
+ location / {
+  proxy_pass http://127.0.0.1:18088;
+  proxy_http_version 1.1;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto https;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header Upgrade $http_upgrade;
+  proxy_set_header Connection $tproxy_connection;
+  proxy_read_timeout 75s;
+  proxy_send_timeout 75s;
+  proxy_buffering off;
+  proxy_request_buffering off;
+ }
+}
