@@ -395,7 +395,9 @@ def produce(config, *, clock=time.time):
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
             scope_error = type(error).__name__
         inherited = observations.get(node_id, {}).get("dataplane", {}) if node.get("local") is not True else {}
-        readiness[node_id] = {"address": node["address"], "identity_sync": {**manifest, "applied": applied, "checked_at": 0}, "dataplane": inherited}
+        verified_times = [observations.get(node_id, {}).get("scopes", {}).get(scope, {}).get("checked_at") for scope in expected]
+        verified_at = min(verified_times) if verified_times and all(type(value) in (int, float) for value in verified_times) else 0
+        readiness[node_id] = {"address": node["address"], "identity_sync": {**manifest, "applied": applied, "checked_at": 0, "verified_at": verified_at}, "dataplane": inherited}
         readiness[node_id]["scope_checks"] = {
             scope: {
                 "applied": observations.get(node_id, {}).get("scopes", {}).get(scope, {}).get("applied"),

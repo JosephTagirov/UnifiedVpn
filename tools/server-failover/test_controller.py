@@ -2,9 +2,13 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from dataclasses import replace
+from unittest.mock import patch
 
 from controller import atomic_json, load_json, run_once
 import test_policy
+from policy import configuration_id
+from test_dns import MemoryProvider
 
 
 class ControllerTests(unittest.TestCase):
@@ -51,6 +55,24 @@ class ControllerTests(unittest.TestCase):
             atomic_json(path, {"active": "standby"})
             self.assertEqual(json.loads(path.read_text()), {"active": "standby"})
             self.assertEqual([item.name for item in Path(directory).iterdir()], ["status.json"])
+
+    def test_partial_registrar_state_resumes_after_ack_expiry_with_pinned_live_identity(self):
+        self.fixtures.settings = replace(self.fixtures.settings, publisher_node="standby")
+        self.fixtures.state["configuration_id"] = configuration_id(self.fixtures.settings)
+        evidence = self.fixtures.expired_publication()
+        config = {"enabled": True, "policy": self.fixtures.settings.__dict__}
+        source, target = "192.0.2.10", "198.51.100.20"
+        values = {name: [source] for name in self.fixtures.settings.records}
+        values["panel.example.test"] = [source, target]
+        provider = MemoryProvider(values)
+        with tempfile.TemporaryDirectory() as directory:
+            state_path = Path(directory, "status.json")
+            atomic_json(state_path, self.fixtures.state)
+            with patch("controller.collect", return_value=evidence):
+                report = run_once(config, state_path, apply=True, provider=provider, clock=lambda: evidence["checked_at"])
+            self.assertEqual(report["action"], "await_authoritative_dns")
+            self.assertEqual(provider.records, {name: [target] for name in self.fixtures.settings.records})
+            self.assertEqual(load_json(state_path)["pending"]["target_ack_at"], self.fixtures.state["pending"]["target_ack_at"])
 
 
 if __name__ == "__main__":

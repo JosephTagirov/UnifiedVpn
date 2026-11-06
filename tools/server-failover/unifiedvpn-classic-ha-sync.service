@@ -1,0 +1,16 @@
+[Unit]
+Description=Verify and replicate the fixed OLD classic AWG identity
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-failover/classic_awg_ha.py run --config /etc/unifiedvpn-classic-ha/node.json
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+MemoryMax=96M
+TasksMax=64
+TimeoutStartSec=180

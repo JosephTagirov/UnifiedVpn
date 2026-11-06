@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the paired classic AWG generation acknowledgement
+
+[Timer]
+OnBootSec=45
+OnUnitInactiveSec=30
+AccuracySec=2
+Unit=unifiedvpn-classic-ha-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -19,12 +19,12 @@ function Meter({name,value,detail,children}:{name:string,value:number|null,detai
 function ClusterPanel({cluster}:{cluster:Cluster}){
  const names:Record<string,string>={primary:'основной',standby:'резервный'};
  const outcomes:Record<string,string>={healthy:'доступен',failed:'недоступен',unknown:'нет подтверждения'};
- const protocols:Record<string,string>={'vless-ws':'VLESS WS/TLS','vless-xhttp6':'VLESS XHTTP 6','vless-xhttp7':'VLESS XHTTP 7','awg-native-primary':'AmneziaWG A','awg-native-old-v31':'AmneziaWG B','telegram-web':'Telegram WEB','telegram-faketls':'Telegram FakeTLS',site:'публичная загрузка приложения',subscription:'подписки'};
+ const protocols:Record<string,string>={'vless-ws':'VLESS WS/TLS','vless-xhttp6':'VLESS XHTTP 6','vless-xhttp7':'VLESS XHTTP 7','awg-native-primary':'AmneziaWG A','awg-native-old-v31':'AmneziaWG B','awg-legacy-primary':'прежние AWG основного сервера','awg-legacy-old':'прежние AWG резервного сервера','awg-classic-old':'классический AWG резервного сервера','telegram-web':'Telegram WEB','telegram-faketls':'Telegram FakeTLS',site:'публичная загрузка приложения',subscription:'подписки'};
  return <div className="note"><h3>Серверы и резервные копии</h3>
   <p>Основной сервер <strong>{cluster.primary}</strong><br/>Резервный сервер <strong>{cluster.standby}</strong>{cluster.standbyReachable!==undefined&&<> · {cluster.standbyReachable?'доступен для синхронизации':'недоступен для синхронизации'}</>}</p>
   <p>{cluster.automaticTrafficFailover?'Автоматическое переключение включено для перечисленных подключений.':'Автоматическое переключение сейчас выключено.'}</p>
   <p>{cluster.healthyBackupAvailable?'Доступность резервного входа из России подтверждена.':'Рабочий резервный вход из России сейчас не подтверждён.'}</p>
-  {cluster.regionalStatus&&<p>Проверки из России. {Object.entries(cluster.regionalStatus).map(([node,status])=>(names[node]??node)+' — '+(outcomes[status]??'нет подтверждения')).join(' · ')}.</p>}
+  {cluster.regionalStatus&&<p>Проверки TCP 443 из России. {Object.entries(cluster.regionalStatus).map(([node,status])=>(names[node]??node)+' — '+(outcomes[status]??'нет подтверждения')).join(' · ')}.</p>}
   {cluster.failoverCoverage?.length&&<p>Проверяемые подключения. {cluster.failoverCoverage.map(name=>protocols[name]??name).join(', ')}.</p>}
   {cluster.controlWriter&&<p>Управление аккаунтами закреплено за основным сервером. Кэширование DNS до 60 минут и задержка публикации зоны влияют на время переключения.</p>}
   <p>{cluster.localBackupAt?'Локальная копия от '+new Date(cluster.localBackupAt*1000).toLocaleString('ru-RU')+'. ':''}{cluster.offsiteBackupAt?'Копия на резервном сервере от '+new Date(cluster.offsiteBackupAt*1000).toLocaleString('ru-RU')+'.':'Передача копии на резервный сервер ожидает подключения.'}</p>

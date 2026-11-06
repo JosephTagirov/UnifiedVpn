@@ -72,6 +72,65 @@ class FailoverPolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Settings(**{**self.settings.__dict__, "hold_down_seconds": 899})
 
+    def expired_publication(self, *, publication_age=660):
+        self.manifest["scopes"] = {"identity-v1": {"epoch": 1, "revision": 1, "sha256": "b" * 64}}
+        self.begin_switch()
+        pending = self.state["pending"]
+        pending["phase"] = "publishing"
+        evidence = self.evidence(4, now=pending["started_at"] + publication_age)
+        target = evidence["readiness"]["standby"]
+        target["identity_sync"].update(checked_at=pending["target_ack_at"], verified_at=evidence["checked_at"])
+        target["scope_checks"] = {"identity-v1": {"applied": True, "fresh": True, "matches": True}}
+        evidence["authoritative"]["ns1.example.test"]["panel.example.test"] = ["192.0.2.10", "198.51.100.20"]
+        return evidence
+
+    def test_started_partial_publication_can_resume_same_generation_after_ack_expiry(self):
+        evidence = self.expired_publication()
+        original_ack = evidence["readiness"]["standby"]["identity_sync"]["checked_at"]
+        self.assertFalse(ready("standby", evidence["readiness"], evidence["manifest"], self.settings, evidence["checked_at"]))
+        decision = self.apply(evidence)
+        self.assertEqual(decision.reason, "resume_pending_dns_change")
+        self.assertEqual(decision.action, "reconcile")
+        self.assertEqual(evidence["readiness"]["standby"]["identity_sync"]["checked_at"], original_ack)
+
+    def test_publishing_resume_rejects_changed_generation_drift_and_regressed_ack(self):
+        for mutation in ("generation", "drift", "ack_regression", "local_stale", "scope_mismatch", "dataplane", "regional"):
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                evidence = self.expired_publication()
+                target = evidence["readiness"]["standby"]
+                if mutation == "generation":
+                    evidence["manifest"]["revision"] += 1
+                    target["identity_sync"]["revision"] += 1
+                elif mutation == "drift":
+                    target["identity_sync"]["applied"] = False
+                elif mutation == "ack_regression":
+                    target["identity_sync"]["checked_at"] -= 1
+                elif mutation == "local_stale":
+                    target["identity_sync"]["verified_at"] -= 121
+                elif mutation == "scope_mismatch":
+                    target["scope_checks"]["identity-v1"]["matches"] = False
+                elif mutation == "dataplane":
+                    target["dataplane"]["awg"]["authenticated"] = False
+                else:
+                    for sample in evidence["regional"]["standby"]:
+                        sample["status"] = "failed"
+                self.assertEqual(self.apply(evidence).action, "hold")
+
+    def test_stale_ack_cannot_start_or_resume_an_unstarted_publication(self):
+        evidence = self.expired_publication()
+        self.state["pending"]["phase"] = "planned"
+        self.assertEqual(self.apply(evidence).reason, "pending_target_not_ready")
+        self.setUp()
+        for number in (1, 2, 3):
+            evidence = self.evidence(number)
+            evidence["readiness"]["standby"]["identity_sync"]["checked_at"] -= 601
+            self.assertEqual(self.apply(evidence).action, "hold")
+        self.assertNotIn("pending", self.state)
+
+    def test_publishing_resume_expires_after_one_hour(self):
+        self.assertEqual(self.apply(self.expired_publication(publication_age=3601)).reason, "pending_target_not_ready")
+
     def verify_switch(self):
         self.begin_switch()
         evidence = self.evidence(4, active="standby", primary="healthy")

@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh paired fixed DIRECT authority acknowledgements
+
+[Timer]
+OnBootSec=45
+OnUnitInactiveSec=30
+AccuracySec=2
+Unit=unifiedvpn-openflux-authority-sync.service
+
+[Install]
+WantedBy=timers.target

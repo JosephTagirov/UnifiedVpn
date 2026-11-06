@@ -108,6 +108,14 @@ def files(spec):
     return digest({"scope": spec["scope"], "files": hashes})
 
 
+def classic(spec):
+    from classic_awg_ha import verify_classic
+    try:
+        return verify_classic(spec)
+    except RuntimeError:
+        raise ValueError("Classic identity scope is unverified") from None
+
+
 def local_services(config, *, clock=time.time, command=subprocess.run):
     observations = {}
     for spec in config.get("services", []):
@@ -134,6 +142,9 @@ def local_services(config, *, clock=time.time, command=subprocess.run):
             elif "container" in spec:
                 if not re.fullmatch(r"[A-Za-z0-9_.-]+", spec["container"]):
                     raise ValueError("Invalid container name")
+                interface = spec.get("interface")
+                if interface is not None and not re.fullmatch(r"[A-Za-z0-9_-]{1,15}", interface):
+                    raise ValueError("Invalid required container interface")
                 result = command(["docker", "inspect", "--format", "{{json .State}}", spec["container"]], capture_output=True, text=True, timeout=5)
                 if result.returncode == 0:
                     state = json.loads(result.stdout)
@@ -141,6 +152,16 @@ def local_services(config, *, clock=time.time, command=subprocess.run):
                         value.update(status="confirmed_failed", failure_class="required_container_stopped")
                     elif state.get("Running") is True:
                         value["status"] = "responsive"
+                        if interface is not None:
+                            parent = command(["docker", "exec", spec["container"], "test", "-d", "/sys/class/net"], capture_output=True, text=True, timeout=5)
+                            if parent.returncode != 0:
+                                value["status"] = "unknown"
+                            else:
+                                device = command(["docker", "exec", spec["container"], "test", "-e", "/sys/class/net/" + interface], capture_output=True, text=True, timeout=5)
+                                if device.returncode == 1:
+                                    value.update(status="confirmed_failed", failure_class="required_interface_missing")
+                                elif device.returncode != 0:
+                                    value["status"] = "unknown"
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
             pass
         observations[spec["protocol"]] = value
@@ -162,7 +183,7 @@ def verify(config, *, clock=time.time):
             result["synchronized_at"] = desired.get("synchronized_at", 0)
         result.update(checked_at=clock(), applied=False, sha256=None)
         try:
-            actual = {"vless": vless, "awg": awg, "files": files}[spec["kind"]](spec)
+            actual = {"vless": vless, "awg": awg, "files": files, "classic": classic}[spec["kind"]](spec)
             result.update(sha256=actual, applied=(actual == spec["sha256"]))
         except (OSError, ValueError, TypeError, KeyError, sqlite3.Error, subprocess.SubprocessError):
             result["reason"] = "identity_scope_unverified"

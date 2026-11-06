@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh local fixed DIRECT lifecycle enforcement
+
+[Timer]
+OnBootSec=40
+OnUnitInactiveSec=30
+AccuracySec=2
+Unit=unifiedvpn-openflux-lifecycle.service
+
+[Install]
+WantedBy=timers.target

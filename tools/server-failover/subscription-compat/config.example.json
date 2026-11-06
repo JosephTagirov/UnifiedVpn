@@ -1,0 +1,8 @@
+{
+  "listen_host": "127.0.0.1",
+  "listen_port": 2097,
+  "upstream_host": "127.0.0.1",
+  "upstream_port": 2096,
+  "public_host": "vpn.example.net",
+  "allowed_hosts": ["vpn.example.net"]
+}

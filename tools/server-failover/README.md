@@ -10,9 +10,9 @@ This worker changes an explicit allowlist of DNS A records after verified data-p
 
 The peer criterion observes two protocols from one network vantage. An isolated inter-node routing failure can resemble source loss. This is an explicitly accepted availability trade-off for passive data planes. Keep the control writer fixed. Each deployed publisher may only write a failover to its own node. Both must use the same managed names and source identity manifests. There is no atomic distributed DNS lock.
 
-A separate service-failure criterion accepts a fresh protected producer receipt confirming a loaded required service inactive, a required loopback listener explicitly refusing connections, or a required Docker container stopped. The corresponding authenticated protocol probe must also fail. Receipts bind to the current identity-manifest digest and each receipt counts once. A generic exception or failed third-party dependency provides no confirmed service-failure receipt.
+A separate service-failure criterion accepts a fresh protected producer receipt confirming a loaded required service inactive, a required loopback listener explicitly refusing connections, a required Docker container stopped, or an explicitly configured interface missing from an accessible container interface inventory. The corresponding authenticated protocol probe must also fail. Receipts bind to the current identity-manifest digest and each receipt counts once. A generic exception or failed third-party dependency provides no confirmed service-failure receipt.
 
-All modes require three failure rounds, a healthy target, a 15-minute minimum dwell after a verified switch and an authoritative/registrar state comparison before publication. Recovery alone does not trigger failback. The verification deployment retained a 3,600-second positive DNS TTL and used a 300-second negative TTL. Cached positive answers can retain the previous IP for an hour. Client endpoint caches also determine when reconnecting clients discover the changed address.
+All modes require three failure rounds, a healthy target, a 15-minute minimum dwell after a verified switch and an authoritative/registrar state comparison before publication. Recovery alone does not trigger failback. The verification deployment retained a 3,600-second positive DNS TTL and used a 300-second negative TTL. Registrar zone publication took about five minutes during verification. Cached positive answers can retain the previous IP for an hour. Client endpoint caches also determine when reconnecting clients discover the changed address.
 
 ## Probe APIs
 
@@ -69,12 +69,28 @@ The final command collects live evidence and persists decisions without registra
 
 After reviewed live evidence, set `enabled` true and enable the supplied readiness and failover timers. The failover service additionally passes `--apply`. These are two independent write gates. Keep a before-copy of the managed DNS records and service/configuration files.
 
+The failover service allows 480 seconds per invocation. A new target needs roughly six registrar calls per managed name, spaced by at least four seconds. Retain enough service time for the configured record cohort and live evidence collection. A terminated batch keeps its durable intent and resumes through observed provider and authoritative state.
+
+An already-started publication pins the selected identity generation and initial target acknowledgment. It may finish within one hour after that acknowledgment ages out, provided the acknowledgment never regresses, the same generation remains applied, local scope verification and authenticated protocol checks remain fresh, and regional eligibility still passes. This exception only finishes a publishing intent. A new promotion and an unstarted plan still require a fresh cross-node acknowledgment. Generation changes or missing local proof hold publication for review.
+
 Test failure conditions with offline fixtures and scoped data-plane maintenance first. A whole-host outage drill needs a maintenance window and access recovery. Disabling the failover timer stops new DNS publication. Keep identity replicas and existing data planes intact while investigating an incident. Restore a prior DNS target only after its identities and authenticated probes pass again.
 
 ## Protocol coverage
 
+The example configuration groups nine DNS names, twelve protocol checks and eight identity scopes. Those checks cover three VLESS transports, two native AWG identities, two historical AWG origins, the classic AWG identity, Telegram WEB/FakeTLS, public downloads and subscriptions. Set the deployed list from actual validated fixtures and matching source/replica manifests.
+
 List deployed coverage from the actual `protocols` array and passing readiness output. A shared DNS name cannot repair different AWG server keys. Native replicas retain each source server identity and require a one-time import of stable identity-specific DNS endpoints. Historical numeric imports retain their numeric endpoint until refreshed. Existing WEB sessions are host-local and reconnect as fresh sessions after ingress changes. TCP/UDP application state is not transferred between nodes.
 
+Historical AWG peer sets can share a server key while containing different peers and duplicate internal addresses. Use an isolated replica per originating peer set, separate public ports and per-container endpoint overrides. The legacy worker retains its fixed source authority and publishes desired manifests only after source and replica acknowledgment. The original internal listen port can remain fixed while Docker publication or an owned port alias exposes the stable public port.
+
+`classic_awg_ha.py` preserves its originating identity and verifies the complete peer set, actual tunnel address and MTU. Its header normalizer handles the known omitted/zero defaults for H1–H4. Other interface fields retain strict comparison. Classic peer changes use full interface-preserving synchronization and a durable recovery journal.
+
+A native identity upgraded from AWG2 to AWG3.1 needs a complete client profile update containing that version's server parameters. Preserve the client's existing key material from its original profile. Endpoint-only migration applies to historical identities whose transport parameters are retained.
+
 ## Private checkpoints
+
+The standby snapshot accepts an optional root-only `/etc/unifiedvpn-failover/backup-owned.private.json` allowlist for additional owned RTC/OpenFlux configuration, unit definitions and startup wrappers. It records current container/network definitions, service states and binary hashes. Large additional browser binaries, build archives and Docker images are excluded explicitly. Binary metadata records whether the existing archive roots already include each binary. Recovery of excluded payloads uses the recorded image caches or verified build artifacts.
+
+The existing checkpoint job integration is described in [the checkpoint notes](integrations/checkpoint-README.md). The private deployment retains its node addresses, strict SSH pins and credentials outside this source package.
 
 The application checkpoint must retain `/etc`, `/opt` and `/var/lib` state for both failover and native synchronization, the existing pinned cluster SSH configuration, dynamic desired manifests and restricted readiness access material. The primary gateway configuration includes its management relay. The standby configuration includes its separate frontdoor binary/configuration and Caddy writer fence. `backup_owned.py` captures those standby paths, both consistent SQLite databases, native container definitions and current server configuration. It also captures the renamed legacy WireGuard configuration and its exact image. Other native image payloads are retained in the primary's protected native cache and main application archive. The bounded standby configuration snapshot is nested inside the private application checkpoint. These archives contain credentials and stay root-private.

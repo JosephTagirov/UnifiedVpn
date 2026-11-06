@@ -1,0 +1,14 @@
+[Unit]
+Description=Refresh owned legacy AWG source UDP aliases
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-failover/legacy_awg_sync.py aliases --config /etc/unifiedvpn-legacy-ha/node.json
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+TimeoutStartSec=120

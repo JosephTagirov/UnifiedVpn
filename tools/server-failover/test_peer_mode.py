@@ -45,6 +45,24 @@ class PeerModeTests(unittest.TestCase):
         self.assertEqual(decision.state["pending"]["basis"], "peer_dataplane")
         self.assertIs(decision.state["control_writer_changed"], False)
 
+    def test_regional_failure_requires_positive_target_quorum_in_combined_mode(self):
+        for number in (1, 2, 3):
+            evidence = self.evidence(number)
+            regional_evidence = self.fixtures.evidence(number, primary="failed", standby="unknown")
+            evidence.update(regional=regional_evidence["regional"], probe_requests=regional_evidence["probe_requests"])
+            evidence["peer_reachability"]["primary"]["ports"] = {"22": "responsive", "443": "responsive"}
+            self.assertEqual(self.apply(evidence).action, "hold")
+        self.assertNotIn("pending", self.state)
+
+    def test_confirmed_hard_failure_can_use_unknown_target_despite_regional_source_failure(self):
+        for number in (1, 2, 3):
+            evidence = self.evidence(number)
+            regional_evidence = self.fixtures.evidence(number, primary="failed", standby="unknown")
+            evidence.update(regional=regional_evidence["regional"], probe_requests=regional_evidence["probe_requests"])
+            decision = self.apply(evidence)
+        self.assertEqual(decision.action, "reconcile")
+        self.assertEqual(decision.reason, "peer_dataplane_failure_confirmed")
+
     def test_regional_unknown_alone_never_creates_a_peer_failure(self):
         for number in (1, 2, 3, 4):
             evidence = self.evidence(number)
@@ -135,6 +153,23 @@ class PeerModeTests(unittest.TestCase):
     def test_confirmed_local_service_failure_can_switch_with_ssh_responsive(self):
         for number in (1, 2, 3):
             decision = self.apply(self.protocol_failure(number))
+        self.assertEqual(decision.action, "reconcile")
+        self.assertEqual(decision.reason, "protected_protocol_failure_confirmed")
+
+    def test_confirmed_service_failure_can_use_unknown_target_when_source_regional_failure_is_known(self):
+        for number in (1, 2, 3):
+            evidence = self.protocol_failure(number)
+            regional_evidence = self.fixtures.evidence(number, primary="failed", standby="unknown")
+            evidence.update(regional=regional_evidence["regional"], probe_requests=regional_evidence["probe_requests"])
+            decision = self.apply(evidence)
+        self.assertEqual(decision.action, "reconcile")
+        self.assertEqual(decision.reason, "protected_protocol_failure_confirmed")
+
+    def test_confirmed_missing_container_interface_can_switch_with_ssh_responsive(self):
+        for number in (1, 2, 3):
+            evidence = self.protocol_failure(number)
+            evidence["readiness"]["primary"]["dataplane"][self.settings.protocols[0]]["failure_class"] = "required_interface_missing"
+            decision = self.apply(evidence)
         self.assertEqual(decision.action, "reconcile")
         self.assertEqual(decision.reason, "protected_protocol_failure_confirmed")
 

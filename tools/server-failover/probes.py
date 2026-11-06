@@ -57,7 +57,7 @@ class CheckHost:
             if not isinstance(result, dict):
                 raise ValueError("Unexpected probe response")
             return result
-        except (OSError, ValueError, urllib.error.HTTPError) as error:
+        except (OSError, ValueError, http.client.HTTPException) as error:
             raise ProbeUnavailable("Regional probe API unavailable") from None
 
     def russian_nodes(self, count=3):

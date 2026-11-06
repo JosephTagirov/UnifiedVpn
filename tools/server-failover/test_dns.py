@@ -1,8 +1,10 @@
 import copy
 import io
+import http.client
 import json
 import unittest
 from urllib.parse import parse_qs
+from types import SimpleNamespace
 
 from dns import DnsDrift, DnsUnavailable, RegRu, reconcile
 
@@ -48,6 +50,16 @@ def response(**domain):
 
 
 class DnsTests(unittest.TestCase):
+    def test_truncated_registrar_reply_is_unknown_without_exposing_the_body(self):
+        class TruncatedResponse(io.BytesIO):
+            def read(self, *arguments):
+                raise http.client.IncompleteRead(b"private-response", 20)
+        opener = SimpleNamespace(open=lambda *arguments, **keywords: TruncatedResponse())
+        provider = RegRu("example.net", NAMES, {"username": "test-user", "password": "test-password"}, opener=opener)
+        with self.assertRaises(DnsUnavailable) as result:
+            provider.records_now()
+        self.assertNotIn("private-response", str(result.exception))
+
     def authority(self, values=None):
         records = values or {name: [OLD] for name in NAMES}
         return {"ns1.example.net": copy.deepcopy(records), "ns2.example.net": copy.deepcopy(records)}

@@ -1,0 +1,29 @@
+[Unit]
+Description=Complete TLS options in native WebSocket subscription exports
+After=network.target x-ui.service
+
+[Service]
+Type=simple
+DynamicUser=yes
+User=uvpn-subscription
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-subscription-compat/subscription_compat.py --config /etc/unifiedvpn-subscription-compat/config.json
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=64M
+CPUQuota=15%
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

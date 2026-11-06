@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically verify owned legacy AWG replication
+
+[Timer]
+OnBootSec=45
+OnUnitActiveSec=30
+AccuracySec=2
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -90,7 +90,7 @@ def regional(samples, settings, now):
     return "unknown"
 
 
-def ready(node, readiness, manifest, settings, now):
+def ready(node, readiness, manifest, settings, now, *, require_fresh_ack=True):
     value = readiness.get(node, {})
     if not isinstance(value, dict) or value.get("address") != settings.addresses[node]:
         return False
@@ -104,7 +104,10 @@ def ready(node, readiness, manifest, settings, now):
     )
     if not valid_manifest or actual != expected or sync.get("applied") is not True:
         return False
-    if not fresh(sync.get("checked_at"), now, settings.sync_max_age_seconds):
+    acknowledged_at = sync.get("checked_at")
+    if type(acknowledged_at) not in (int, float) or not 0 < acknowledged_at <= now:
+        return False
+    if require_fresh_ack and not fresh(acknowledged_at, now, settings.sync_max_age_seconds):
         return False
     probes = value.get("dataplane", {})
     return all(
@@ -113,6 +116,29 @@ def ready(node, readiness, manifest, settings, now):
         and probes[protocol].get("address") == settings.addresses[node]
         and fresh(probes[protocol].get("checked_at"), now, settings.dataplane_max_age_seconds)
         for protocol in settings.protocols
+    )
+
+
+def publishing_ready(pending, readiness, manifest, settings, now):
+    """Finish one pinned publication after source loss, bounded to one hour."""
+    target = pending["target"]
+    value = readiness.get(target, {})
+    sync = value.get("identity_sync", {})
+    pinned_ack = pending.get("target_ack_at")
+    current_ack = sync.get("checked_at")
+    scopes = manifest.get("scopes")
+    checks = value.get("scope_checks", {})
+    return (
+        fresh(pending.get("started_at"), now, 3600)
+        and type(pinned_ack) in (int, float) and 0 < pinned_ack <= now
+        and type(current_ack) in (int, float) and pinned_ack <= current_ack <= now
+        and fresh(sync.get("verified_at"), now, settings.dataplane_max_age_seconds)
+        and isinstance(scopes, dict) and bool(scopes) and set(checks) == set(scopes)
+        and all(
+            proof.get("applied") is True and proof.get("fresh") is True and proof.get("matches") is True
+            for proof in checks.values()
+        )
+        and ready(target, readiness, manifest, settings, now, require_fresh_ack=False)
     )
 
 
@@ -193,7 +219,7 @@ def confirmed_protocol_failures(source, evidence, settings, now, seen):
     value = evidence.get("readiness", {}).get(source, {})
     if value.get("address") != settings.addresses[source]:
         return []
-    accepted = {"required_service_inactive", "required_listener_refused", "required_container_stopped"}
+    accepted = {"required_service_inactive", "required_listener_refused", "required_container_stopped", "required_interface_missing"}
     return [
         result["failure_receipt"] for protocol, result in value.get("dataplane", {}).items()
         if protocol in settings.protocols and result.get("address") == settings.addresses[source]
@@ -226,20 +252,22 @@ def decide(state, evidence, settings, now):
     peer_failure = active is not None and peer_dataplane_failure(active, evidence, settings, now)
     failure_receipts = confirmed_protocol_failures(active, evidence, settings, now, set(next_state.get("seen_failure_receipts", []))) if active is not None else []
     basis = None
-    if active is not None and statuses[active] == "failed":
-        basis = "regional"
-    elif peer_failure:
+    if peer_failure:
         basis = "peer_dataplane"
     elif failure_receipts:
         basis = "confirmed_protocol_failure"
-    target_ready = {
-        node: ready(node, readiness, manifest, settings, now)
-        and (
+    elif active is not None and statuses[active] == "failed":
+        basis = "regional"
+    eligibility_basis = pending.get("basis") if pending else basis
+    allow_unknown_target = eligibility_basis in {"peer_dataplane", "confirmed_protocol_failure"}
+    regional_eligible = {
+        node: (
             statuses[node] == "healthy"
-            or (settings.mode == "regional_or_peer_dataplane" and node == settings.publisher_node and statuses[node] != "failed" and publisher_healthy(evidence, settings, now))
+            or (allow_unknown_target and settings.mode == "regional_or_peer_dataplane" and node == settings.publisher_node and statuses[node] != "failed" and publisher_healthy(evidence, settings, now))
         )
         for node in settings.addresses
     }
+    target_ready = {node: ready(node, readiness, manifest, settings, now) and regional_eligible[node] for node in settings.addresses}
     if pending:
         target = pending["target"]
         if settings.publisher_node is not None and target != settings.publisher_node:
@@ -257,7 +285,12 @@ def decide(state, evidence, settings, now):
             return Decision(next_state, "hold", "source_recovered_or_unknown_before_publication")
         if not pending_dns_safe(authoritative, pending, settings):
             return Decision(next_state, "hold", "dns_drift_during_pending_change")
-        if not target_ready[target]:
+        current_generation = {key: manifest.get(key) for key in ("epoch", "revision", "sha256")}
+        if pending.get("manifest") != current_generation:
+            return Decision(next_state, "hold", "pending_generation_changed")
+        publishing = pending.get("phase", "publishing") == "publishing"
+        eligible = regional_eligible[target] and (publishing_ready(pending, readiness, manifest, settings, now) if publishing else target_ready[target])
+        if not eligible:
             return Decision(next_state, "hold", "pending_target_not_ready")
         return Decision(next_state, "reconcile", "resume_pending_dns_change", target)
     if active is None:
@@ -313,6 +346,11 @@ def decide(state, evidence, settings, now):
     if now - next_state.get("switched_at", 0) < settings.hold_down_seconds:
         return Decision(next_state, "hold", "sticky_hold_down")
     operation = hashlib.sha256(f"{config_id}:{round_id}:{active}:{target}".encode()).hexdigest()
-    next_state["pending"] = {"id": operation, "source": active, "target": target, "started_at": now, "phase": "planned", "basis": basis}
+    next_state["pending"] = {
+        "id": operation, "source": active, "target": target, "started_at": now,
+        "phase": "planned", "basis": basis,
+        "manifest": {key: manifest.get(key) for key in ("epoch", "revision", "sha256")},
+        "target_ack_at": readiness[target]["identity_sync"]["checked_at"],
+    }
     reasons = {"regional": "regional_failure_confirmed", "peer_dataplane": "peer_dataplane_failure_confirmed", "confirmed_protocol_failure": "protected_protocol_failure_confirmed"}
     return Decision(next_state, "reconcile", reasons[basis], target)

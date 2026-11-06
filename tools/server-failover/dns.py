@@ -4,6 +4,7 @@ One configured publisher owns these records. REG.API has no compare-and-swap
 primitive, so concurrent independent writers require external coordination.
 """
 import ipaddress
+import http.client
 import json
 import os
 from pathlib import Path
@@ -102,7 +103,7 @@ class RegRu:
             if not isinstance(domain, dict) or domain.get("dname", "").rstrip(".").lower() != self.zone or domain.get("result") != "success":
                 raise ValueError("Registrar domain operation failed")
             return result
-        except (OSError, ValueError, AttributeError, TypeError):
+        except (OSError, ValueError, AttributeError, TypeError, http.client.HTTPException):
             # Even an HTTP exception can carry the echoed request or credentials.
             raise DnsUnavailable("Registrar API unavailable or rejected the request") from None
 

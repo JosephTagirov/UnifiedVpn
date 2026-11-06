@@ -1,0 +1,19 @@
+[Unit]
+Description=Replicate fixed DIRECT authority permissions and revocations
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-failover/openflux_authority.py run --config /etc/unifiedvpn-openflux-ha/authority.json
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=full
+ProtectHome=read-only
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+MemoryMax=128M
+CPUQuota=20%
+TasksMax=32
+TimeoutStartSec=180

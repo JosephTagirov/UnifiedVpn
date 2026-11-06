@@ -5,11 +5,35 @@ import sqlite3
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
-from scope_verify import awg_configuration, digest, files, local_services, vless
+from scope_verify import awg_configuration, digest, files, local_services, verify, vless
 
 
 class ScopeTests(unittest.TestCase):
+    def test_classic_verifier_failure_becomes_an_unverified_scope(self):
+        config = {"address": "192.0.2.1", "scopes": [{"scope": "classic-old-v1", "kind": "classic", "epoch": 1, "revision": 1, "sha256": "a" * 64}]}
+        with patch('classic_awg_ha.verify_classic',side_effect=RuntimeError('unverified-runtime')):
+            result = verify(config)
+        self.assertFalse(result["scopes"]["classic-old-v1"]["applied"])
+        self.assertEqual(result["scopes"]["classic-old-v1"]["reason"], "identity_scope_unverified")
+
+    def test_missing_declared_interface_in_a_running_container_confirms_failure(self):
+        def command(arguments, **keywords):
+            if arguments[1] == "inspect":
+                return SimpleNamespace(returncode=0, stdout='{"Running":true}')
+            return SimpleNamespace(returncode=1 if arguments[-2] == "-e" else 0, stdout="")
+        result = local_services({"services": [{"protocol": "awg", "container": "native-health", "interface": "awg0"}]}, command=command)
+        self.assertEqual(result["awg"]["failure_class"], "required_interface_missing")
+
+    def test_inaccessible_interface_inventory_is_unknown(self):
+        def command(arguments, **keywords):
+            if arguments[1] == "inspect":
+                return SimpleNamespace(returncode=0, stdout='{"Running":true}')
+            return SimpleNamespace(returncode=2, stdout="")
+        result = local_services({"services": [{"protocol": "awg", "container": "native-health", "interface": "awg0"}]}, command=command)
+        self.assertEqual(result["awg"]["status"], "unknown")
+
     def test_json_file_whitespace_does_not_change_the_identity_scope(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "profiles.json")

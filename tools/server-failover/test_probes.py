@@ -1,4 +1,6 @@
 import math
+import io
+import http.client
 import unittest
 from types import SimpleNamespace
 
@@ -20,6 +22,16 @@ class CheckHostStub(CheckHost):
 
 
 class ProbeTests(unittest.TestCase):
+    def test_truncated_api_body_is_unknown_and_does_not_escape_the_worker(self):
+        class TruncatedResponse(io.BytesIO):
+            def read(self, *arguments):
+                raise http.client.IncompleteRead(b"private-response", 20)
+        opener = SimpleNamespace(open=lambda *arguments, **keywords: TruncatedResponse())
+        checker = CheckHost(opener=opener, sleep=lambda _: None)
+        with self.assertRaises(ProbeUnavailable) as result:
+            checker.request("/nodes/hosts")
+        self.assertNotIn("private-response", str(result.exception))
+
     def test_real_tcp_result_shapes(self):
         self.assertEqual(tcp_status([{"time": 0.03, "address": ADDRESS}], ADDRESS), "healthy")
         self.assertEqual(tcp_status([{"error": "Connection timed out"}], ADDRESS), "failed")
