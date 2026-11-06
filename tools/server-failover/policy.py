@@ -38,7 +38,7 @@ class Settings:
             raise ValueError("Explicit data-plane protocol coverage is required")
         if self.quorum < 2 or self.failure_rounds < 3 or self.recovery_rounds < 2:
             raise ValueError("Regional quorum and hysteresis are below their safety floors")
-        if self.round_interval_seconds < 60 or self.hold_down_seconds < 60:
+        if self.round_interval_seconds < 60 or self.hold_down_seconds < 900:
             raise ValueError("Probe cadence or hold-down is below its safety floor")
         windows = [self.hold_down_seconds, self.round_interval_seconds, self.probe_max_age_seconds, self.sync_max_age_seconds, self.dataplane_max_age_seconds]
         if any(type(value) is not int or value <= 0 for value in windows):

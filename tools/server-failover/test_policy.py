@@ -68,6 +68,10 @@ class FailoverPolicyTests(unittest.TestCase):
         self.assertEqual(decision.action, "reconcile")
         return decision
 
+    def test_hold_down_cannot_be_configured_below_fifteen_minutes(self):
+        with self.assertRaises(ValueError):
+            Settings(**{**self.settings.__dict__, "hold_down_seconds": 899})
+
     def verify_switch(self):
         self.begin_switch()
         evidence = self.evidence(4, active="standby", primary="healthy")
