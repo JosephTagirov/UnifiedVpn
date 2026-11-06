@@ -1,0 +1,11 @@
+[Unit]
+Description=Check regional VPN ingress every minute
+
+[Timer]
+OnBootSec=90
+OnUnitInactiveSec=60
+AccuracySec=5
+Unit=unifiedvpn-failover.service
+
+[Install]
+WantedBy=timers.target

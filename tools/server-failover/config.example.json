@@ -1,0 +1,30 @@
+{
+  "enabled": false,
+  "control_writer": "primary",
+  "health_file": "/var/lib/unifiedvpn-failover/health.json",
+  "zone": "example.net",
+  "nameservers": ["ns1.example.net", "ns2.example.net"],
+  "credentials_file": "/etc/unifiedvpn-failover/registrar.private.json",
+  "manifest_file": "/etc/unifiedvpn-failover/identity-manifest.json",
+  "readiness_file": "/var/lib/unifiedvpn-failover/readiness.json",
+  "regional_port": 443,
+  "internet_origins": [
+    {"provider": "google", "hostname": "www.gstatic.com", "path": "/generate_204", "expect_status": 204},
+    {"provider": "cloudflare", "hostname": "www.cloudflare.com", "path": "/cdn-cgi/trace", "expect_status": 200, "contains": "ip="}
+  ],
+  "policy": {
+    "addresses": {"primary": "192.0.2.10", "standby": "198.51.100.20"},
+    "publisher_node": "standby",
+    "mode": "regional_or_peer_dataplane",
+    "records": ["vpn.example.net", "www.example.net", "web.example.net"],
+    "protocols": ["vless-ws", "vless-xhttp6", "vless-xhttp7", "awg-native-primary", "awg-native-old-v31", "telegram-web", "telegram-faketls", "site", "subscription"],
+    "quorum": 2,
+    "failure_rounds": 3,
+    "recovery_rounds": 2,
+    "hold_down_seconds": 900,
+    "round_interval_seconds": 60,
+    "probe_max_age_seconds": 120,
+    "sync_max_age_seconds": 600,
+    "dataplane_max_age_seconds": 120
+  }
+}

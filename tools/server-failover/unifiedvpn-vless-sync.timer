@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the standby VLESS identity generation
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=unifiedvpn-vless-sync.service
+
+[Install]
+WantedBy=timers.target

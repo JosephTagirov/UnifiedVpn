@@ -1,0 +1,24 @@
+[Unit]
+Description=Revalidate replicated identities and authenticated VPN data planes
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-failover/readiness.py --config /etc/unifiedvpn-failover/readiness.private.json --manifest-output /var/lib/unifiedvpn-failover/identity-manifest.json --output /var/lib/unifiedvpn-failover/readiness.json
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/unifiedvpn-failover
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+MemoryMax=384M
+CPUQuota=40%
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=Verify regional ingress health and reconcile authorized DNS failover
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/unifiedvpn-failover/controller.py --config /etc/unifiedvpn-failover/config.json --state /var/lib/unifiedvpn-failover/status.json --apply
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/unifiedvpn-failover
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=96M
+CPUQuota=25%
+
+[Install]
+WantedBy=multi-user.target

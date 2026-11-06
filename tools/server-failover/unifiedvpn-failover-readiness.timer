@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh authenticated VPN readiness
+
+[Timer]
+OnBootSec=60
+OnUnitInactiveSec=45
+AccuracySec=5
+Unit=unifiedvpn-failover-readiness.service
+
+[Install]
+WantedBy=timers.target
