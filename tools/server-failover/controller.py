@@ -13,7 +13,8 @@ import secrets
 import time
 
 from dns import DnsUnavailable, RegRu, read_private_credentials, reconcile
-from policy import Settings, decide, observed_active, ready, regional
+from failover_status import configuration_digest
+from policy import Settings, decide, fresh, observed_active, ready, regional
 from probes import CheckHost, ProbeUnavailable, authoritative_dns, internet_origins, peer_ports
 
 
@@ -161,8 +162,24 @@ def run_once(config, state_path, *, apply=False, fixture=None, provider=None, cl
         previous_pending = bool(state.get("pending"))
         next_state.update(checked_at=now, last_action=decision.action, last_reason=decision.reason)
         if fixture is None and config.get("health_file"):
+            expirations = [evidence["checked_at"] + settings.probe_max_age_seconds]
+            for value in evidence.get("readiness", {}).values():
+                for probe in value.get("dataplane", {}).values():
+                    timestamp = probe.get("checked_at")
+                    if fresh(timestamp, now, settings.dataplane_max_age_seconds):
+                        expirations.append(timestamp + settings.dataplane_max_age_seconds)
+                timestamp = value.get("identity_sync", {}).get("checked_at")
+                if fresh(timestamp, now, settings.sync_max_age_seconds):
+                    expirations.append(timestamp + settings.sync_max_age_seconds)
+            for samples in evidence.get("regional", {}).values():
+                for sample in samples:
+                    timestamp = sample.get("checked_at")
+                    if fresh(timestamp, now, settings.probe_max_age_seconds):
+                        expirations.append(timestamp + settings.probe_max_age_seconds)
             atomic_json(config["health_file"], {
                 "checked_at": now,
+                "configuration_digest": configuration_digest(config),
+                "valid_until": min(expirations),
                 "active": observed_active(evidence.get("authoritative", {}), settings),
                 "regional": {node: regional(evidence.get("regional", {}).get(node, []), settings, now) for node in settings.addresses},
                 "dataplane_ready": {node: ready(node, evidence.get("readiness", {}), evidence.get("manifest", {}), settings, now) for node in settings.addresses},

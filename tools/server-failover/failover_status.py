@@ -1,11 +1,18 @@
 """Bounded operational status for checkpoints and the owner metrics API."""
+import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 import time
 
 
 TIMERS = ("unifiedvpn-failover.timer", "unifiedvpn-failover-readiness.timer")
+
+
+def configuration_digest(config):
+    value = {"policy": config["policy"], "control_writer": config["control_writer"]}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
 def timer_states():
@@ -63,16 +70,23 @@ def snapshot(config_path="/etc/unifiedvpn-failover/config.json", *, units=None, 
         )
         health = bounded_json(config["health_file"])
         maximum_age = policy.get("probe_max_age_seconds", 120)
-        if not 0 <= now - health["checked_at"] <= maximum_age:
+        valid_until = health.get("valid_until")
+        if (
+            health.get("configuration_digest") != configuration_digest(config)
+            or not 0 <= now - health["checked_at"] <= maximum_age
+            or type(valid_until) not in (int, float) or not math.isfinite(valid_until)
+            or not now <= valid_until
+        ):
             return result
         active = health.get("active")
         regional = health["regional"]
         nodes = policy["addresses"]
         backup = next((name for name in nodes if name != active), None) if active in nodes else None
+        successes = health.get("backup_successes", {}).get(backup, 0)
         healthy_backup = (
             backup is not None and regional.get(backup) == "healthy"
             and health.get("dataplane_ready", {}).get(backup) is True
-            and health.get("backup_successes", {}).get(backup, 0) >= policy.get("recovery_rounds", 2)
+            and type(successes) is int and successes >= policy.get("recovery_rounds", 2)
         )
         degraded = any(regional.get(name) != "healthy" for name in nodes)
         result.update(
@@ -83,6 +97,6 @@ def snapshot(config_path="/etc/unifiedvpn-failover/config.json", *, units=None, 
             failoverHealthCheckedAt=health["checked_at"],
             failoverStatus=("enabled_degraded" if degraded or not healthy_backup else "enabled_ready") if enabled else "disabled",
         )
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
         pass
     return result
