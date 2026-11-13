@@ -15,9 +15,9 @@ object SupportLogs {
         target.value=url?.let { Regex("https://panel\\.meesharr\\.space/vpn-control/(?:bundle|unified|calls|sub)/([A-Za-z0-9_-]{43})").matchEntire(it)?.groupValues?.get(1) }
     }
     internal fun redact(value:String):String = value
-        .replace(Regex("(?i)(?:vless|vmess|vpn|awg|openflux|olcrtc)://\\S+"),"[конфиг скрыт]")
+        .replace(Regex("(?i)(?:vless|vmess|hysteria2|hy2|vpn|awg|openflux|olcrtc)://\\S+"),"[конфиг скрыт]")
         .replace(Regex("(?i)(/vpn-control/(?:bundle|add|client|sub|unified|calls|existing)/)[A-Za-z0-9_-]{43}"),"$1[ссылка скрыта]")
-        .replace(Regex("(?im)^.*(?:authorization|password|private[_ -]?key|pre[_ -]?shared[_ -]?key|encryption[_ -]?key|token|secret)\\s*[\"\\s]*[:=].*$"),"[секретные данные скрыты]")
+        .replace(Regex("(?im)^.*(?:auth|authorization|password|private[_ -]?key|pre[_ -]?shared[_ -]?key|encryption[_ -]?key|token|secret)\\s*[\"\\s]*[:=].*$"),"[секретные данные скрыты]")
         .replace(Regex("(?i)(?<![a-f0-9])[a-f0-9]{64}(?![a-f0-9])"),"[ключ скрыт]")
         .replace(Regex("(?i)(?<![a-f0-9])[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}(?![a-f0-9])"),"[id скрыт]")
         .replace(Regex("(?i)(https?://[^\\s/]+/(?:call/join/|j/))[^\\s]+"),"$1[комната скрыта]")

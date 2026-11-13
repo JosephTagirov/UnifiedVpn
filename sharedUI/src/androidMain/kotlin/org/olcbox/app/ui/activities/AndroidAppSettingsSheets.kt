@@ -2918,7 +2918,7 @@ private fun AndroidSplitTunnelSettings.settingsSummary(): String {
 private fun AndroidSplitTunnelProfile.title(): String {
     return when (this) {
         AndroidSplitTunnelProfile.OlcRtc -> "olcRTC / OpenFlux"
-        AndroidSplitTunnelProfile.External -> "VLESS / AWG"
+        AndroidSplitTunnelProfile.External -> "VLESS / VMess / Hysteria2 / AWG"
     }
 }
 

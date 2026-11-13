@@ -2865,6 +2865,8 @@ class OlcboxVpnService : VpnService() {
             return when (activeProfileType) {
                 VpnProfileConfig.TYPE_OPENFLUX -> "OpenFlux"
                 VpnProfileConfig.TYPE_VLESS -> "VLESS"
+                VpnProfileConfig.TYPE_VMESS -> "VMess"
+                VpnProfileConfig.TYPE_HYSTERIA2 -> "Hysteria2"
                 VpnProfileConfig.TYPE_AMNEZIA_WG -> "AmneziaWG"
                 VpnProfileConfig.TYPE_AMNEZIA_VPN -> "AmneziaVPN"
                 VkCallsRuntimeConfig.ENGINE_TYPE -> "VK Calls"

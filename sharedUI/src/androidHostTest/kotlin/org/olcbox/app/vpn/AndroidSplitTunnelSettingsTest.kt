@@ -33,8 +33,9 @@ class AndroidSplitTunnelSettingsTest {
     }
 
     @Test
-    fun vlessAndAmneziaRemainSeparate() {
-        for (type in listOf(VpnProfileConfig.TYPE_VLESS, VpnProfileConfig.TYPE_AMNEZIA_WG,
+    fun nativeProxyProfilesAndAmneziaRemainSeparateFromRtc() {
+        for (type in listOf(VpnProfileConfig.TYPE_VLESS, VpnProfileConfig.TYPE_VMESS,
+            VpnProfileConfig.TYPE_HYSTERIA2, VpnProfileConfig.TYPE_AMNEZIA_WG,
             VpnProfileConfig.TYPE_AMNEZIA_VPN, " VLESS ")) {
             assertEquals(AndroidSplitTunnelProfile.External, AndroidSplitTunnelProfile.fromProfileType(type))
             assertEquals(externalSettings, profiles[AndroidSplitTunnelProfile.fromProfileType(type)])

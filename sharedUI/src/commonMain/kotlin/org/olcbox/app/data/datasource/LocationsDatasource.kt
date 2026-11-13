@@ -35,6 +35,7 @@ import org.olcbox.app.data.model.SubscriptionMetadata
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.OpenFluxSessionProfileConfig
+import org.olcbox.app.data.model.XrayProfileConfig
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.data.repository.LocationImportFailureKind
 import org.olcbox.app.data.repository.LocationImportResult
@@ -656,7 +657,7 @@ class LocationsRepositoryImpl(
         if (input.looksLikeUnsupportedUrl()) {
             return ResolvedImportResult.Failure(
                 LocationImportFailureKind.InvalidUrl,
-                "Only HTTP, HTTPS, olcrtc, VLESS, and Amnezia URIs are supported"
+                "Use an HTTPS subscription, olcrtc, VLESS, VMess, Hysteria2, OpenFlux, or Amnezia configuration"
             )
         }
         if (input.isHttpUrl() && !input.isValidHttpUrl()) {
@@ -899,6 +900,8 @@ class LocationsRepositoryImpl(
         return runCatching {
             val parsed = Url(input)
             parsed.host.isNotBlank() &&
+                parsed.user == null && parsed.password == null && parsed.fragment.isEmpty() &&
+                org.olcbox.app.data.share.SelectionImportLink.hasValidAuthorityPort(input) &&
                 (parsed.protocol.name == "http" || parsed.protocol.name == "https")
         }.getOrDefault(false)
     }
@@ -911,6 +914,9 @@ class LocationsRepositoryImpl(
                 !value.startsWith("https://", ignoreCase = true) &&
                 !value.startsWith(OLCRTC_URI_PREFIX, ignoreCase = true) &&
                 !value.startsWith("vless://", ignoreCase = true) &&
+                !value.startsWith("vmess://", ignoreCase = true) &&
+                !value.startsWith("hysteria2://", ignoreCase = true) &&
+                !value.startsWith("hy2://", ignoreCase = true) &&
                 !value.startsWith("awg://", ignoreCase = true) &&
                 !value.startsWith("openflux://", ignoreCase = true) &&
                 !value.startsWith("vpn://", ignoreCase = true)
@@ -976,7 +982,7 @@ class LocationsRepositoryImpl(
         if (selectedRoot?.string("format")?.startsWith("unifiedvpn-selection-") == true) {
             if (selectedRoot.string("format") !in setOf("unifiedvpn-selection-v1", "unifiedvpn-selection-v2")) return null
             val profiles = selectedRoot["profiles"]?.let { runCatching { it.jsonArray }.getOrNull() } ?: return null
-            if (profiles.isEmpty() || profiles.size > 6) return null
+            if (profiles.isEmpty() || profiles.size > 16) return null
             val selected = parseBundle(JsonObject(mapOf("version" to JsonPrimitive(5), "locations" to profiles)), subscriptionUrl, updateIntervalMs) ?: return null
             if (selected.locations.size != profiles.size) return null
             return ParsedImport(selected, ImportMode.Additive, preserveActiveSelection = true)
@@ -1028,9 +1034,10 @@ class LocationsRepositoryImpl(
 
         candidates.forEach { candidate ->
             val vless = parseVlessProfiles(candidate, subscriptionUrl, updateIntervalMs)
+            val nativeXray = parseNativeXrayProfiles(candidate, subscriptionUrl, updateIntervalMs)
             val openFlux = parseOpenFluxProfiles(candidate, subscriptionUrl, updateIntervalMs)
             val rtc = parseOlcRtcText(candidate, subscriptionUrl, updateIntervalMs)
-            val bundles = listOfNotNull(vless, rtc, openFlux)
+            val bundles = listOfNotNull(vless, nativeXray, rtc, openFlux)
             if (bundles.isNotEmpty()) {
                 if (bundles.size == 1) return bundles.single()
                 // A subscription may contain several engine types. Returning
@@ -1105,6 +1112,23 @@ class LocationsRepositoryImpl(
             )
         }
         return LocationBundleV4(activeLocationId = entries.first().storageId, locations = entries)
+    }
+
+    private fun parseNativeXrayProfiles(text: String, subscriptionUrl: String?, updateIntervalMs: Long?): LocationBundleV4? {
+        val used = mutableSetOf<String>()
+        val entries = Regex("""(?:vmess|hysteria2|hy2)://\S+""",RegexOption.IGNORE_CASE).findAll(text)
+            .map { it.value }.distinct().mapNotNull { uri ->
+                val type = if(uri.startsWith("vmess://",true)) VpnProfileConfig.TYPE_VMESS else VpnProfileConfig.TYPE_HYSTERIA2
+                val parsed = runCatching { XrayProfileConfig.parse(uri,type) }.getOrNull() ?: return@mapNotNull null
+                val name = parsed.name
+                LocationEntry.fromProfile(
+                    storageId=uniqueStorageId("${type}_${name.storageSlug()}",used),
+                    profile=VpnProfileConfig(type=type,name=name,uri=uri,rawConfig=uri),
+                    subscriptionUrl=subscriptionUrl,
+                    metadata=LocationMetadata(subscription=SubscriptionMetadata(name=subscriptionUrl?.let { "VPN subscription" }).withSubscriptionInterval(updateIntervalMs)).normalized().takeUnless { it.isEmpty() }
+                )
+            }.toList()
+        return entries.takeIf { it.isNotEmpty() }?.let { LocationBundleV4(activeLocationId=it.first().storageId,locations=it) }
     }
 
     private fun parseVlessProfiles(
@@ -1793,7 +1817,7 @@ class LocationsRepositoryImpl(
             .map { it.trim() }
             .filter { it.isNotBlank() && !it.startsWith("#") }
             .joinToString("")
-        if (compact.length < 8 || compact.contains("://")) return null
+        if (compact.length < 8 || compact.length > 4 * 1024 * 1024 || compact.contains("://")) return null
 
         val padded = compact + "=".repeat((4 - compact.length % 4) % 4)
         return listOf(
@@ -1803,9 +1827,9 @@ class LocationsRepositoryImpl(
             .firstNotNullOfOrNull { result ->
                 result.getOrNull()?.let { bytes ->
                     runCatching {
-                        bytes.decodeToString()
+                        bytes.decodeToString(throwOnInvalidSequence = true)
                             .normalizedImportText()
-                            .takeIf { it.contains("://") }
+                            .takeIf { it.contains("://") || (it.startsWith('{') && it.endsWith('}')) }
                     }.getOrNull()
                 }
             }

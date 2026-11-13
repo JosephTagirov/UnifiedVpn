@@ -1,0 +1,88 @@
+name: Verified Windows preview
+
+on:
+  workflow_dispatch:
+  create:
+  push:
+    branches:
+      - 'release/windows-*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    if: >-
+      github.repository == 'JosephTagirov/UnifiedVpn' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'create' && github.event.ref_type == 'branch' && startsWith(github.event.ref, 'release/windows-')) ||
+       (github.event_name == 'push' && github.event.created != true))
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android configuration dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sdkManager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
+          if (!(Test-Path -LiteralPath $sdkManager)) { throw 'Android SDK manager is missing' }
+          (1..100 | ForEach-Object { 'y' }) | & $sdkManager --licenses | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Android SDK license setup failed' }
+          & $sdkManager 'platforms;android-37.0' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          if ($LASTEXITCODE -ne 0) { throw 'Android SDK dependency installation failed' }
+      - name: Stage unchanged verified native engines
+        run: |
+          ./tools/Stage-VerifiedWindowsReleaseNatives.ps1
+          "UNIFIEDVPN_XRAY_TEST_BINARY=$((Resolve-Path 'desktopApp/build/generated/hostDesktopNativeResources/native/xray-windows-amd64.exe').Path)" >> $env:GITHUB_ENV
+      - name: Run shared tests and package verified Windows binaries
+        run: |
+          ./gradlew.bat :sharedUI:jvmTest :desktopApp:packageReleaseUpdateBundle :desktopApp:packageReleasePortableZip -x :desktopApp:stageHostDesktopNativeResources --no-daemon --no-configuration-cache --no-parallel --max-workers=2 '-Dorg.gradle.jvmargs=-Xmx3g' '-Pkotlin.compiler.execution.strategy=in-process'
+          if ($LASTEXITCODE -ne 0) { throw 'Tests or Windows packaging failed' }
+      - name: Publish Windows preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $properties = @{}
+          Get-Content gradle.properties | Where-Object { $_ -match '^olcbox\.(version|build)=' } | ForEach-Object {
+            $key, $value = $_ -split '=', 2
+            $properties[$key] = $value.Trim()
+          }
+          $version = $properties['olcbox.version']
+          $build = $properties['olcbox.build']
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $build -notmatch '^\d+$') { throw 'Invalid build identity' }
+          $assets = @(
+            Get-ChildItem 'desktopApp/build/compose/binaries/main-release/update' -Filter '*.exe' -File
+            Get-ChildItem 'desktopApp/build/compose/binaries/main-release/portable' -Filter '*.zip' -File
+          )
+          if ($assets.Count -ne 2) { throw 'Expected exactly one verified installer and one portable ZIP' }
+          $hashes = [ordered]@{}
+          foreach ($asset in $assets) { $hashes[$asset.Name] = (Get-FileHash -LiteralPath $asset.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+          $hashFile = Join-Path $env:RUNNER_TEMP "SHA256-build-$build.json"
+          $hashes | ConvertTo-Json | Set-Content -LiteralPath $hashFile -Encoding utf8NoBOM
+          $tag = "v$version-windows-preview.$build"
+          $notesFile = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          @(
+            "Windows preview of UnifiedVPN $version (build $build).",
+            '',
+            'Shared JVM tests and Windows package/version/native-asset checks passed in GitHub Actions. Native engines are reused unchanged from the SHA256-pinned official 0.1.8 release.',
+            '',
+            'Android source is included in this commit. No Android update APK is included: the original Android release signing key is required. This preview does not replace the stable release.',
+            '',
+            (Get-Content -LiteralPath "docs/releases/$version.md" -Raw)
+          ) -join "`n" | Set-Content -LiteralPath $notesFile -Encoding utf8NoBOM
+          & gh release create $tag @($assets.FullName) $hashFile --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "UnifiedVPN $version — Windows preview" --notes-file $notesFile --prerelease --latest=false
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub preview publication failed' }

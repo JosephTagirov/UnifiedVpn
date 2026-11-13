@@ -712,6 +712,8 @@ class LocationViewModel(
         } else {
             when (profile.normalizedType) {
                 VpnProfileConfig.TYPE_VLESS -> "Enter a VLESS URI, raw configuration, or local SOCKS port"
+                VpnProfileConfig.TYPE_VMESS -> "Enter a valid VMess URI or share JSON"
+                VpnProfileConfig.TYPE_HYSTERIA2 -> "Enter a valid Hysteria2 URI or client JSON with verified TLS"
                 VpnProfileConfig.TYPE_AMNEZIA_WG -> "Enter an AWG URI or raw AmneziaWG configuration"
                 VpnProfileConfig.TYPE_AMNEZIA_VPN -> "Enter an Amnezia URI or raw configuration"
                 else -> "Enter a profile URI, raw configuration, or local SOCKS port"

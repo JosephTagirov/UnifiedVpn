@@ -547,7 +547,7 @@ fun AndroidMainScreen(
                         reloadLocationsAfterImport {
                             pendingEncryptedFriendPackage = null
                             showLocalizedToast(
-                                "olcRTC, VLESS, and AmneziaWG are ready",
+                                "olcRTC, VLESS, VMess, Hysteria2, and AmneziaWG are ready",
                                 Toast.LENGTH_LONG
                             )
                             connectAfterProfileImport()

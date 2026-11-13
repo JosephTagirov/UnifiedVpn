@@ -257,10 +257,10 @@ class DesktopVpnManager internal constructor(
         val profile = active.profile.normalized()
         val isAmneziaProfile = profile.normalizedType == VpnProfileConfig.TYPE_AMNEZIA_WG ||
             profile.normalizedType == VpnProfileConfig.TYPE_AMNEZIA_VPN
-        val isVlessProfile = profile.normalizedType == VpnProfileConfig.TYPE_VLESS &&
+        val isXrayProfile = profile.isXray() &&
             runCatching { DesktopXrayConfig.supports(profile) }.getOrDefault(false)
         val isSupportedWindowsProfile = DesktopPaths.os == DesktopOs.Windows &&
-            (isAmneziaProfile || isVlessProfile || profile.isOpenFlux())
+            (isAmneziaProfile || isXrayProfile || profile.isOpenFlux())
         if (!profile.isOlcRtc() && !isSupportedWindowsProfile) {
             val message = "${profile.typeLabel()} profiles are not supported by the desktop engine"
             setStatus(VpnStatus.Error(message))
@@ -305,7 +305,7 @@ class DesktopVpnManager internal constructor(
             }
             val bypassHosts = when {
                 isAmneziaProfile -> listOf(DesktopSingBoxConfig.endpointHost(profile))
-                isVlessProfile -> DesktopXrayConfig.endpointHosts(profile)
+                isXrayProfile -> DesktopXrayConfig.endpointHosts(profile)
                 else -> emptyList()
             }
             val ready = CompletableDeferred<Unit>()
@@ -350,7 +350,7 @@ class DesktopVpnManager internal constructor(
             // Pin the exact endpoint before adding capture routes. Resolving it
             // again inside the engine could select another address and loop.
             val pinnedEndpoints = if (desktopMode == DesktopMode.WindowsTun) {
-                require(isAmneziaProfile || isVlessProfile) { "This profile only supports proxy modes on Windows" }
+                require(isAmneziaProfile || isXrayProfile) { "This profile only supports proxy modes on Windows" }
                 require(socksSettings.host == PacServer.LOCAL_SOCKS_HOST) { "Windows TUN requires SOCKS on 127.0.0.1" }
                 bypassHosts.associateWith { host -> InetAddress.getAllByName(host)
                     .sortedBy { if (it is Inet4Address) 0 else 1 }
@@ -358,7 +358,7 @@ class DesktopVpnManager internal constructor(
                     ?.hostAddress ?: error("Could not resolve the VPN server for TUN") }
             } else emptyMap()
             val pinnedEndpoint = bypassHosts.firstOrNull()?.let(pinnedEndpoints::get)
-            val pinnedDownloadEndpoint = if (isVlessProfile) {
+            val pinnedDownloadEndpoint = if (isXrayProfile) {
                 DesktopXrayConfig.downloadEndpointHost(profile)?.let(pinnedEndpoints::get)
             } else null
 
@@ -369,7 +369,7 @@ class DesktopVpnManager internal constructor(
                     requestGeneration = requestGeneration,
                     privileged = desktopMode == DesktopMode.LinuxTun
                 )
-                isVlessProfile -> startXrayProcess(
+                isXrayProfile -> startXrayProcess(
                     profile = profile,
                     socksSettings = engineSocksSettings,
                     startupFailure = startupFailure,

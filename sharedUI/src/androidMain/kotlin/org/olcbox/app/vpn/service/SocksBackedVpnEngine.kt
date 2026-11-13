@@ -11,7 +11,7 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.vpn.AdBlockingConfig
 import org.olcbox.app.vpn.AdBlockingRules
 import org.olcbox.app.vpn.XraySocksSettings
-import org.olcbox.app.vpn.XrayVlessConfig
+import org.olcbox.app.vpn.XrayProxyConfig
 import org.olcbox.app.vpn.VkCallsRuntimeConfig
 import org.olcbox.app.vpn.WireGuardConfigValues
 import org.olcbox.app.vpn.parseXhttpExtra
@@ -37,11 +37,17 @@ internal interface SocksBackedVpnEngine {
 }
 
 internal fun existingProfileSocksPort(profile: VpnProfileConfig): Int? =
-    profile.localSocksPort.takeUnless { profile.isOpenFlux() }
+    profile.localSocksPort.takeUnless {
+        profile.isOpenFlux() || profile.normalizedType in setOf(
+            VpnProfileConfig.TYPE_VMESS, VpnProfileConfig.TYPE_HYSTERIA2
+        )
+    }
 
 internal fun profileRequiresTunSocksBridge(profileType: String): Boolean = when (profileType) {
     VpnProfileConfig.TYPE_OLCRTC,
     VpnProfileConfig.TYPE_VLESS,
+    VpnProfileConfig.TYPE_VMESS,
+    VpnProfileConfig.TYPE_HYSTERIA2,
     VpnProfileConfig.TYPE_OPENFLUX -> true
     VkCallsRuntimeConfig.ENGINE_TYPE,
     LocationConfig.PROVIDER_SALUTE_JAZZ,
@@ -84,7 +90,9 @@ internal fun createSocksBackedVpnEngine(
             verificationContext = verificationContext
         )
 
-        VpnProfileConfig.TYPE_VLESS -> SingBoxVlessEngine(
+        VpnProfileConfig.TYPE_VLESS,
+        VpnProfileConfig.TYPE_VMESS,
+        VpnProfileConfig.TYPE_HYSTERIA2 -> NativeProxyEngine(
             context = context.applicationContext,
             profile = normalized,
             socksPort = defaultSocksPort,
@@ -338,7 +346,7 @@ private class SingBoxTunSocksBridge(
     }
 }
 
-private class SingBoxVlessEngine(
+private class NativeProxyEngine(
     private val context: Context,
     private val profile: VpnProfileConfig,
     override val socksPort: Int,
@@ -346,7 +354,7 @@ private class SingBoxVlessEngine(
     private val password: String,
     private val log: (String) -> Unit
 ) : SocksBackedVpnEngine {
-    override val profileType: String = VpnProfileConfig.TYPE_VLESS
+    override val profileType: String = profile.normalizedType
     override val socksHost: String = DEFAULT_SOCKS_HOST
     override val isRunning: Boolean
         get() = process?.isAlive == true && canConnect(socksHost, socksPort)
@@ -355,13 +363,25 @@ private class SingBoxVlessEngine(
     private var process: Process? = null
     private var logThread: Thread? = null
     private var activeEngineName: String = "sing-box"
+    private val protocolLabel: String = when (profileType) {
+        VpnProfileConfig.TYPE_VMESS -> "VMess"
+        VpnProfileConfig.TYPE_HYSTERIA2 -> "Hysteria2"
+        else -> "VLESS"
+    }
 
     override suspend fun start() {
-        val uri = profile.rawConfig?.takeIf { it.startsWith("vless://", ignoreCase = true) }
-            ?: profile.uri?.takeIf { it.startsWith("vless://", ignoreCase = true) }
-            ?: throw IllegalStateException("VLESS profile does not contain a vless:// URI")
-        val outbound = parseVlessUri(uri)
-        val useXray = XrayVlessConfig.supports(profile)
+        val useXray = XrayProxyConfig.supports(profile)
+        // Retain sing-box only for existing VLESS transports outside Xray's
+        // supported set. VMess and Hysteria2 always keep their genuine protocol.
+        val outbound = if (useXray) null else {
+            check(profileType == VpnProfileConfig.TYPE_VLESS) {
+                "$protocolLabel profile is not supported by the packaged Xray core"
+            }
+            val uri = profile.rawConfig?.takeIf { it.startsWith("vless://", ignoreCase = true) }
+                ?: profile.uri?.takeIf { it.startsWith("vless://", ignoreCase = true) }
+                ?: throw IllegalStateException("VLESS profile does not contain a vless:// URI")
+            parseVlessUri(uri)
+        }
         val engineName = if (useXray) "xray" else "sing-box"
         val executableSource = findEngineExecutable(context, engineName)
             ?: throw IllegalStateException(
@@ -376,8 +396,8 @@ private class SingBoxVlessEngine(
             target.setExecutable(true, false)
         }
         stop()
-        val configFile = File(workDir, "vless-$socksPort.json").also { file ->
-            file.writeText(if (useXray) buildXrayConfig() else buildSingBoxConfig(outbound))
+        val configFile = File(workDir, "$profileType-$socksPort.json").also { file ->
+            file.writeText(if (useXray) buildXrayConfig() else buildSingBoxConfig(checkNotNull(outbound)))
         }
 
         runtimeConfig = configFile
@@ -393,7 +413,7 @@ private class SingBoxVlessEngine(
             .start()
         logThread = process?.let { started ->
             startEngineLogReader(
-                threadName = if (useXray) "XrayVlessLog" else "SingBoxVlessLog",
+                threadName = if (useXray) "XrayProxyLog" else "SingBoxVlessLog",
                 logPrefix = engineName,
                 process = started,
                 log = log
@@ -401,7 +421,7 @@ private class SingBoxVlessEngine(
         }
 
         waitForSocksPort()
-        log("VLESS ready on $socksHost:$socksPort")
+        log("$protocolLabel ready on $socksHost:$socksPort")
     }
 
     override fun stop() {
@@ -432,7 +452,7 @@ private class SingBoxVlessEngine(
         throw IllegalStateException("$activeEngineName SOCKS port $socksPort did not become ready")
     }
 
-    private fun buildXrayConfig(): String = XrayVlessConfig.build(
+    private fun buildXrayConfig(): String = XrayProxyConfig.build(
         profile, XraySocksSettings(socksHost, socksPort, username, password),
         bootstrapDnsServers = XRAY_BOOTSTRAP_DNS_SERVERS.toList()
     )

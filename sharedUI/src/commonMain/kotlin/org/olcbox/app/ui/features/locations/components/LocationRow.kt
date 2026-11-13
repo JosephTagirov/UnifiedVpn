@@ -367,5 +367,7 @@ internal fun profileBadge(location: LocationItem): String = when {
     location.profile.isOlcRtc() -> "RTC"
     location.profile.isOpenFlux() -> "OF"
     location.profile.normalizedType == "vless" -> "V"
+    location.profile.normalizedType == "vmess" -> "M"
+    location.profile.normalizedType == "hysteria2" -> "H2"
     else -> "A"
 }

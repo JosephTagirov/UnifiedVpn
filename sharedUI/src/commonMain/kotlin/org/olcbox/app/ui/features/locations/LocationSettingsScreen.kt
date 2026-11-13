@@ -396,7 +396,7 @@ fun LocationSettingsScreen(
                         value = viewModel.editingProfile.uri.orEmpty(),
                         onValueChange = viewModel::onProfileUriChanged,
                         label = "Profile URI (optional)",
-                        placeholder = "vless://, awg://, or vpn://",
+                        placeholder = "vless://, vmess://, hysteria2://, awg://, or vpn://",
                         enabled = !isSaving,
                         isError = false,
                         supportingText = null,
@@ -621,6 +621,8 @@ private fun ProfileTypePicker(
         VpnProfileConfig.TYPE_OLCRTC,
         VpnProfileConfig.TYPE_OPENFLUX,
         VpnProfileConfig.TYPE_VLESS,
+        VpnProfileConfig.TYPE_VMESS,
+        VpnProfileConfig.TYPE_HYSTERIA2,
         VpnProfileConfig.TYPE_AMNEZIA_WG,
         VpnProfileConfig.TYPE_AMNEZIA_VPN
     )

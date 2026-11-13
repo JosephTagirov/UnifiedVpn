@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import org.olcbox.app.data.model.VpnProfileConfig
+import org.olcbox.app.data.model.XrayProfileConfig
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -32,9 +33,10 @@ internal object VpnProfileReachability {
         val endpoint = endpoint(normalized) ?: return@withContext null
 
         when (normalized.normalizedType) {
-            VpnProfileConfig.TYPE_VLESS -> tcpPing(endpoint)
+            VpnProfileConfig.TYPE_VLESS, VpnProfileConfig.TYPE_VMESS -> tcpPing(endpoint)
                 ?: systemPing(endpoint.host)
                 ?: hostPing(endpoint.host)
+            VpnProfileConfig.TYPE_HYSTERIA2 -> systemPing(endpoint.host) ?: hostPing(endpoint.host)
             VpnProfileConfig.TYPE_AMNEZIA_WG,
             VpnProfileConfig.TYPE_AMNEZIA_VPN -> systemPing(endpoint.host)
                 ?: hostPing(endpoint.host)
@@ -48,6 +50,9 @@ internal object VpnProfileReachability {
     fun endpoint(profile: VpnProfileConfig): VpnProfileEndpoint? {
         val normalized = profile.normalized()
         if (normalized.isOpenFlux()) return null
+        if (normalized.normalizedType in setOf(VpnProfileConfig.TYPE_VMESS, VpnProfileConfig.TYPE_HYSTERIA2)) {
+            return XrayProfileConfig.parse(normalized)?.let { VpnProfileEndpoint(it.host,it.port) }
+        }
         if (normalized.normalizedType == VpnProfileConfig.TYPE_VLESS) {
             listOfNotNull(normalized.rawConfig, normalized.uri)
                 .firstNotNullOfOrNull(::parseVlessEndpoint)

@@ -85,7 +85,8 @@ class AndroidSplitTunnelPreferencesTest {
         for (type in listOf(VpnProfileConfig.TYPE_OLCRTC, VpnProfileConfig.TYPE_OPENFLUX)) {
             assertEquals(sharedSettings, cachedProfiles[AndroidSplitTunnelProfile.fromProfileType(type)])
         }
-        for (type in listOf(VpnProfileConfig.TYPE_VLESS, VpnProfileConfig.TYPE_AMNEZIA_WG,
+        for (type in listOf(VpnProfileConfig.TYPE_VLESS, VpnProfileConfig.TYPE_VMESS,
+            VpnProfileConfig.TYPE_HYSTERIA2, VpnProfileConfig.TYPE_AMNEZIA_WG,
             VpnProfileConfig.TYPE_AMNEZIA_VPN)) {
             assertEquals(updated, cachedProfiles[AndroidSplitTunnelProfile.fromProfileType(type)])
         }

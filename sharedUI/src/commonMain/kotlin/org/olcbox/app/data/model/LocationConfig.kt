@@ -586,6 +586,8 @@ data class VpnProfileConfig(
         return when (normalizedType) {
             TYPE_OLCRTC -> "olcRTC"
             TYPE_VLESS -> "VLESS"
+            TYPE_VMESS -> "VMess"
+            TYPE_HYSTERIA2 -> "Hysteria2"
             TYPE_AMNEZIA_WG -> "AmneziaWG"
             TYPE_AMNEZIA_VPN -> "AmneziaVPN"
             TYPE_OPENFLUX -> "OpenFlux"
@@ -597,6 +599,8 @@ data class VpnProfileConfig(
 
     fun isOpenFlux(): Boolean = normalizedType == TYPE_OPENFLUX
 
+    fun isXray(): Boolean = normalizedType in setOf(TYPE_VLESS, TYPE_VMESS, TYPE_HYSTERIA2)
+
     fun isCompleteFor(location: LocationConfig? = null): Boolean {
         val normalized = normalized()
         return when (normalized.normalizedType) {
@@ -604,6 +608,7 @@ data class VpnProfileConfig(
             TYPE_VLESS -> normalized.localSocksPort != null ||
                 normalized.rawConfig?.startsWith("vless://", ignoreCase = true) == true ||
                 normalized.uri?.startsWith("vless://", ignoreCase = true) == true
+            TYPE_VMESS, TYPE_HYSTERIA2 -> XrayProfileConfig.parse(normalized) != null
             TYPE_AMNEZIA_WG -> !normalized.rawConfig.isNullOrBlank() ||
                 normalized.uri?.startsWith("awg://", ignoreCase = true) == true
             TYPE_AMNEZIA_VPN -> !normalized.rawConfig.isNullOrBlank() ||
@@ -622,6 +627,8 @@ data class VpnProfileConfig(
     companion object {
         const val TYPE_OLCRTC = "olcrtc"
         const val TYPE_VLESS = "vless"
+        const val TYPE_VMESS = "vmess"
+        const val TYPE_HYSTERIA2 = "hysteria2"
         const val TYPE_AMNEZIA_WG = "amnezia_wg"
         const val TYPE_AMNEZIA_VPN = "amnezia_vpn"
         const val TYPE_OPENFLUX = "openflux"
@@ -632,6 +639,8 @@ data class VpnProfileConfig(
             return when (value.trim().lowercase()) {
                 TYPE_OLCRTC, "olc", "olcbox", "rtc" -> TYPE_OLCRTC
                 TYPE_VLESS, "happ", "happ_plus", "happ+" -> TYPE_VLESS
+                TYPE_VMESS -> TYPE_VMESS
+                TYPE_HYSTERIA2, "hy2" -> TYPE_HYSTERIA2
                 TYPE_AMNEZIA_WG, "amneziawg", "amnezia-wg", "awg", "wireguard" -> TYPE_AMNEZIA_WG
                 TYPE_AMNEZIA_VPN, "amnezia", "amneziavpn", "amnezia-vpn" -> TYPE_AMNEZIA_VPN
                 TYPE_OPENFLUX -> TYPE_OPENFLUX

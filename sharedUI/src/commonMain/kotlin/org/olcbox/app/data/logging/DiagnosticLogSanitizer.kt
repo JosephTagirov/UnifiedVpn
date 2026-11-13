@@ -1,7 +1,7 @@
 package org.olcbox.app.data.logging
 
 private val connectionUriPattern = Regex(
-    """(?i)\b(vless|vmess|ss|trojan|awg|wireguard|vpn|olcrtc|openflux)://[^\s\"'<>]+"""
+    """(?i)\b(vless|vmess|hysteria2|hy2|ss|trojan|awg|wireguard|vpn|olcrtc|openflux)://[^\s\"'<>]+"""
 )
 private val bundledConfigPattern = Regex(
     """(?i)\b(unifiedvpn-friend-v\d+|unifiedvpn\+zlib):[^\s\"'<>]+"""
@@ -10,7 +10,7 @@ private val credentialUriPattern = Regex(
     """(?i)\b((?:https?|socks5h?|ssh)://)([^/\s:@]+):([^@\s/]+)@"""
 )
 private const val SECRET_FIELD_NAME_PATTERN =
-    """(?:password|passwd|passphrase|socks[_-]?password|private[_-]?key|preshared[_-]?key|encryption[_-]?key|document[_-]?(?:url|uri|link)|secret|token|uuid|id|identifier|hwid|(?:client|user|device)[_-]?id|api[_-]?key|access[_-]?token|refresh[_-]?token|subscription(?:[_-]?(?:url|uri|link|token|secret))?)"""
+    """(?:auth|password|passwd|passphrase|socks[_-]?password|private[_-]?key|preshared[_-]?key|encryption[_-]?key|document[_-]?(?:url|uri|link)|secret|token|uuid|id|identifier|hwid|(?:client|user|device)[_-]?id|api[_-]?key|access[_-]?token|refresh[_-]?token|subscription(?:[_-]?(?:url|uri|link|token|secret))?)"""
 private val doubleQuotedSecretAssignmentPattern = Regex(
     """(?i)([\"']?\b$SECRET_FIELD_NAME_PATTERN\b[\"']?\s*[:=]\s*)(\"(?:\\[\s\S]|[^\"\\])*\")"""
 )

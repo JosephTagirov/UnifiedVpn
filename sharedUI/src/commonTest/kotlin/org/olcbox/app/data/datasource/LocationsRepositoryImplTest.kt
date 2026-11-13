@@ -28,6 +28,83 @@ import kotlin.test.assertTrue
 class LocationsRepositoryImplTest {
 
     @Test
+    fun rejectsUnsafeSubscriptionUrlsBeforeAnyRequest() = runTest {
+        var requests = 0
+        val client = HttpClient(MockEngine { requests++; respond("vless://user@example.test:443") })
+        val source = FakeLocationsDataSource()
+        val repository = LocationsRepositoryImpl(source, client, deviceIdentityProvider = StaticIdentityProvider("test-hwid"))
+        for (url in listOf("https://user:pass@example.test/sub", "https://example.test/sub#private", "https://example.test:0/sub", "file:///private", "javascript:alert(1)")) {
+            assertFalse(repository.importText(url))
+        }
+        assertEquals(0, requests)
+        assertNull(source.stored)
+    }
+
+    @Test
+    fun subscriptionTlsFailureDoesNotDowngradeSecurityOrReplaceProfiles() = runTest {
+        val original = LocationBundleV4(activeLocationId = "old", locations = listOf(LocationEntry.fromProfile("old", VpnProfileConfig(type="vless", uri="vless://user@example.test:443"))))
+        val source = FakeLocationsDataSource(original)
+        val client = HttpClient(MockEngine { throw IllegalStateException("TLS certificate validation failed") })
+        val repository = LocationsRepositoryImpl(source, client, deviceIdentityProvider = StaticIdentityProvider("test-hwid"), subscriptionHttpClientFactory = { _, _ -> error("Unexpected insecure client fallback") })
+        val failure = repository.importTextDetailed("https://ru-kvn.example.test/sub") as org.olcbox.app.data.repository.LocationImportResult.Failure
+        assertEquals(org.olcbox.app.data.repository.LocationImportFailureKind.Tls, failure.kind)
+        assertEquals(original, source.stored)
+    }
+
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    @Test
+    fun importsSingletonBase64AwgAndJazzSelectionsWithoutDroppingExistingProfile() = runTest {
+        val awg = LocationEntry.fromProfile("awg", VpnProfileConfig(type = "amnezia_wg", name = "AWG", rawConfig = "[Interface]\nPrivateKey = test\n[Peer]\nEndpoint = example.test:18443"))
+        val jazz = LocationEntry.from("jazz", LocationConfig("Jazz", "test-room", "a".repeat(64), LocationConfig.PROVIDER_JAZZ))
+        for (entry in listOf(awg, jazz)) {
+            val source = FakeLocationsDataSource()
+            val repository = LocationsRepositoryImpl(source)
+            assertTrue(repository.importText("vless://manual@example.invalid:443#Manual"))
+            val active = source.stored?.activeLocationId
+            val envelope = """{"format":"unifiedvpn-selection-v2","profiles":[${kotlinx.serialization.json.Json.encodeToString(LocationEntry.serializer(), entry)}]}"""
+            val encoded = kotlin.io.encoding.Base64.encode(envelope.encodeToByteArray())
+            assertTrue(repository.importText(encoded))
+            val bundle = assertNotNull(source.stored)
+            assertEquals(active, bundle.activeLocationId)
+            assertEquals(listOf("Manual", entry.displayName()), bundle.locations.map { it.displayName() })
+            assertEquals(entry.profile.normalizedType, bundle.locations.last().profile.normalizedType)
+        }
+    }
+
+    @Test
+    fun selectedSetAcceptsSixteenButRejectsSeventeenWithoutMutation() = runTest {
+        fun envelope(count: Int): String = """{"format":"unifiedvpn-selection-v2","profiles":[${(1..count).joinToString(",") { i ->
+            kotlinx.serialization.json.Json.encodeToString(LocationEntry.serializer(), LocationEntry.fromProfile("test-$i", VpnProfileConfig(type="vless",name="Test $i",uri="vless://user-$i@example.invalid:443")))
+        }}]}"""
+        val source = FakeLocationsDataSource()
+        val repository = LocationsRepositoryImpl(source)
+        assertTrue(repository.importText(envelope(16)))
+        assertEquals(16, source.stored?.locations?.size)
+        val original = source.stored
+        assertFalse(repository.importText(envelope(17)))
+        assertEquals(original, source.stored)
+    }
+
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    @Test
+    fun mixedNativeSubscriptionRefreshPreservesTypesOriginalUrlAndStorageIds() = runTest {
+        val url = "https://ru-kvn.example.test/manage/sub/device?format=all"
+        val vmess = "vmess://" + kotlin.io.encoding.Base64.encode("""{"ps":"VMess","add":"example.test","port":"443","id":"11111111-1111-4111-8111-111111111111","net":"ws","tls":"tls"}""".encodeToByteArray())
+        val body = "vless://manual@example.test:443#VLESS\n$vmess\nhy2://private-auth@example.test:54443/?sni=tls.example.test#Hysteria2"
+        val source = FakeLocationsDataSource()
+        val repository = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(body) }), deviceIdentityProvider = StaticIdentityProvider("hwid-test"))
+        assertTrue(repository.importText(url))
+        val first = assertNotNull(source.stored)
+        assertEquals(listOf("vless", "vmess", "hysteria2"), first.locations.map { it.profile.normalizedType })
+        assertTrue(first.locations.all { it.isComplete() && it.subscriptionUrl == url })
+        assertEquals(1, repository.refreshSubscription(url))
+        val updated = assertNotNull(source.stored)
+        assertEquals(first.locations.map { it.storageId }, updated.locations.map { it.storageId })
+        assertEquals(first.activeLocationId, updated.activeLocationId)
+        assertTrue(updated.locations.all { it.subscriptionUrl == url })
+    }
+
+    @Test
     fun activeSelectionCompareAndSetReturnsRevisionForSafeRollback() = runTest {
         val repository = selectionRepository()
         val initialRevision = repository.changes.value

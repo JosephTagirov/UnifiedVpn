@@ -7,6 +7,16 @@ import kotlin.test.assertFalse
 
 class DiagnosticLogSanitizerTest {
     @Test
+    fun redactsVmessHysteriaAndNativeAuth() {
+        val text = "vmess://encoded-private-config\nhysteria2://hy-private-auth@example.test:443\nhy2://alias-private-auth@example.test:443\n{\"auth\":\"native-private-auth\"}"
+        val sanitized = sanitizeDiagnosticLogLine(text)
+        listOf("encoded-private-config", "hy-private-auth", "alias-private-auth", "native-private-auth").forEach {
+            assertFalse(it in sanitized)
+        }
+        assertContains(sanitized, "hysteria2://<redacted>")
+        assertEquals(sanitized, sanitizeDiagnosticLogLine(sanitized))
+    }
+    @Test
     fun redactsCredentialsAndConnectionLinks() {
         val source = """
             VLESS vless://client-id@example.org:443?token=query-secret
