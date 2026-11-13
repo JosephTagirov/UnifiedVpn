@@ -3,6 +3,7 @@ package org.olcbox.app.ui.features.home
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,7 +34,8 @@ class HomeScreenViewModel(
     private val vpnManager: VpnManager,
     private val locationsRepository: LocationsRepository,
     private val configImporter: ConfigImporter,
-    private val logExporter: LogExporter
+    private val logExporter: LogExporter,
+    private val subscriptionRefreshDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -483,7 +485,7 @@ class HomeScreenViewModel(
     private suspend fun refreshDueSubscriptionsIfNeeded() {
       subscriptionRefreshMutex.withLock {
         val before = locationsRepository.getActiveLocation()
-        val updatedCount = withContext(Dispatchers.IO) {
+        val updatedCount = withContext(subscriptionRefreshDispatcher) {
             locationsRepository.refreshDueSubscriptions(
                 subscriptionProxy = vpnManager.subscriptionFetchProxy()
             )

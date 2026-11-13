@@ -154,7 +154,8 @@ class HomeSubscriptionRefreshTest {
     }
 
     private suspend fun TestScope.withHome(test: suspend (Fixture) -> Unit) {
-        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
         val source = MemorySource(LocationBundleV4(activeLocationId = "active", locations = listOf(profile("active"))))
         val http = HttpClient(MockEngine { error("Unexpected network request") })
         val base = LocationsRepositoryImpl(source, httpClient = http)
@@ -171,7 +172,8 @@ class HomeSubscriptionRefreshTest {
             }
             override suspend fun nextSubscriptionRefreshAtEpochMs(): Long? = null
         }
-        fixture.home = HomeScreenViewModel(fixture.vpn, fixture.repository, NoImporter, NoExporter)
+        fixture.home = HomeScreenViewModel(fixture.vpn, fixture.repository, NoImporter, NoExporter,
+            subscriptionRefreshDispatcher = dispatcher)
         try {
             runCurrent()
             test(fixture)
