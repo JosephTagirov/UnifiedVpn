@@ -442,11 +442,22 @@ abstract class BuildAwareWindowsInstallerTask @Inject constructor(format: Target
         // must neither block this MSI nor be closed by it.
         val guard = jpackageResources.get().asFile.resolve("UnifiedVpnGuard.CA.dll")
         val powershell = File(requireNotNull(System.getenv("SystemRoot")), "System32/WindowsPowerShell/v1.0/powershell.exe")
+        val guardBuildLog = jpackageResources.get().asFile.resolve("UnifiedVpnGuard.build.log")
+        guardBuildLog.parentFile.mkdirs()
         val buildGuard = ProcessBuilder(powershell.absolutePath, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
             "-File", project.rootProject.file("tools/Build-WindowsMsiGuard.ps1").absolutePath,
-            "-OutputPath", guard.absolutePath
-        ).inheritIO().start()
-        check(buildGuard.waitFor(90, TimeUnit.SECONDS) && buildGuard.exitValue() == 0) { "Scoped MSI guard build failed" }
+            "-OutputPath", guard.absolutePath,
+            "-WixDirectory", wixToolsetDir.get().asFile.absolutePath
+        ).redirectErrorStream(true).redirectOutput(guardBuildLog).start()
+        val guardFinished = buildGuard.waitFor(90, TimeUnit.SECONDS)
+        if (!guardFinished) {
+            buildGuard.destroyForcibly()
+            buildGuard.waitFor(5, TimeUnit.SECONDS)
+        }
+        check(guardFinished && buildGuard.exitValue() == 0) {
+            "Scoped MSI guard build ${if (guardFinished) "failed" else "timed out"}:\n" +
+                guardBuildLog.readText().takeLast(16000)
+        }
         append(product, "Binary", mapOf("Id" to "UnifiedVpnProcessGuard", "SourceFile" to guard.absolutePath))
         append(product, "CustomAction", mapOf(
             "Id" to "UnifiedVpnDetectInstalledApp", "BinaryKey" to "UnifiedVpnProcessGuard",

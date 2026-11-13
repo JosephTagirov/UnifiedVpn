@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$OutputPath)
+param(
+ [Parameter(Mandatory=$true)][string]$OutputPath,
+ [string]$WixDirectory
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $root=Split-Path -Parent $PSScriptRoot
@@ -7,7 +10,12 @@ $source=Join-Path $root 'desktopApp/src/windowsInstaller'
 $output=[IO.Path]::GetFullPath($OutputPath)
 $allowed=[IO.Path]::GetFullPath((Join-Path $root 'desktopApp/build'))+[IO.Path]::DirectorySeparatorChar
 if(-not $output.StartsWith($allowed,[StringComparison]::OrdinalIgnoreCase)){throw 'MSI guard output must be inside desktopApp/build'}
-$wix=Split-Path -Parent (Get-Command candle.exe -ErrorAction Stop).Source
+$wix=if([string]::IsNullOrWhiteSpace($WixDirectory)) {
+ Split-Path -Parent (Get-Command candle.exe -ErrorAction Stop).Source
+} else {
+ (Resolve-Path -LiteralPath $WixDirectory -ErrorAction Stop).Path
+}
+if(-not (Test-Path -LiteralPath (Join-Path $wix 'candle.exe') -PathType Leaf)) { throw 'The selected WiX directory does not contain candle.exe' }
 $sdk=Join-Path $wix 'sdk'
 $dtf=Join-Path $sdk 'Microsoft.Deployment.WindowsInstaller.dll'
 $wrapper=Join-Path $sdk 'x64/sfxca.dll'
