@@ -1,0 +1,75 @@
+name: Check existing Android signing identity
+
+on:
+  workflow_dispatch:
+  create:
+  push:
+    branches: ['maintenance/android-signing-check-*']
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    if: >-
+      github.repository == 'JosephTagirov/UnifiedVpn' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'create' && github.event.ref_type == 'branch' && startsWith(github.event.ref, 'maintenance/android-signing-check-')) ||
+       (github.event_name == 'push' && github.event.created != true))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Check presence and compare the public signing certificate
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, os, pathlib, subprocess
+          names = ('KEYSTORE_BASE64', 'STORE_PASSWORD', 'KEY_ALIAS', 'KEY_PASSWORD')
+          for name in names:
+              print('ANDROID_RELEASE_' + name + '_PRESENT=' + str(bool(os.environ.get('SIGNING_' + name))).lower())
+          if not os.environ.get('SIGNING_KEYSTORE_BASE64'):
+              print('SIGNING_READY=false')
+              raise SystemExit(0)
+          # Android Debug defaults are tried only as defaults for missing settings.
+          # The public certificate must still exactly match the released 0.1.8 APK.
+          os.environ['SIGNING_STORE_PASSWORD'] = os.environ.get('SIGNING_STORE_PASSWORD') or 'android'
+          os.environ['SIGNING_KEY_ALIAS'] = os.environ.get('SIGNING_KEY_ALIAS') or 'androiddebugkey'
+          os.environ['SIGNING_KEY_PASSWORD'] = os.environ.get('SIGNING_KEY_PASSWORD') or os.environ['SIGNING_STORE_PASSWORD']
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'unifiedvpn-existing-signing-key.keystore'
+          created = False
+          try:
+              data = base64.b64decode(''.join(os.environ['SIGNING_KEYSTORE_BASE64'].split()), validate=True)
+              fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              created = True
+              with os.fdopen(fd, 'wb') as output:
+                  output.write(data)
+              common = ['-keystore', str(path), '-alias', os.environ['SIGNING_KEY_ALIAS'], '-storepass:env', 'SIGNING_STORE_PASSWORD']
+              cert = subprocess.run(['keytool', '-exportcert'] + common, capture_output=True, timeout=30)
+              if cert.returncode != 0:
+                  print('KEYSTORE_OPENED=false\nSIGNING_READY=false')
+                  raise SystemExit(0)
+              fingerprint = hashlib.sha256(cert.stdout).hexdigest()
+              match = fingerprint == '0a8547df6c99acfc4cbf9ca0916fbf7301c648bf4aecc655f7904d43c4bbeaa0'
+              print('SIGNING_CERT_SHA256=' + fingerprint)
+              print('SIGNING_CERT_MATCH=' + str(match).lower())
+              usable = False
+              if match:
+                  request = subprocess.run(['keytool', '-certreq'] + common + ['-keypass:env', 'SIGNING_KEY_PASSWORD'], capture_output=True, timeout=30)
+                  usable = request.returncode == 0
+              print('PRIVATE_KEY_USABLE=' + str(usable).lower())
+              print('SIGNING_READY=' + str(match and usable).lower())
+          except (ValueError, OSError, subprocess.TimeoutExpired):
+              print('SIGNING_READY=false')
+          finally:
+              if created:
+                  path.unlink(missing_ok=True)
+          PY
