@@ -601,7 +601,7 @@ val olcrtcAndroidAar = files(
 
 dependencies {
     androidTestImplementation(libs.compose.ui.test)
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.4.1")
     androidTestImplementation("androidx.test:runner:1.5.0")
     androidTestImplementation("androidx.test:core:1.5.0")
     androidTestImplementation("junit:junit:4.13.2")
