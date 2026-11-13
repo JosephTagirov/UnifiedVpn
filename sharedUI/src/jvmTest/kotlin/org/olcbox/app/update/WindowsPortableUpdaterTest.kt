@@ -5,10 +5,12 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.io.path.createTempDirectory
 import org.olcbox.app.desktop.WindowsProcessSecurity
+import org.olcbox.app.desktop.WindowsTrustedExecutables
 import org.olcbox.app.desktop.DesktopOs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -80,13 +82,73 @@ class WindowsPortableUpdaterTest {
     }
 
     @Test
-    fun readsNormalWindowsProcessAsNonElevated() {
+    fun currentWindowsProcessElevationMatchesIndependentTokenProbe() {
         if (!System.getProperty("os.name").contains("windows", ignoreCase = true)) return
 
-        assertFalse(
-            WindowsProcessSecurity.shouldRefuseCurrentProcess(),
-            "Gradle verification must run without an administrator token"
-        )
+        // Inspect this JVM's token through separate .NET interop, rather than
+        // assuming that the machine running Gradle has a standard user token.
+        val probe = """
+            ${'$'}ErrorActionPreference = 'Stop'
+            ${'$'}ProgressPreference = 'SilentlyContinue'
+            Add-Type -TypeDefinition @'
+            using System;
+            using System.ComponentModel;
+            using System.Runtime.InteropServices;
+
+            public static class UpdaterTestElevationProbe {
+                [DllImport("kernel32.dll", SetLastError = true)]
+                private static extern IntPtr OpenProcess(uint access, bool inherit, int processId);
+                [DllImport("kernel32.dll", SetLastError = true)]
+                private static extern bool CloseHandle(IntPtr handle);
+                [DllImport("advapi32.dll", SetLastError = true)]
+                private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+                [DllImport("advapi32.dll", SetLastError = true)]
+                private static extern bool GetTokenInformation(
+                    IntPtr token, int informationClass, out int information,
+                    int informationLength, out int returnedLength);
+
+                public static bool IsElevated(int processId) {
+                    IntPtr process = OpenProcess(0x1000, false, processId);
+                    if (process == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
+                    try {
+                        IntPtr token;
+                        if (!OpenProcessToken(process, 0x0008, out token))
+                            throw new Win32Exception(Marshal.GetLastWin32Error());
+                        try {
+                            int elevated, length;
+                            if (!GetTokenInformation(token, 20, out elevated, sizeof(int), out length))
+                                throw new Win32Exception(Marshal.GetLastWin32Error());
+                            if (length != sizeof(int)) throw new InvalidOperationException("Invalid token record");
+                            return elevated != 0;
+                        } finally { CloseHandle(token); }
+                    } finally { CloseHandle(process); }
+                }
+            }
+            '@
+            if ([UpdaterTestElevationProbe]::IsElevated(${ProcessHandle.current().pid()})) {
+                'ELEVATED'
+            } else {
+                'STANDARD'
+            }
+        """.trimIndent()
+        val encoded = Base64.getEncoder().encodeToString(probe.toByteArray(StandardCharsets.UTF_16LE))
+        val process = ProcessBuilder(
+            WindowsTrustedExecutables.powerShellPath().toString(),
+            "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-EncodedCommand", encoded
+        ).redirectErrorStream(true).start()
+        try {
+            assertTrue(process.waitFor(20, TimeUnit.SECONDS), "Independent Windows token probe timed out")
+            val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+            assertEquals(0, process.exitValue(), "Independent Windows token probe failed: $output")
+            val expectedRefusal = when (output) {
+                "ELEVATED" -> true
+                "STANDARD" -> false
+                else -> error("Unexpected Windows token probe output: $output")
+            }
+            assertEquals(expectedRefusal, WindowsProcessSecurity.shouldRefuseCurrentProcess())
+        } finally {
+            if (process.isAlive) process.destroyForcibly().waitFor(5, TimeUnit.SECONDS)
+        }
     }
 
     @Test
