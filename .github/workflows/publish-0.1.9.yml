@@ -1,0 +1,85 @@
+name: Publish verified UnifiedVPN 0.1.9
+
+on:
+  workflow_dispatch:
+  create:
+  push:
+    branches:
+      - maintenance/publish-019-20261113
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unifiedvpn-stable-019
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'JosephTagirov/UnifiedVpn' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'create' && github.event.ref_type == 'branch' && github.event.ref == 'maintenance/publish-019-20261113') ||
+       (github.event_name == 'push' && github.event.created != true))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Refuse an existing stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/verify_release_019.py preflight > "$RUNNER_TEMP/preflight-019.json"
+      - name: Download immutable already-built assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-019
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --retry-all-errors \
+            'https://ru-kvn.meesharr.space/download/UnifiedVPN-Android-2026111301.apk' \
+            --output dist/release-019/UnifiedVPN-0.1.9-build.2026111301-android-universal.apk
+          gh release download v0.1.9-windows-preview.2026111301 --repo "$GITHUB_REPOSITORY" --dir dist/release-019 \
+            --pattern 'UnifiedVPN-0.1.9-build.2026111301-windows-amd64-installer.exe' \
+            --pattern 'UnifiedVPN-0.1.9-build.2026111301-portable-manual.zip'
+          cp docs/releases/verification-build-2026111301-android.json dist/release-019/
+      - name: Verify signature, update identity and hashes
+        run: |
+          set -euo pipefail
+          sdk="$ANDROID_HOME/build-tools/36.0.0"
+          if [[ ! -f "$sdk/lib/apksigner.jar" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;36.0.0'
+          fi
+          python3 tools/verify_release_019.py verify --sdk "$sdk"
+      - name: Prepare owned draft without replacing existing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/preflight-019.json"))["draft_exists"])')" == False ]]; then
+            gh release create v0.1.9 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title 'UnifiedVPN 0.1.9' --notes-file docs/releases/0.1.9-stable-notes.md --draft --latest=false
+          fi
+          python3 tools/verify_release_019.py remote > "$RUNNER_TEMP/missing-assets-019.txt"
+          while IFS= read -r asset; do
+            [[ -n "$asset" ]] || continue
+            gh release upload v0.1.9 "dist/release-019/$asset" --repo "$GITHUB_REPOSITORY"
+          done < "$RUNNER_TEMP/missing-assets-019.txt"
+      - name: Verify remote digests and publish stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/verify_release_019.py remote --complete
+          gh release edit v0.1.9 --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          python3 tools/verify_release_019.py remote --complete --published

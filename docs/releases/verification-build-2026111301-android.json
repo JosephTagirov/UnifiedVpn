@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "artifact": "UnifiedVPN-0.1.9-build.2026111301-android-universal.apk",
+  "sha256": "ad53833cdce4701aa1e6eeee52f1e60e0e799d8b6ae74d574e3e936f1d148e85",
+  "sizeBytes": 205794899,
+  "application": {
+    "applicationId": "app.unifiedvpn.local",
+    "versionCode": 2026111301,
+    "versionName": "0.1.9",
+    "debuggable": false,
+    "minSdk": 23
+  },
+  "previousApplication": {
+    "applicationId": "app.unifiedvpn.local",
+    "versionCode": 2026110305,
+    "versionName": "0.1.8",
+    "debuggable": false,
+    "minSdk": 23
+  },
+  "signing": {
+    "signerCount": 1,
+    "certificateSha256": "0a8547df6c99acfc4cbf9ca0916fbf7301c648bf4aecc655f7904d43c4bbeaa0",
+    "v1": true,
+    "v2": true,
+    "v3": true
+  },
+  "previousCertificateSha256": "0a8547df6c99acfc4cbf9ca0916fbf7301c648bf4aecc655f7904d43c4bbeaa0",
+  "zipAligned16K": true,
+  "applicationPayloadUnchangedBySigning": true,
+  "unchangedPayloadEntries": 455,
+  "applicationPayloadDigestSha256": "00450199368cd503af08651123fe245b9d6d6f6df2a77cf4fc93c4ad191ceae1",
+  "addedSignatureEntries": [
+    "META-INF/ANDROIDD.RSA",
+    "META-INF/ANDROIDD.SF",
+    "META-INF/MANIFEST.MF"
+  ],
+  "releasedGoEnginesMatchPreviousApk": 9,
+  "freshCjniLibrariesMatchVerifiedUnsignedApk": 6,
+  "nativeNdkRevision": "28.2.13676358",
+  "packageManagerUpdateRequirementsSatisfied": true,
+  "physicalDeviceUpgradeTestPerformed": false,
+  "uninstallOrClearDataPerformed": false,
+  "privateSigningKeyIncluded": false
+}
