@@ -1,0 +1,2 @@
+# This resource is verified against its published byte-level SHA256 at runtime.
+sharedUI/src/commonMain/composeResources/files/adblocking/hagezi-light.json -text

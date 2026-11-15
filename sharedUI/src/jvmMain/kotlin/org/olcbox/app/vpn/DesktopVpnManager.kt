@@ -36,6 +36,12 @@ import org.olcbox.app.vpn.desktop.VkCallsBootstrap
 import org.olcbox.app.vpn.desktop.DesktopNativeAssets
 import org.olcbox.app.vpn.desktop.DesktopAdBlockingProxy
 import org.olcbox.app.vpn.desktop.DesktopDnsResolver
+import org.olcbox.app.vpn.desktop.DesktopPhysicalInterface
+import org.olcbox.app.vpn.desktop.DesktopRoutedAwgProcess
+import org.olcbox.app.vpn.desktop.DesktopEntryFailoverProcess
+import org.olcbox.app.vpn.desktop.WindowsPhysicalDnsQuery
+import org.olcbox.app.vpn.desktop.WindowsPhysicalDohQuery
+import org.olcbox.app.vpn.desktop.DesktopEntryRouting
 import org.olcbox.app.vpn.desktop.DesktopOpenFluxConfig
 import org.olcbox.app.vpn.desktop.DesktopOpenFluxBrowserBootstrap
 import org.olcbox.app.vpn.desktop.OpenFluxBrowserProtocol
@@ -104,6 +110,11 @@ class DesktopVpnManager internal constructor(
     private var processWatchJob: Job? = null
     private var adBlockingWatchJob: Job? = null
     private var adBlockingProxy: DesktopAdBlockingProxy? = null
+    private var routedAwgProcess: DesktopRoutedAwgProcess? = null
+    private var routedAwgWatchJob: Job? = null
+    private var entryFailoverProcess: DesktopEntryFailoverProcess? = null
+    private var entryFailoverWatchJob: Job? = null
+    private var awgSession: ExclusiveVpnEngineSession? = null
     private var tunProcessWatchJob: Job? = null
     private var process: Process? = null
     private var sessionControlProcess: Process? = null
@@ -142,6 +153,8 @@ class DesktopVpnManager internal constructor(
                         _status.value is VpnStatus.Connecting ||
                         _status.value is VpnStatus.Reconnecting ||
                         process != null ||
+                        routedAwgProcess != null ||
+                        entryFailoverProcess != null ||
                         tunProcess != null
 
                 if (shouldRestart) {
@@ -303,11 +316,16 @@ class DesktopVpnManager internal constructor(
                 addLog("Auto selected ${resolvedMode.displayName()}")
                 if (systemProxyActive) addLog("Keeping the existing system proxy; use the local SOCKS endpoint in your application")
             }
-            val bypassHosts = when {
+            val wireGuardConfig = if (isAmneziaProfile) DesktopSingBoxConfig.resolveWireGuardConfig(profile) else null
+            val entryRouting = DesktopEntryRouting.plan(profile, wireGuardConfig, when {
                 isAmneziaProfile -> listOf(DesktopSingBoxConfig.endpointHost(profile))
                 isXrayProfile -> DesktopXrayConfig.endpointHosts(profile)
                 else -> emptyList()
-            }
+            }, DesktopPaths.os, probeOnly,
+                separateDownloadEndpoint = isXrayProfile && DesktopXrayConfig.downloadEndpointHost(profile) != null)
+            val applyDirectRouting = entryRouting.applyDirectRouting
+            val entryPlan = entryRouting.entries
+            val bypassHosts = entryRouting.bypassHosts
             val ready = CompletableDeferred<Unit>()
             val startupFailure = CompletableDeferred<String>()
             val selectedSocksPort = LocalPortAllocator.select(
@@ -349,20 +367,50 @@ class DesktopVpnManager internal constructor(
 
             // Pin the exact endpoint before adding capture routes. Resolving it
             // again inside the engine could select another address and loop.
-            val pinnedEndpoints = if (desktopMode == DesktopMode.WindowsTun) {
+            val physicalUpstream = if (applyDirectRouting) DesktopPhysicalInterface.currentWindowsNetwork() else null
+            val physicalInterface = physicalUpstream?.alias
+            val pinnedEndpoints = if (desktopMode == DesktopMode.WindowsTun || entryPlan != null) {
                 require(isAmneziaProfile || isXrayProfile) { "This profile only supports proxy modes on Windows" }
-                require(socksSettings.host == PacServer.LOCAL_SOCKS_HOST) { "Windows TUN requires SOCKS on 127.0.0.1" }
-                bypassHosts.associateWith { host -> InetAddress.getAllByName(host)
-                    .sortedBy { if (it is Inet4Address) 0 else 1 }
-                    .firstOrNull { !it.isAnyLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isMulticastAddress }
-                    ?.hostAddress ?: error("Could not resolve the VPN server for TUN") }
+                if (desktopMode == DesktopMode.WindowsTun)
+                    require(socksSettings.host == PacServer.LOCAL_SOCKS_HOST) { "Windows TUN requires SOCKS on 127.0.0.1" }
+                bypassHosts.associateWith { host ->
+                    if (host == ManagedEntryDns.PRIMARY_HOST && physicalUpstream != null) {
+                        var dohTried = false
+                        ManagedEntryDns.resolve { server, request ->
+                            WindowsPhysicalDnsQuery.exchange(physicalUpstream, server, request)
+                                ?: if (!dohTried) {
+                                    dohTried = true
+                                    WindowsPhysicalDohQuery.exchange(physicalUpstream, request)
+                                } else null
+                        }
+                    }
+                    else InetAddress.getAllByName(host)
+                        .sortedBy { if (it is Inet4Address) 0 else 1 }
+                        .firstOrNull { !it.isAnyLocalAddress && !it.isLoopbackAddress && !it.isLinkLocalAddress && !it.isMulticastAddress }
+                        ?.hostAddress ?: error("Could not resolve the VPN server for TUN")
+                }
             } else emptyMap()
             val pinnedEndpoint = bypassHosts.firstOrNull()?.let(pinnedEndpoints::get)
             val pinnedDownloadEndpoint = if (isXrayProfile) {
                 DesktopXrayConfig.downloadEndpointHost(profile)?.let(pinnedEndpoints::get)
             } else null
+            val pinnedEntryPlan = entryPlan?.let { pair -> pair.copy(
+                primary = pair.primary.copy(host = pinnedEndpoints[pair.primary.host] ?: pair.primary.host),
+                backup = pair.backup.copy(host = pinnedEndpoints[pair.backup.host] ?: pair.backup.host)) }
+            currentCoroutineContext().ensureActive()
+            if (requestGeneration != generation) throw CancellationException("Desktop start superseded")
 
-            process = when {
+            suspend fun launchEngine(): Process = when {
+                pinnedEntryPlan != null -> {
+                    val owner = DesktopEntryFailoverProcess()
+                    entryFailoverProcess = owner
+                    owner.start(profile = profile, socks = engineSocksSettings, entries = pinnedEntryPlan,
+                        physicalInterface = checkNotNull(physicalInterface),
+                        shouldContinue = { requestGeneration == generation },
+                        log = { source, line -> emitSanitizedDesktopProcessOutput("Entry $source", line, ::addLog, ::println) },
+                        excludedPorts = setOf(socksSettings.port, engineSocksSettings.port, PacServer.PAC_PORT),
+                        wireGuardConfig = wireGuardConfig, ownsAwgSession = false)
+                }
                 profile.isOlcRtc() -> startOlcRtcWithRetries(
                     location = location,
                     socksSettings = engineSocksSettings,
@@ -375,7 +423,8 @@ class DesktopVpnManager internal constructor(
                     startupFailure = startupFailure,
                     logOutput = true,
                     endpointAddress = pinnedEndpoint,
-                    downloadEndpointAddress = pinnedDownloadEndpoint
+                    downloadEndpointAddress = pinnedDownloadEndpoint,
+                    physicalInterface = physicalInterface
                 )
                 profile.isOpenFlux() -> startOpenFluxProcess(
                     profile = profile,
@@ -384,6 +433,14 @@ class DesktopVpnManager internal constructor(
                     startupFailure = startupFailure,
                     logOutput = true
                 )
+                isAmneziaProfile && applyDirectRouting -> {
+                    val owner = DesktopRoutedAwgProcess()
+                    routedAwgProcess = owner
+                    owner.start(profile, engineSocksSettings, pinnedEndpoint, checkNotNull(physicalInterface),
+                        shouldContinue = { requestGeneration == generation },
+                        log = { source, line -> emitSanitizedDesktopProcessOutput("AWG $source", line, ::addLog, ::println) },
+                        excludedPorts = setOf(socksSettings.port, engineSocksSettings.port, PacServer.PAC_PORT))
+                }
                 else -> startSingBoxProcess(
                     profile = profile,
                     socksSettings = engineSocksSettings,
@@ -392,6 +449,11 @@ class DesktopVpnManager internal constructor(
                     endpointAddress = pinnedEndpoint
                 )
             }
+            if (isAmneziaProfile) {
+                val session = ExclusiveVpnEngineSession({ DesktopSingBoxConfig.sessionIdentity(checkNotNull(wireGuardConfig)) })
+                awgSession = session
+                session.start(startEngine = { process = launchEngine() }, stopEngine = ::stopEngineProcesses)
+            } else process = launchEngine()
 
             val engineProcess = process ?: error("$engineName process is missing")
             if (!profile.isOlcRtc()) {
@@ -414,7 +476,8 @@ class DesktopVpnManager internal constructor(
             if (filtering) {
                 val filter = DesktopAdBlockingProxy()
                 adBlockingProxy = filter
-                filter.start(socksSettings, engineSocksSettings, preserveUpstreamDns = isAmneziaProfile)
+                filter.start(socksSettings, engineSocksSettings,
+                    preserveUpstreamDns = isAmneziaProfile || profile.normalizedType == VpnProfileConfig.TYPE_VLESS)
                 addLog("Ad blocking enabled (local domain filter)")
                 val filterProcess = filter.process ?: error("Ad blocking filter is missing")
                 adBlockingWatchJob = scope.launch {
@@ -441,7 +504,7 @@ class DesktopVpnManager internal constructor(
                 )
                 DesktopMode.SystemProxy -> {
                     try {
-                        startSystemProxy(socksSettings, requestGeneration)
+                        startSystemProxy(socksSettings, requestGeneration, profile)
                     } catch (cancel: CancellationException) {
                         throw cancel
                     } catch (error: Exception) {
@@ -461,6 +524,8 @@ class DesktopVpnManager internal constructor(
             if (!engineProcess.isAlive) {
                 error("$engineName exited before desktop proxy was enabled")
             }
+            check(routedAwgProcess?.child?.isAlive != false) { "AWG child exited before desktop routing was enabled" }
+            check(entryFailoverProcess?.isRunning != false) { "Entry controller stopped before desktop routing was enabled" }
 
             startProcessExitWatchers(
                 desktopMode = desktopMode,
@@ -469,6 +534,36 @@ class DesktopVpnManager internal constructor(
                 currentTunProcess = tunProcess,
                 requestGeneration = requestGeneration
             )
+            routedAwgProcess?.let { owner ->
+                val child = checkNotNull(owner.child)
+                routedAwgWatchJob = scope.launch {
+                    val exit = waitForProcessExit(child) ?: return@launch
+                    if (!isActive) return@launch
+                    scope.launch {
+                        mutex.withLock {
+                            if (requestGeneration != generation || routedAwgProcess !== owner || process !== owner.front) return@withLock
+                            handleUnexpectedProcessExit("AWG child exited unexpectedly ($exit)",
+                                "AWG child exited unexpectedly", requestGeneration)
+                        }
+                    }
+                }
+            }
+            entryFailoverProcess?.let { owner ->
+                entryFailoverWatchJob = scope.launch {
+                    while (isActive) {
+                        delay(1_000)
+                        if (owner.isRunning) continue
+                        scope.launch {
+                            mutex.withLock {
+                                if (requestGeneration != generation || entryFailoverProcess !== owner || process !== owner.front) return@withLock
+                                handleUnexpectedProcessExit("Entry failover controller stopped unexpectedly",
+                                    "Entry failover controller stopped unexpectedly", requestGeneration)
+                            }
+                        }
+                        break
+                    }
+                }
+            }
 
             openFluxPingTunnel = OpenFluxConnectedTunnel.from(
                 profile,
@@ -548,13 +643,15 @@ class DesktopVpnManager internal constructor(
 
     private suspend fun startSystemProxy(
         socksSettings: DesktopSocksProxySettings,
-        requestGeneration: Long
+        requestGeneration: Long,
+        profile: VpnProfileConfig
     ) {
         pacServer.start(
             socksHost = socksSettings.host,
             socksPort = socksSettings.port,
             socksUsername = socksSettings.username,
-            socksPassword = socksSettings.password
+            socksPassword = socksSettings.password,
+            directRules = ClientDirectPolicy.effectiveDomains(profile)
         )
         pacServer.boundPort?.takeIf { it != PacServer.PAC_PORT }?.let { port ->
             addLog("PAC port ${PacServer.PAC_PORT} is occupied; using $port")
@@ -679,7 +776,8 @@ class DesktopVpnManager internal constructor(
         _activeRoutingMode.value = null
         vkCallsBootstrap?.close()
         vkCallsBootstrap = null
-        if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null && adBlockingProxy == null) {
+        if (_status.value is VpnStatus.Disconnected && process == null && tunProcess == null && adBlockingProxy == null &&
+            routedAwgProcess == null && entryFailoverProcess == null && awgSession == null) {
             cancelProcessJobs()
             activeSocksProxySettings = null
             return@withContext
@@ -725,8 +823,11 @@ class DesktopVpnManager internal constructor(
 
         adBlockingProxy?.close()
         adBlockingProxy = null
-        stopProcess(process)
-        process = null
+        val session = awgSession
+        if (session != null) {
+            session.stop(::stopEngineProcesses)
+            if (awgSession === session) awgSession = null
+        } else stopEngineProcesses()
         deleteOlcRtcConfig()
 
         if (finalStatus) {
@@ -743,7 +844,27 @@ class DesktopVpnManager internal constructor(
         }
     }
 
+    private fun stopEngineProcesses() {
+        entryFailoverProcess?.let { owner ->
+            // A failed cleanup keeps the owner and the AWG lease available for a later retry.
+            owner.close()
+            if (entryFailoverProcess === owner) entryFailoverProcess = null
+        }
+        routedAwgProcess?.let { owner ->
+            owner.close()
+            if (routedAwgProcess === owner) routedAwgProcess = null
+        }
+        val target = process
+        stopProcess(target)
+        check(target?.isAlive != true) { "Native engine cleanup is still pending" }
+        if (process === target) process = null
+    }
+
     private fun cancelProcessJobs() {
+        entryFailoverWatchJob?.cancel()
+        entryFailoverWatchJob = null
+        routedAwgWatchJob?.cancel()
+        routedAwgWatchJob = null
         adBlockingWatchJob?.cancel()
         adBlockingWatchJob = null
         bootstrapWatchJob?.cancel()
@@ -897,12 +1018,16 @@ class DesktopVpnManager internal constructor(
         startupFailure: CompletableDeferred<String>,
         logOutput: Boolean,
         endpointAddress: String? = null,
-        downloadEndpointAddress: String? = null
+        downloadEndpointAddress: String? = null,
+        physicalInterface: String? = null
     ): Process {
         val binary = DesktopNativeAssets.resolveXrayBinary()
         val configPath = writeEngineClientConfig(
             prefix = "xray",
-            config = DesktopXrayConfig.build(profile, socksSettings, endpointAddress, downloadEndpointAddress)
+            config = DesktopXrayConfig.build(profile, socksSettings, endpointAddress, downloadEndpointAddress).let { base ->
+                if (!probeOnly && profile.normalizedType == VpnProfileConfig.TYPE_VLESS && DesktopPaths.os == DesktopOs.Windows)
+                    ClientDirectRoutingConfig.apply(base, checkNotNull(physicalInterface), profile) else base
+            }
         )
         val command = listOf(
             binary.toAbsolutePath().toString(),

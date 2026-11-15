@@ -1,0 +1,13 @@
+#ifndef HEV_UDP_TEST_LWIPOPTS_H
+#define HEV_UDP_TEST_LWIPOPTS_H
+#define NO_SYS 1
+#define SYS_LIGHTWEIGHT_PROT 0
+#define LWIP_IPV4 HEV_TEST_IPV4
+#define LWIP_IPV6 HEV_TEST_IPV6
+#define LWIP_UDP 1
+#define LWIP_TCP 0
+#define LWIP_RAW 0
+#define LWIP_NETCONN 0
+#define LWIP_SOCKET 0
+#define LWIP_DNS 0
+#endif

@@ -312,7 +312,7 @@ private fun SharedSettingsHubContent(
 ){
  val uriHandler=LocalUriHandler.current
  var managementOpenFailed by remember { mutableStateOf(false) }
- val url="https://panel.meesharr.space/vpn-control/admin/"
+ val url="https://ru-kvn.meesharr.space/manage/"
  Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal=24.dp).padding(bottom=32.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
   SharedSettingsHeader(icon=Icons.Outlined.Settings,title="Application Settings",subtitle="Everything in its place")
   Spacer(Modifier.height(6.dp))

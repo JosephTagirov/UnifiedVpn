@@ -1,0 +1,370 @@
+{
+  "format": "unifiedvpn-prebuilt-source-provenance-v1",
+  "baseCommit": "18ee5043a643c43d6377088e5388665660dc95c0",
+  "sourceTreeBeforePublicationMetadata": "73d29eed526d790c845c941306e13f6259b27e3f",
+  "patch": {
+    "name": "UnifiedVPN-0.1.14-routing-failover.patch",
+    "sha256": "4ac56839cf502d0dbb996098f7790e34094ebf1eb496a8dd81c7e0cfe31ac4ec",
+    "bytes": 979476
+  },
+  "inputs": [
+    {
+      "path": "androidApp/src/main/jni/hev-socks5-tunnel/third-part/lwip/src/core/udp.c",
+      "mode": "100644",
+      "gitBlob": "8f7ee3bc8c0a4a6fcdbca645661e2ad604d87220"
+    },
+    {
+      "path": "desktopApp/src/windowsTunHelper/network.ps1",
+      "mode": "100644",
+      "gitBlob": "a03306f116815a7ba7f1442e985e76ed9c75ec18"
+    },
+    {
+      "path": "gradle.properties",
+      "mode": "100644",
+      "gitBlob": "e1ed983342e58e25aab9ff7c3273826f409058e2"
+    },
+    {
+      "path": "sharedUI/src/androidMain/kotlin/org/olcbox/app/vpn/AndroidProfileLatency.kt",
+      "mode": "100644",
+      "gitBlob": "bd35ad89bb884ec73afe95710bd8583005a30bd0"
+    },
+    {
+      "path": "sharedUI/src/androidMain/kotlin/org/olcbox/app/vpn/service/OlcboxVpnService.kt",
+      "mode": "100644",
+      "gitBlob": "02e335ad5ba30655534acb2d59d7c245f64f6a01"
+    },
+    {
+      "path": "sharedUI/src/androidMain/kotlin/org/olcbox/app/vpn/service/SocksBackedVpnEngine.kt",
+      "mode": "100644",
+      "gitBlob": "c8b9bf958c7255ecdc5a75c27bd4ee8149441678"
+    },
+    {
+      "path": "sharedUI/src/commonMain/kotlin/org/olcbox/app/data/datasource/LocationsDatasource.kt",
+      "mode": "100644",
+      "gitBlob": "5ef5c0bca1f90738d4f840fd1d115a08ea88f2ff"
+    },
+    {
+      "path": "sharedUI/src/commonMain/kotlin/org/olcbox/app/data/model/LocationConfig.kt",
+      "mode": "100644",
+      "gitBlob": "60a59b4e1b64410329512559dad34cfa19511779"
+    },
+    {
+      "path": "sharedUI/src/commonMain/kotlin/org/olcbox/app/ui/components/ApplicationSettingsSheet.kt",
+      "mode": "100644",
+      "gitBlob": "72187b8afbfb0a93e9925266646afd3ca79db5f8"
+    },
+    {
+      "path": "sharedUI/src/commonMain/kotlin/org/olcbox/app/ui/features/home/HomeScreen.kt",
+      "mode": "100644",
+      "gitBlob": "eb027374c970788e39cf5943dd22ea8221807944"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/desktop/WindowsProcessSecurity.kt",
+      "mode": "100644",
+      "gitBlob": "b3cd44ab930c7241f42fa4313e19c07ab531b61b"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/DesktopVpnManager.kt",
+      "mode": "100644",
+      "gitBlob": "694a1d707caaaae291e5a82ee1f0bc7812154515"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/DesktopNativeAssets.kt",
+      "mode": "100644",
+      "gitBlob": "e0198386aab2d0a64474bce67467a3eaf747a23e"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/DesktopSingBoxConfig.kt",
+      "mode": "100644",
+      "gitBlob": "aacc145f4226a54956e3723a1aad6f576396ba53"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/PacServer.kt",
+      "mode": "100644",
+      "gitBlob": "d8d3428a6d30c15f892a69147caf3527e5bcf362"
+    },
+    {
+      "path": ".gitattributes",
+      "mode": "100644",
+      "gitBlob": "a8a4b939302986c32bbfee9e5e3d51c82a07477a"
+    },
+    {
+      "path": "androidApp/src/main/jni/hev-socks5-tunnel/third-part/lwip/src/include/lwip/priv/udp_pretend.h",
+      "mode": "100644",
+      "gitBlob": "20e964202ab51a3cf7c0a8667cf500ecd48e6437"
+    },
+    {
+      "path": "sharedUI/src/androidHostTest/kotlin/org/olcbox/app/vpn/service/AndroidClientDirectRoutingTest.kt",
+      "mode": "100644",
+      "gitBlob": "15fd67bd888bcb2dde5836dc353894733c22e689"
+    },
+    {
+      "path": "sharedUI/src/androidHostTest/kotlin/org/olcbox/app/vpn/service/AndroidTun2socksConfigTest.kt",
+      "mode": "100644",
+      "gitBlob": "9d1feafd6b7250128f4136c968c17f01c9403058"
+    },
+    {
+      "path": "sharedUI/src/androidMain/kotlin/org/olcbox/app/vpn/service/AndroidClientDirectRouting.kt",
+      "mode": "100644",
+      "gitBlob": "727cb51a4442b5e0f272909342f79289c1eb8eec"
+    },
+    {
+      "path": "sharedUI/src/androidMain/kotlin/org/olcbox/app/vpn/service/AndroidManagedEntryDns.kt",
+      "mode": "100644",
+      "gitBlob": "dbc54f2b53cc150ac6056367e1e2fb8441df50f5"
+    },
+    {
+      "path": "sharedUI/src/androidMain/kotlin/org/olcbox/app/vpn/service/AndroidTun2socksConfig.kt",
+      "mode": "100644",
+      "gitBlob": "68d6689cc3d8bcf50364f0267e62d8cf2a643d9c"
+    },
+    {
+      "path": "sharedUI/src/androidMain/kotlin/org/olcbox/app/vpn/service/DirectRoutedVpnEngine.kt",
+      "mode": "100644",
+      "gitBlob": "fd01a84510d49f19d81baa02a567519273a9836d"
+    },
+    {
+      "path": "sharedUI/src/androidMain/kotlin/org/olcbox/app/vpn/service/EntryFailoverVpnEngine.kt",
+      "mode": "100644",
+      "gitBlob": "5851efd46f1d5f600e6cccb6d23e5e7c88d7fdb9"
+    },
+    {
+      "path": "sharedUI/src/commonMain/kotlin/org/olcbox/app/data/model/ClientRoutingPolicy.kt",
+      "mode": "100644",
+      "gitBlob": "f4af014e2b83bb8fc0a0a3c10ce01394126377af"
+    },
+    {
+      "path": "sharedUI/src/commonMain/kotlin/org/olcbox/app/data/model/VpnEntryFailoverConfig.kt",
+      "mode": "100644",
+      "gitBlob": "0095ec2882eddd9e38723f6376cdc06fa548565e"
+    },
+    {
+      "path": "sharedUI/src/commonMain/kotlin/org/olcbox/app/vpn/EntryFailoverPolicy.kt",
+      "mode": "100644",
+      "gitBlob": "d97bdc5c69546cf1238398a9ff6d116cb0543182"
+    },
+    {
+      "path": "sharedUI/src/commonTest/kotlin/org/olcbox/app/data/datasource/RoutingPolicySubscriptionTest.kt",
+      "mode": "100644",
+      "gitBlob": "31549e0a280b27e37007d6d033012191baeafce7"
+    },
+    {
+      "path": "sharedUI/src/commonTest/kotlin/org/olcbox/app/data/model/ClientRoutingPolicyTest.kt",
+      "mode": "100644",
+      "gitBlob": "b31790986d3118ec4ce691801ec821f9ea638144"
+    },
+    {
+      "path": "sharedUI/src/commonTest/kotlin/org/olcbox/app/data/model/VpnEntryFailoverConfigTest.kt",
+      "mode": "100644",
+      "gitBlob": "e794658cc0405690fb198cb6a9012acb0dfcf9bc"
+    },
+    {
+      "path": "sharedUI/src/commonTest/kotlin/org/olcbox/app/vpn/EntryFailoverPolicyTest.kt",
+      "mode": "100644",
+      "gitBlob": "1fa3d756aa052646704519021c9c5b369f0b8f8e"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/ClientDirectPolicy.kt",
+      "mode": "100644",
+      "gitBlob": "1b59318571fcf0ae5f2145ce2793a6a6bcac3adb"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/ClientDirectRoutingConfig.kt",
+      "mode": "100644",
+      "gitBlob": "53a8237a65a2a33c443fcf07bc14f0d03b1e9672"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/ExclusiveVpnEngineSession.kt",
+      "mode": "100644",
+      "gitBlob": "cbd736346c5e71244fbcbfca2411f047785a1f26"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/HappEntryFailoverConfig.kt",
+      "mode": "100644",
+      "gitBlob": "db81ee97324ba95dc4396e26b76e35d7d14f47e9"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/ManagedEntryDns.kt",
+      "mode": "100644",
+      "gitBlob": "3c54f6d36673ae4ce84504ee9f7d6012001707dc"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/VpnEntryFailoverPlanner.kt",
+      "mode": "100644",
+      "gitBlob": "733761ba675b869f2576201925afe4a777fc0c4b"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/XrayEntryFailoverConfig.kt",
+      "mode": "100644",
+      "gitBlob": "268d63564d0c2b2227324c61903d51f0f0bdc4eb"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/service/EntryFailoverHealthProbe.kt",
+      "mode": "100644",
+      "gitBlob": "e444968684dffcf5e2441c428ede55515d97a7eb"
+    },
+    {
+      "path": "sharedUI/src/jvmAndAndroidMain/kotlin/org/olcbox/app/vpn/service/EntryFailoverStartup.kt",
+      "mode": "100644",
+      "gitBlob": "9709ad4578e4d6c486f2890c84c7a34165f06537"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/DesktopEntryFailoverProcess.kt",
+      "mode": "100644",
+      "gitBlob": "069535e0938b26d723e8cc0bbcad76b19d33bdb9"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/DesktopEntryRouting.kt",
+      "mode": "100644",
+      "gitBlob": "c04c2fd1016ed7d8c541cdbf7615db1ea6698354"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/DesktopPhysicalInterface.kt",
+      "mode": "100644",
+      "gitBlob": "07a6ab852b1cbbebf9023ff51aea820cf06f7ead"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/DesktopRoutedAwgProcess.kt",
+      "mode": "100644",
+      "gitBlob": "f6ab731dcbd2aef5761c4e7a0e59bec465e60147"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/WindowsPhysicalDnsQuery.kt",
+      "mode": "100644",
+      "gitBlob": "3f09a1b1f0ea040d4ddcfb5109214f2818e35e12"
+    },
+    {
+      "path": "sharedUI/src/jvmMain/kotlin/org/olcbox/app/vpn/desktop/WindowsPhysicalDohQuery.kt",
+      "mode": "100644",
+      "gitBlob": "ec509862a6d2e9245f3811aaec8c195b7e4e5775"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/ClientDirectRoutingConfigTest.kt",
+      "mode": "100644",
+      "gitBlob": "272bf7bb3079417d7e851941f1af717abbce345f"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/ClientRoutingPolicyFallbackTest.kt",
+      "mode": "100644",
+      "gitBlob": "e17b88e696c71c5177142ec2350e6ef55a105f2b"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/ExclusiveVpnEngineSessionTest.kt",
+      "mode": "100644",
+      "gitBlob": "2fdcdbb61d870f4996d1b317500395c839876b65"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/HappEntryFailoverConfigTest.kt",
+      "mode": "100644",
+      "gitBlob": "ba290bbc449d5508be556c058efd0d20c624c17d"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/ManagedEntryDnsTest.kt",
+      "mode": "100644",
+      "gitBlob": "ba39c610ca84db620445ca0a80b37515ffd0b448"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/VpnEntryFailoverPlannerTest.kt",
+      "mode": "100644",
+      "gitBlob": "e9c336e90b0ddbfc4236e693e0880a73dafeebad"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/XrayEntryFailoverConfigTest.kt",
+      "mode": "100644",
+      "gitBlob": "80c61838090a6f5414607a4a9b4e1a67914021d0"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/DesktopEntryFailoverLiveTest.kt",
+      "mode": "100644",
+      "gitBlob": "d2ab59639325aa2407b90605e614d73ce5610732"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/DesktopEntryFailoverProcessTest.kt",
+      "mode": "100644",
+      "gitBlob": "42b6cbc55c347c206171c80a3fde329ae598b4ee"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/DesktopEntryRoutingTest.kt",
+      "mode": "100644",
+      "gitBlob": "980660cbfee8089904a360a62c26e1ad8f613fc3"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/DesktopNativeAssetCacheTest.kt",
+      "mode": "100644",
+      "gitBlob": "e33fe4b2271fd084b08bbfa5865bdf5e060a47f1"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/DesktopPhysicalInterfaceTest.kt",
+      "mode": "100644",
+      "gitBlob": "c815ce247e564c0000c3965a0c3f389c2b5e7391"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/DesktopRoutedAwgProcessTest.kt",
+      "mode": "100644",
+      "gitBlob": "d7b0c119dba8240623fd5ccaed9797a9c7a091bf"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/PacServerPolicyTest.kt",
+      "mode": "100644",
+      "gitBlob": "78e0f9bfb3e1fd5bb1166c28b5fb4d0d32c7a61b"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/WindowsPhysicalDnsQueryTest.kt",
+      "mode": "100644",
+      "gitBlob": "cc808d12eaf62ed613fa6af14565a2ebbcc41b5a"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/desktop/WindowsPhysicalDohQueryTest.kt",
+      "mode": "100644",
+      "gitBlob": "7c9398856b3bff24b5b8ebea39d84b88d0139696"
+    },
+    {
+      "path": "sharedUI/src/jvmTest/kotlin/org/olcbox/app/vpn/service/EntryFailoverStartupTest.kt",
+      "mode": "100644",
+      "gitBlob": "69ad10caa85dd58cefbc0846e45cede9aa434301"
+    },
+    {
+      "path": "tools/GenerateClientDirectPolicy.py",
+      "mode": "100644",
+      "gitBlob": "d51c80367ee9e2c65bd47710304f82946798a982"
+    },
+    {
+      "path": "tools/Test-HevUdpDestinationIsolation.py",
+      "mode": "100644",
+      "gitBlob": "177c8617e293a415f6397c13a1fc3f95f7d909a1"
+    },
+    {
+      "path": "tools/client-direct-policy.json",
+      "mode": "100644",
+      "gitBlob": "4b927cfcf490ee778ec621c2d834723d08ddd055"
+    },
+    {
+      "path": "tools/native-tests/hev-udp/compat/arch/cc.h",
+      "mode": "100644",
+      "gitBlob": "351b188ce64dff7102579480602adf3b655e8696"
+    },
+    {
+      "path": "tools/native-tests/hev-udp/compat/lwipopts.h",
+      "mode": "100644",
+      "gitBlob": "a54af91d55b5a8585118aeaf00c9f5a4a14b59a5"
+    },
+    {
+      "path": "tools/native-tests/hev-udp/compat/string.h",
+      "mode": "100644",
+      "gitBlob": "cb91203b4f4ff9566156824949d22093034727aa"
+    },
+    {
+      "path": "tools/native-tests/hev-udp/udp_flow_isolation.c",
+      "mode": "100644",
+      "gitBlob": "e2782ef7d0e0e5415c3bef371d85f54b757989cc"
+    }
+  ],
+  "unchangedResource": {
+    "path": "sharedUI/src/commonMain/composeResources/files/adblocking/hagezi-light.json",
+    "sha256": "6c62f367faf262b65561199a2e654f34bf491d63ac9c03b1c91d36d86706ba50",
+    "gitBlob": "6bbacf1757864536d1ea05e10069ae3472c0b8df"
+  },
+  "historicalCleanBuildCommitAvailable": false,
+  "bitForBitRebuildClaimed": false,
+  "evidence": "Original build verification binds the patch and artifact hashes; current70postimages and15HEADpreimages match. This publication commit reconstructs those inputs without rebuilding or signing binaries."
+}

@@ -1,0 +1,95 @@
+name: Publish verified UnifiedVPN 0.1.14
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - maintenance/publish-014-20261115
+    paths:
+      - '.github/workflows/publish-0.1.14.yml'
+      - 'tools/verify_release_014.py'
+      - 'docs/releases/0.1.14-stable-notes.txt'
+      - 'docs/releases/verification-build-2026111502-android.json'
+      - 'docs/releases/source-provenance-build-2026111502.json'
+      - 'docs/releases/UnifiedVPN-0.1.14-routing-failover.patch'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unifiedvpn-stable-014
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'JosephTagirov/UnifiedVpn' &&
+      github.ref == 'refs/heads/maintenance/publish-014-20261115' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Bind exact reconstructed source and refuse an existing stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/verify_release_014.py source
+          python3 tools/verify_release_014.py preflight > "$RUNNER_TEMP/preflight-014.json"
+      - name: Download immutable already-built assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-014
+          for asset in \
+            UnifiedVPN-0.1.14-build.2026111502-android-universal.apk \
+            UnifiedVPN-0.1.14-build.2026111502-windows-amd64-installer.exe \
+            UnifiedVPN-0.1.14-build.2026111502-windows-amd64-portable-manual.zip
+          do
+            curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --retry-all-errors \
+              "https://jh-kvn.meesharr.space/download/$asset" --output "dist/release-014/$asset"
+          done
+          cp docs/releases/verification-build-2026111502-android.json dist/release-014/
+          cp docs/releases/source-provenance-build-2026111502.json dist/release-014/
+          cp docs/releases/UnifiedVPN-0.1.14-routing-failover.patch dist/release-014/
+      - name: Verify signature, update identity and hashes
+        run: |
+          set -euo pipefail
+          sdk="$ANDROID_HOME/build-tools/36.0.0"
+          if [[ ! -f "$sdk/lib/apksigner.jar" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;36.0.0'
+          fi
+          python3 tools/verify_release_014.py verify --sdk "$sdk"
+      - name: Prepare owned draft without replacing existing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$(python3 -c 'import json,os; print(json.load(open(os.environ["RUNNER_TEMP"]+"/preflight-014.json"))["draft_exists"])')" == False ]]; then
+            gh release create v0.1.14 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title 'UnifiedVPN 0.1.14' --notes-file docs/releases/0.1.14-stable-notes.txt --draft --latest=false
+          fi
+          python3 tools/verify_release_014.py remote > "$RUNNER_TEMP/missing-assets-014.txt"
+          while IFS= read -r asset; do
+            [[ -n "$asset" ]] || continue
+            gh release upload v0.1.14 "dist/release-014/$asset" --repo "$GITHUB_REPOSITORY"
+          done < "$RUNNER_TEMP/missing-assets-014.txt"
+      - name: Verify remote digests and publish stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 tools/verify_release_014.py remote --complete
+          gh release edit v0.1.14 --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          python3 tools/verify_release_014.py remote --complete --published
+

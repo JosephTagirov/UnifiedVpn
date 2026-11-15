@@ -6,6 +6,9 @@ import java.net.BindException
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import org.olcbox.app.vpn.ClientDirectPolicy
 
 class PacServer(
     private val host: String = PAC_HOST,
@@ -16,6 +19,8 @@ class PacServer(
     private var activePort: Int? = null
     @Volatile
     private var socksTarget = SocksTarget(LOCAL_SOCKS_HOST, LOCAL_SOCKS_PORT, "", "")
+    @Volatile
+    private var directRules: List<String> = ClientDirectPolicy.domainRules
     private var executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "OlcboxPacServer").apply { isDaemon = true }
     }
@@ -30,12 +35,14 @@ class PacServer(
         socksHost: String = LOCAL_SOCKS_HOST,
         socksPort: Int = LOCAL_SOCKS_PORT,
         socksUsername: String = "",
-        socksPassword: String = ""
+        socksPassword: String = "",
+        directRules: List<String> = ClientDirectPolicy.domainRules
     ) {
         require(socksUsername.isBlank() && socksPassword.isBlank()) {
             "Chrome system proxy does not support SOCKS authentication; use local SOCKS mode with credentials"
         }
         updateSocksTarget(socksHost, socksPort, socksUsername, socksPassword)
+        this.directRules = directRules.toList()
         if (server != null) return
         executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "OlcboxPacServer").apply { isDaemon = true }
@@ -70,7 +77,7 @@ class PacServer(
 
     internal fun currentPacContent(): String {
         val target = socksTarget
-        return generatePac(target.host, target.port, target.username, target.password)
+        return generatePacWithRules(target.host, target.port, target.username, target.password, directRules)
     }
 
     fun stop() {
@@ -114,12 +121,45 @@ class PacServer(
             socksPort: Int = LOCAL_SOCKS_PORT,
             socksUsername: String = "",
             socksPassword: String = ""
+        ): String = generatePacWithRules(socksHost, socksPort, socksUsername, socksPassword, ClientDirectPolicy.domainRules)
+
+        internal fun generatePacWithRules(
+            socksHost: String = LOCAL_SOCKS_HOST,
+            socksPort: Int = LOCAL_SOCKS_PORT,
+            socksUsername: String = "",
+            socksPassword: String = "",
+            directRules: List<String>
         ): String {
             require(socksUsername.isBlank() && socksPassword.isBlank()) {
                 "Chrome system proxy does not support SOCKS authentication. Use local SOCKS mode with credentials, or an unauthenticated loopback proxy."
             }
             val target = socksProxyTarget(socksHost, socksPort, socksUsername, socksPassword)
+            fun rules(prefix: String) = JsonArray(directRules.filter { it.startsWith(prefix) }
+                .map { JsonPrimitive(it.removePrefix(prefix)) }).toString()
             return """
+var policySuffixes = ${rules("domain:")};
+var policyFullNames = ${rules("full:")};
+var policyPatterns = ${rules("regexp:")};
+var policySuffixMap = {}, policyFullMap = {}, policyRegex = [];
+for (var i = 0; i < policySuffixes.length; i++) policySuffixMap["." + policySuffixes[i]] = true;
+for (var i = 0; i < policyFullNames.length; i++) policyFullMap["." + policyFullNames[i]] = true;
+for (var i = 0; i < policyPatterns.length; i++) {
+  var pattern = policyPatterns[i], flags = "";
+  if (pattern.slice(0, 4) === "(?i)") { pattern = pattern.slice(4); flags = "i"; }
+  try { policyRegex.push(new RegExp(pattern, flags)); } catch (ignored) { }
+}
+function policyDirect(host) {
+  if (policyFullMap["." + host] === true) return true;
+  var suffix = host;
+  while (true) {
+    if (policySuffixMap["." + suffix] === true) return true;
+    var separator = suffix.indexOf(".");
+    if (separator < 0) break;
+    suffix = suffix.slice(separator + 1);
+  }
+  for (var i = 0; i < policyRegex.length; i++) if (policyRegex[i].test(host)) return true;
+  return false;
+}
 function hostEqOrSub(host, domain) {
   return host === domain || host.slice(-(domain.length + 1)) === "." + domain;
 }
@@ -144,14 +184,8 @@ function FindProxyForURL(url, host) {
   host = host.toLowerCase().replace(/\.$/, "");
   if (host.charAt(0) === "[" && host.slice(-1) === "]") host = host.slice(1, -1);
   if ((host.indexOf(":") === -1 && isPlainHostName(host)) || localAddress(host)) return "DIRECT";
-  var direct = ["ru", "su", "xn--p1ai", "рф", "yandex.com", "yandex.net",
-    "yastatic.net", "kinopoisk.com", "vk.com", "vk.me", "vk-portal.net", "userapi.com",
-    "mycdn.me", "ok.live", "tbank.com", "tinkoff.com", "otpbank.ru", "psbank.ru",
-    "max.ru", "oplata.info", "matreshka.tv"];
-  for (var i = 0; i < direct.length; i++) {
-    if (hostEqOrSub(host, direct[i])) return "DIRECT";
-  }
-  return "$target";
+  if (policyDirect(host)) return "DIRECT";
+  return ${JsonPrimitive(target)};
 }
             """.trimIndent()
         }

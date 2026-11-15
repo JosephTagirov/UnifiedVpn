@@ -88,6 +88,7 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 import kotlin.coroutines.coroutineContext
@@ -1314,7 +1315,8 @@ class OlcboxVpnService : VpnService() {
             listenHost = if (adBlockingEnabled && connectionMode == AndroidConnectionMode.Proxy)
                 configuredSocksHost else AndroidSocksProxySettings.DEFAULT_HOST,
             upstreamUsername = socksUsername.takeIf { externalEngine?.usesAppSocksCredentials != false }.orEmpty(),
-            upstreamPassword = socksPassword.takeIf { externalEngine?.usesAppSocksCredentials != false }.orEmpty()
+            upstreamPassword = socksPassword.takeIf { externalEngine?.usesAppSocksCredentials != false }.orEmpty(),
+            preserveUpstreamDns = androidTunBridgePreservesDns(activeProfileType, externalEngine?.usesClientDirectRouting == true)
         )
         tunSocksBridge = bridge
 
@@ -1405,8 +1407,8 @@ class OlcboxVpnService : VpnService() {
         val existingSocksPort = existingProfileSocksPort(profile)
         val targetSocksPort = existingSocksPort ?: allocateLocalSocksPort()
         if (existingSocksPort == null) {
-            socksUsername = socksUsername.ifBlank { INTERNAL_SOCKS_USERNAME }
-            socksPassword = socksPassword.ifBlank { INTERNAL_SOCKS_PASSWORD }
+            socksUsername = socksUsername.ifBlank { UUID.randomUUID().toString().replace("-", "") }
+            socksPassword = socksPassword.ifBlank { UUID.randomUUID().toString().replace("-", "") }
         }
 
         val engine = createSocksBackedVpnEngine(
@@ -1778,35 +1780,14 @@ class OlcboxVpnService : VpnService() {
     private fun writeTun2socksConfig(): File {
         val file = File(filesDir, TUN2SOCKS_CONFIG_FILE_NAME)
 
-        file.writeText(
-            """
-            tunnel:
-              name: tun0
-              mtu: $TUN_MTU
-              multi-queue: false
-              ipv4: $TUN_IPV4_ADDRESS
-
-            socks5:
-              address: ${tun2SocksHost()}
-              port: ${tun2SocksPort()}
-              # Standard SOCKS5 UDP ASSOCIATE is supported by sing-box and Xray.
-              # The tcp mode uses hev's private command 5, which these cores reject.
-              udp: 'udp'
-              pipeline: false
-              username: '$socksUsername'
-              password: '$socksPassword'
-
-            misc:
-              task-stack-size: 24576
-              tcp-buffer-size: 4096
-              max-session-count: 1200
-              connect-timeout: 10000
-              tcp-read-write-timeout: 300000
-              udp-read-write-timeout: 60000
-              log-file: stderr
-              log-level: warn
-            """.trimIndent()
-        )
+        file.writeText(buildAndroidTun2socksConfig(
+            mtu = TUN_MTU,
+            ipv4Address = TUN_IPV4_ADDRESS,
+            socksHost = tun2SocksHost(),
+            socksPort = tun2SocksPort(),
+            username = socksUsername,
+            password = socksPassword
+        ))
         return file
     }
 
@@ -2267,6 +2248,13 @@ class OlcboxVpnService : VpnService() {
     private fun isTunTrafficStalled(): Boolean {
         val stats = readTun2SocksStats() ?: return false
         publishSessionSnapshot(stats)
+        if (externalEngine?.let { it.usesEntryFailover && it.usesClientDirectRouting } == true) {
+            // The entry monitor owns VPN reachability. Intentionally blocked VPN packets
+            // must not restart a healthy local DIRECT router, bridge or TUN.
+            watchdogTunStats = null
+            watchdogStalledSamples = 0
+            return false
+        }
         val previous = watchdogTunStats
         watchdogTunStats = stats
 

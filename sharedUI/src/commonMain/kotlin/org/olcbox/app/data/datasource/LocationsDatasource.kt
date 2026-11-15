@@ -27,6 +27,7 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 import org.olcbox.app.CurrentAppInfo
 import org.olcbox.app.data.identity.DeviceIdentityProvider
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
+import org.olcbox.app.data.model.ClientRoutingPolicy
 import org.olcbox.app.data.model.LocationBundleV4
 import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
@@ -508,7 +509,11 @@ class LocationsRepositoryImpl(
                 location = location,
                 subscriptionUrl = current?.subscriptionUrl,
                 metadata = current?.metadata
-            )
+            ).let { saved ->
+                current?.profile?.routingPolicy?.let { policy ->
+                    saved.copy(vpnProfile = saved.profile.copy(routingPolicy = policy)).normalized()
+                } ?: saved
+            }
             val locations = bundle.locations.replaceEntry(entry)
 
             saveBundleUnlocked(
@@ -530,7 +535,9 @@ class LocationsRepositoryImpl(
             val current = bundle.locations.firstOrNull { it.storageId == normalizedId }
             val entry = LocationEntry.fromProfile(
                 storageId = normalizedId,
-                profile = normalizedProfile,
+                profile = normalizedProfile.copy(
+                    routingPolicy = normalizedProfile.routingPolicy ?: current?.profile?.routingPolicy
+                ),
                 subscriptionUrl = current?.subscriptionUrl,
                 metadata = current?.metadata
             )
@@ -974,16 +981,34 @@ class LocationsRepositoryImpl(
     private fun parseImport(
         text: String,
         subscriptionUrl: String? = null,
-        updateIntervalMs: Long? = null
+        updateIntervalMs: Long? = null,
+        allowRoutingEnvelope: Boolean = true
     ): ParsedImport? {
         // The selected-set envelope is additive and deliberately distinct from backups.
         val decodedSelection = text.tryDecodeBase64Utf8()?.trim()?.takeIf { it.startsWith("{") }
         val selectedRoot = runCatching { json.parseToJsonElement(decodedSelection ?: text).jsonObject }.getOrNull()
+        if (selectedRoot?.containsKey("routing_policy") == true) {
+            val policy = selectedRoot["routing_policy"]
+            if (policy.toString().length > ClientRoutingPolicy.MAX_ENCODED_LENGTH ||
+                ClientRoutingPolicy.fromJsonOrNull(policy) == null) return null
+        }
+        if (selectedRoot?.string("format")?.startsWith("unifiedvpn-subscription-") == true) {
+            if (!allowRoutingEnvelope || selectedRoot.string("format") != "unifiedvpn-subscription-v1") return null
+            val payload = selectedRoot["profiles"] as? JsonPrimitive ?: return null
+            if (!payload.isString || payload.content.length > 4 * 1024 * 1024) return null
+            val imported = parseImport(payload.content.normalizedImportText(), subscriptionUrl, updateIntervalMs,
+                allowRoutingEnvelope = false) ?: return null
+            val bundle = withClientRoutingPolicy(imported.bundle, selectedRoot["routing_policy"]) ?: return null
+            return imported.copy(bundle = bundle, mode = ImportMode.Additive, preserveActiveSelection = true)
+        }
         if (selectedRoot?.string("format")?.startsWith("unifiedvpn-selection-") == true) {
             if (selectedRoot.string("format") !in setOf("unifiedvpn-selection-v1", "unifiedvpn-selection-v2")) return null
             val profiles = selectedRoot["profiles"]?.let { runCatching { it.jsonArray }.getOrNull() } ?: return null
             if (profiles.isEmpty() || profiles.size > 16) return null
-            val selected = parseBundle(JsonObject(mapOf("version" to JsonPrimitive(5), "locations" to profiles)), subscriptionUrl, updateIntervalMs) ?: return null
+            val selected = withClientRoutingPolicy(
+                parseBundle(JsonObject(mapOf("version" to JsonPrimitive(5), "locations" to profiles)), subscriptionUrl, updateIntervalMs) ?: return null,
+                selectedRoot["routing_policy"]
+            ) ?: return null
             if (selected.locations.size != profiles.size) return null
             return ParsedImport(selected, ImportMode.Additive, preserveActiveSelection = true)
         }
@@ -998,14 +1023,14 @@ class LocationsRepositoryImpl(
 
             parseSingleLocation(root, null, subscriptionUrl)?.let {
                 return ParsedImport(
-                    LocationBundleV4(
+                    withClientRoutingPolicy(LocationBundleV4(
                         activeLocationId = it.storageId,
                         locations = listOf(
                             it.copy(
                                 metadata = it.metadata.withSubscriptionInterval(updateIntervalMs)
                             ).normalized()
                         )
-                    ),
+                    ), root["routing_policy"]) ?: return null,
                     ImportMode.Additive
                 )
             }
@@ -1397,11 +1422,24 @@ class LocationsRepositoryImpl(
         val version = root["version"]?.jsonPrimitive?.intOrNull ?: 3
         if (version < 3 && locations.isEmpty()) return null
 
-        return LocationBundleV4(
+        return withClientRoutingPolicy(LocationBundleV4(
             activeLocationId = root.string("active_location_id")
                 ?: root.string("activeLocationId"),
             locations = locations
-        )
+        ), root["routing_policy"])
+    }
+
+    private fun withClientRoutingPolicy(
+        bundle: LocationBundleV4,
+        element: JsonElement?
+    ): LocationBundleV4? {
+        if (element == null) return bundle
+        if (element.toString().length > ClientRoutingPolicy.MAX_ENCODED_LENGTH) return null
+        // Invalid updates fail as a unit so refresh retains the previous working profiles/policy.
+        val policy = ClientRoutingPolicy.fromJsonOrNull(element) ?: return null
+        return bundle.copy(locations = bundle.locations.map { entry ->
+            entry.copy(vpnProfile = entry.profile.copy(routingPolicy = policy)).normalized()
+        })
     }
 
     private fun parseSingleLocation(

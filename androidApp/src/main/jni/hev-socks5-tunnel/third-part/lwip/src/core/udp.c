@@ -50,6 +50,7 @@
 #if LWIP_UDP /* don't build if not configured for use in lwipopts.h */
 
 #include "lwip/udp.h"
+#include "lwip/priv/udp_pretend.h"
 #include "lwip/def.h"
 #include "lwip/memp.h"
 #include "lwip/inet_chksum.h"
@@ -260,7 +261,8 @@ again:
     LWIP_DEBUGF(UDP_DEBUG, (", %"U16_F")\n", pcb->remote_port));
 
     if (pcb->pretend_netif_idx != NETIF_NO_INDEX) {
-      if ((pcb->remote_port == src) && ip_addr_cmp(&pcb->remote_ip, ip_current_src_addr())) {
+      if (udp_pretend_matches_flow(pcb, ip_current_src_addr(), src,
+                                  ip_current_dest_addr(), dest)) {
         break;
       }
       prev = pcb;
@@ -449,8 +451,8 @@ again:
           IP_ADDR_PCB_VERSION_MATCH(pcb, ip_current_dest_addr())) {
         struct udp_pcb *npcb = udp_new_ip_type(pcb->local_ip.type);
         if (npcb != NULL) {
-          ip_addr_set_ipaddr(&npcb->remote_ip, ip_current_src_addr());
-          npcb->remote_port = src;
+          udp_pretend_set_flow(npcb, ip_current_src_addr(), src,
+                              ip_current_dest_addr(), dest);
           npcb->flags |= UDP_FLAGS_CONNECTED;
           npcb->pretend_netif_idx = pcb->pretend_netif_idx;
           npcb->next = udp_pcbs;

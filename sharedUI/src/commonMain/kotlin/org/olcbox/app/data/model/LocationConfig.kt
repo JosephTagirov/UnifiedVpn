@@ -558,7 +558,11 @@ data class VpnProfileConfig(
     @SerialName("local_socks_host")
     val localSocksHost: String? = null,
     @SerialName("local_socks_port")
-    val localSocksPort: Int? = null
+    val localSocksPort: Int? = null,
+    @SerialName("entry_failover")
+    val entryFailover: VpnEntryFailoverConfig? = null,
+    @SerialName("routing_policy")
+    val routingPolicy: ClientRoutingPolicy? = null
 ) {
     val normalizedType: String
         get() = normalizeType(type)
@@ -570,7 +574,9 @@ data class VpnProfileConfig(
             uri = uri.cleanMetadataValue(),
             rawConfig = rawConfig.cleanMetadataValue(),
             localSocksHost = localSocksHost.cleanMetadataValue(),
-            localSocksPort = localSocksPort?.takeIf { it in MIN_PORT..MAX_PORT }
+            localSocksPort = localSocksPort?.takeIf { it in MIN_PORT..MAX_PORT },
+            entryFailover = entryFailover?.normalizedOrNull(),
+            routingPolicy = routingPolicy?.normalizedOrNull()
         )
     }
 
@@ -776,7 +782,7 @@ data class LocationEntry(
             authProvider = config.bypassProvider,
             transport = LocationTransportConfig.from(config),
             dnsServer = config.dnsServer.takeIf { it.isNotBlank() },
-            vpnProfile = profileConfig?.takeIf { !it.isOlcRtc() },
+            vpnProfile = profileConfig?.takeIf { !it.isOlcRtc() || it.routingPolicy != null },
             metadata = metadata
                 ?.normalized()
                 ?.takeUnless { it.isEmpty() }

@@ -103,6 +103,10 @@ object WindowsTrustedExecutables {
 
     fun regPath(): Path = resolveFromSystemDirectory(listOf("reg.exe"))
 
+    internal fun curlPath(): Path = resolveFromSystemDirectory(listOf("curl.exe"))
+
+    internal fun winsockLibraryPath(): Path = resolveFromSystemDirectory(listOf("ws2_32.dll"))
+
     private fun resolveFromSystemDirectory(relativeParts: List<String>): Path {
         check(DesktopPaths.os == DesktopOs.Windows) {
             "Trusted Windows executables are only available on Windows"

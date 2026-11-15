@@ -13,6 +13,8 @@ import org.olcbox.app.vpn.AdBlockingRules
 import org.olcbox.app.vpn.XraySocksSettings
 import org.olcbox.app.vpn.XrayProxyConfig
 import org.olcbox.app.vpn.VkCallsRuntimeConfig
+import org.olcbox.app.vpn.VpnEntryFailoverPlanner
+import org.olcbox.app.vpn.ExclusiveVpnEngineSession
 import org.olcbox.app.vpn.WireGuardConfigValues
 import org.olcbox.app.vpn.parseXhttpExtra
 import org.olcbox.app.vpn.vlessUriPayload
@@ -23,6 +25,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URLDecoder
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import java.util.zip.Inflater
 import kotlin.concurrent.thread
 
@@ -31,6 +34,8 @@ internal interface SocksBackedVpnEngine {
     val socksHost: String
     val socksPort: Int
     val usesAppSocksCredentials: Boolean get() = true
+    val usesEntryFailover: Boolean get() = false
+    val usesClientDirectRouting: Boolean get() = false
     val isRunning: Boolean
     suspend fun start()
     fun stop()
@@ -63,7 +68,10 @@ internal fun createSocksBackedVpnEngine(
     password: String,
     log: (String) -> Unit,
     verificationContext: OpenFluxVerificationContext? = null,
-    location: LocationConfig? = null
+    location: LocationConfig? = null,
+    entryFailoverEnabled: Boolean = true,
+    ownsAwgSession: Boolean = true,
+    directRoutingEnabled: Boolean = true
 ): SocksBackedVpnEngine {
     val normalized = profile.normalized()
     if (normalized.isOlcRtc() && location?.usesModernRtcEngine() == true) {
@@ -79,7 +87,32 @@ internal fun createSocksBackedVpnEngine(
         )
     }
 
-    return when (normalized.normalizedType) {
+    val wireGuard = normalized.normalizedType in setOf(VpnProfileConfig.TYPE_AMNEZIA_WG, VpnProfileConfig.TYPE_AMNEZIA_VPN)
+    val wireGuardConfig = if (wireGuard) runCatching { resolveWireGuardConfig(normalized) }.getOrNull() else null
+    fun ownSession(engine: SocksBackedVpnEngine): SocksBackedVpnEngine =
+        if (wireGuard && ownsAwgSession) SessionOwnedAwgEngine(engine) {
+            parseWireGuardConfig(wireGuardConfig ?: resolveWireGuardConfig(normalized)).privateKey
+        } else engine
+    if (entryFailoverEnabled) {
+        val failover = VpnEntryFailoverPlanner.plan(normalized, wireGuardConfig)
+        if (failover != null && (normalized.normalizedType != VpnProfileConfig.TYPE_VLESS || XrayProxyConfig.supports(normalized))) {
+            return ownSession(EntryFailoverVpnEngine(context.applicationContext, normalized, failover, wireGuardConfig,
+                defaultSocksPort, username, password, log, directRoutingEnabled) { candidate, port, childUser, childPassword, childLog ->
+                createSocksBackedVpnEngine(context, candidate, port, childUser, childPassword, childLog,
+                    verificationContext, location, entryFailoverEnabled = false, ownsAwgSession = false, directRoutingEnabled = false)
+            })
+        }
+    }
+
+    val needsDirectFront = directRoutingEnabled && (wireGuard ||
+        (normalized.normalizedType == VpnProfileConfig.TYPE_VLESS && !XrayProxyConfig.supports(normalized)))
+    if (needsDirectFront) return ownSession(DirectRoutedVpnEngine(context.applicationContext, normalized,
+        defaultSocksPort, username, password, log) { port, childUser, childPassword, childLog ->
+        createSocksBackedVpnEngine(context, normalized, port, childUser, childPassword, childLog,
+            verificationContext, location, entryFailoverEnabled = false, ownsAwgSession = false, directRoutingEnabled = false)
+    })
+
+    return ownSession(when (normalized.normalizedType) {
         VpnProfileConfig.TYPE_OPENFLUX -> createOpenFluxVpnEngine(
             context = context.applicationContext,
             profile = normalized,
@@ -98,7 +131,8 @@ internal fun createSocksBackedVpnEngine(
             socksPort = defaultSocksPort,
             username = username,
             password = password,
-            log = log
+            log = log,
+            directRoutingEnabled = directRoutingEnabled && normalized.normalizedType == VpnProfileConfig.TYPE_VLESS
         )
 
         VpnProfileConfig.TYPE_AMNEZIA_WG,
@@ -115,7 +149,16 @@ internal fun createSocksBackedVpnEngine(
             profileType = normalized.normalizedType,
             message = "Unsupported VPN profile type: ${normalized.normalizedType}"
         )
-    }
+    })
+}
+
+private class SessionOwnedAwgEngine(
+    private val engine: SocksBackedVpnEngine,
+    identity: () -> String
+) : SocksBackedVpnEngine by engine {
+    private val session = ExclusiveVpnEngineSession(identity)
+    override suspend fun start() = session.start(engine::start, engine::stop)
+    override fun stop() = session.stop(engine::stop)
 }
 
 internal fun createTunSocksBridge(
@@ -130,7 +173,8 @@ internal fun createTunSocksBridge(
     blockAds: Boolean = false,
     listenHost: String = DEFAULT_SOCKS_HOST,
     upstreamUsername: String = username,
-    upstreamPassword: String = password
+    upstreamPassword: String = password,
+    preserveUpstreamDns: Boolean = androidTunBridgePreservesDns(profileType, false)
 ): SocksBackedVpnEngine = SingBoxTunSocksBridge(
     context = context.applicationContext,
     profileType = profileType,
@@ -143,7 +187,8 @@ internal fun createTunSocksBridge(
     blockAds = blockAds,
     socksHost = listenHost,
     upstreamUsername = upstreamUsername,
-    upstreamPassword = upstreamPassword
+    upstreamPassword = upstreamPassword,
+    preserveUpstreamDns = preserveUpstreamDns
 )
 
 private class ExistingSocksEngine(
@@ -195,7 +240,8 @@ private class SingBoxTunSocksBridge(
     private val blockAds: Boolean,
     override val socksHost: String,
     private val upstreamUsername: String,
-    private val upstreamPassword: String
+    private val upstreamPassword: String,
+    private val preserveUpstreamDns: Boolean
 ) : SocksBackedVpnEngine {
     override val isRunning: Boolean
         get() = process?.isAlive == true && canConnect(socksHost, socksPort)
@@ -228,8 +274,7 @@ private class SingBoxTunSocksBridge(
             file.writeText(if (blockAds) AdBlockingConfig.build(
                 socksHost, socksPort, username, password, upstreamSocksHost, upstreamSocksPort,
                 AdBlockingRules.install(workDir).absolutePath, upstreamUsername, upstreamPassword,
-                preserveUpstreamDns = profileType == VpnProfileConfig.TYPE_AMNEZIA_WG ||
-                    profileType == VpnProfileConfig.TYPE_AMNEZIA_VPN
+                preserveUpstreamDns = preserveUpstreamDns
             ) else buildTunBridgeConfig().toString())
         }
         runtimeConfig = configFile
@@ -304,19 +349,14 @@ private class SingBoxTunSocksBridge(
                 }
             }
 
-        val dnsServer = JSONObject()
-            .put("type", "https")
-            .put("tag", SING_BOX_TUN_BRIDGE_DNS_TAG)
-            .put("server", "8.8.8.8")
-            .put("server_port", 443)
-            .put("path", "/dns-query")
-            .put(
-                "tls",
-                JSONObject()
-                    .put("enabled", true)
-                    .put("server_name", "dns.google")
-            )
+        val dnsServer = JSONObject().put("tag", SING_BOX_TUN_BRIDGE_DNS_TAG)
             .put("detour", SING_BOX_TUN_BRIDGE_OUTBOUND_TAG)
+        if (preserveUpstreamDns) {
+            dnsServer.put("type", "tcp").put("server", "1.1.1.1").put("server_port", 53)
+        } else {
+            dnsServer.put("type", "https").put("server", "8.8.8.8").put("server_port", 443)
+                .put("path", "/dns-query").put("tls", JSONObject().put("enabled", true).put("server_name", "dns.google"))
+        }
 
         val routeRules = JSONArray()
             .put(
@@ -352,10 +392,12 @@ private class NativeProxyEngine(
     override val socksPort: Int,
     private val username: String,
     private val password: String,
-    private val log: (String) -> Unit
+    private val log: (String) -> Unit,
+    private val directRoutingEnabled: Boolean
 ) : SocksBackedVpnEngine {
     override val profileType: String = profile.normalizedType
     override val socksHost: String = DEFAULT_SOCKS_HOST
+    override val usesClientDirectRouting: Boolean = directRoutingEnabled
     override val isRunning: Boolean
         get() = process?.isAlive == true && canConnect(socksHost, socksPort)
 
@@ -363,6 +405,7 @@ private class NativeProxyEngine(
     private var process: Process? = null
     private var logThread: Thread? = null
     private var activeEngineName: String = "sing-box"
+    private val runtimeId = UUID.randomUUID().toString().take(12)
     private val protocolLabel: String = when (profileType) {
         VpnProfileConfig.TYPE_VMESS -> "VMess"
         VpnProfileConfig.TYPE_HYSTERIA2 -> "Hysteria2"
@@ -396,7 +439,7 @@ private class NativeProxyEngine(
             target.setExecutable(true, false)
         }
         stop()
-        val configFile = File(workDir, "$profileType-$socksPort.json").also { file ->
+        val configFile = File(workDir, "$profileType-$socksPort-$runtimeId.json").also { file ->
             file.writeText(if (useXray) buildXrayConfig() else buildSingBoxConfig(checkNotNull(outbound)))
         }
 
@@ -452,10 +495,8 @@ private class NativeProxyEngine(
         throw IllegalStateException("$activeEngineName SOCKS port $socksPort did not become ready")
     }
 
-    private fun buildXrayConfig(): String = XrayProxyConfig.build(
-        profile, XraySocksSettings(socksHost, socksPort, username, password),
-        bootstrapDnsServers = XRAY_BOOTSTRAP_DNS_SERVERS.toList()
-    )
+    private fun buildXrayConfig(): String = buildAndroidNativeProxyConfig(profile,
+        XraySocksSettings(socksHost, socksPort, username, password), directRoutingEnabled)
 
     private fun buildSingBoxConfig(outbound: VlessOutbound): String {
         val inbound = buildSingBoxSocksInbound(socksHost, socksPort, username, password)
@@ -595,6 +636,7 @@ private class SingBoxWireGuardEngine(
     private var runtimeConfig: File? = null
     private var process: Process? = null
     private var logThread: Thread? = null
+    private val runtimeId = UUID.randomUUID().toString().take(12)
 
     override suspend fun start() {
         val wireGuardConfig = resolveWireGuardConfig(profile)
@@ -612,7 +654,7 @@ private class SingBoxWireGuardEngine(
             target.setExecutable(true, false)
         }
         stop()
-        val configFile = File(workDir, "wireguard-$socksPort.json").also { file ->
+        val configFile = File(workDir, "wireguard-$socksPort-$runtimeId.json").also { file ->
             file.writeText(buildSingBoxConfig(outbound))
         }
 
@@ -1058,13 +1100,13 @@ private fun String.toSingBoxWireGuardValue(field: String): Any {
     }
 }
 
-private data class EngineExecutable(
+internal data class EngineExecutable(
     val abi: String,
     val file: File? = null,
     val assetPath: String? = null
 )
 
-private fun startEngineLogReader(
+internal fun startEngineLogReader(
     threadName: String,
     logPrefix: String,
     process: Process,
@@ -1145,7 +1187,7 @@ private fun parseQuery(query: String): Map<String, String> {
         .toMap()
 }
 
-private fun findEngineExecutable(context: Context, name: String): EngineExecutable? {
+internal fun findEngineExecutable(context: Context, name: String): EngineExecutable? {
     val nativeDir = context.applicationInfo.nativeLibraryDir?.let { File(it) }
     if (nativeDir != null) {
         Build.SUPPORTED_ABIS.forEach { abi ->
@@ -1169,7 +1211,7 @@ private fun assetExists(context: Context, path: String): Boolean {
     }.getOrDefault(false)
 }
 
-private fun copyAsset(context: Context, path: String, target: File) {
+internal fun copyAsset(context: Context, path: String, target: File) {
     context.assets.open(path).use { input ->
         target.outputStream().use { output ->
             input.copyTo(output)
@@ -1177,7 +1219,7 @@ private fun copyAsset(context: Context, path: String, target: File) {
     }
 }
 
-private fun canConnect(host: String, port: Int): Boolean {
+internal fun canConnect(host: String, port: Int): Boolean {
     if (port !in 1..65535) return false
     return runCatching {
         Socket().use { socket ->
@@ -1268,7 +1310,6 @@ private const val SOCKS_READY_POLL_MS = 150L
 private const val ENGINE_STOP_TIMEOUT_MS = 1_500L
 private const val ENGINE_FORCE_STOP_TIMEOUT_MS = 1_000L
 private const val MAX_DECOMPRESSED_PROFILE_SIZE = 4 * 1024 * 1024
-private val XRAY_BOOTSTRAP_DNS_SERVERS = listOf("1.1.1.1", "8.8.8.8")
 private const val PRIMARY_DNS = "\$PRIMARY_DNS"
 private const val SECONDARY_DNS = "\$SECONDARY_DNS"
 private val WIREGUARD_INTERFACE_SECTION = Regex(

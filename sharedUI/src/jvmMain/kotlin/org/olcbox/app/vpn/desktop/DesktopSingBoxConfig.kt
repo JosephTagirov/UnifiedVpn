@@ -170,7 +170,9 @@ internal object DesktopSingBoxConfig {
         return parseWireGuardConfig(resolveWireGuardConfig(profile.normalized())).peerHost
     }
 
-    private fun resolveWireGuardConfig(profile: VpnProfileConfig): String {
+    fun sessionIdentity(rawConfig: String): String = parseWireGuardConfig(rawConfig).privateKey
+
+    internal fun resolveWireGuardConfig(profile: VpnProfileConfig): String {
         listOfNotNull(profile.rawConfig, profile.uri)
             .asSequence()
             .map(String::trim)

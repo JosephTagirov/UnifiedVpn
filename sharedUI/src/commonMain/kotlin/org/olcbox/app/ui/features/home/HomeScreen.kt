@@ -206,7 +206,7 @@ fun HomeScreen(
                 ?.metadata?.subscription?.safePortalUrl()
                 ?: locations.firstNotNullOfOrNull { it.metadata?.subscription?.safePortalUrl() }
             BrandHomeNavigation(showCabinet=owner || portal!=null,owner=owner,onLogs={isLogsSheetOpen=true},onCabinet={
-                runCatching { uriHandler.openUri(if(owner) "https://panel.meesharr.space/vpn-control/admin/" else portal!!) }
+                runCatching { uriHandler.openUri(if(owner) "https://ru-kvn.meesharr.space/manage/" else portal!!) }
                     .onFailure { scope.launch { snackbarHostState.showSnackbar("Could not open the browser") } }
             })
             if (hasSubscriptions) {

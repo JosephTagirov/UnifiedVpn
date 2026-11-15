@@ -1,0 +1,57 @@
+{
+  "artifact": "UnifiedVPN-0.1.14-build.2026111502-android-universal.apk",
+  "versionName": "0.1.14",
+  "versionCode": 2026111502,
+  "packageName": "app.unifiedvpn.local",
+  "sha256": "0c1c536b69b8de887e25f0218c3e4322073461316b7aef03cba6508d8f8027b5",
+  "sizeBytes": 205831763,
+  "signing": {
+    "certificateSha256": "0a8547df6c99acfc4cbf9ca0916fbf7301c648bf4aecc655f7904d43c4bbeaa0",
+    "signerCount": 1
+  },
+  "previousCertificateSha256": "0a8547df6c99acfc4cbf9ca0916fbf7301c648bf4aecc655f7904d43c4bbeaa0",
+  "packageManagerUpdateRequirementsSatisfied": true,
+  "privateSigningKeyIncluded": false,
+  "physicalDeviceUpgradeTestPerformed": false,
+  "payloadUnchangedBySigning": true,
+  "aligned16KiB": true,
+  "tests": {
+    "jvm": {
+      "tests": 637,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "androidHost": {
+      "tests": 403,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "serverOffline": {
+      "tests": 34,
+      "failures": 0
+    },
+    "androidLintRelease": "passed",
+    "nativeBindingsAndProvenance": "passed"
+  },
+  "sourceProvenanceFile": "source-provenance-build-2026111502.json",
+  "sourcePatchSha256": "4ac56839cf502d0dbb996098f7790e34094ebf1eb496a8dd81c7e0cfe31ac4ec",
+  "windowsArtifacts": [
+    {
+      "name": "UnifiedVPN-0.1.14-build.2026111502-windows-amd64-installer.exe",
+      "sha256": "4d596759b2e87186ce7bb917edc1151b4d59e8744c365318ec21138146ca1e59",
+      "sizeBytes": 197191764
+    },
+    {
+      "name": "UnifiedVPN-0.1.14-build.2026111502-windows-amd64-portable-manual.zip",
+      "sha256": "4b2dfaf50a780945adfd499fee60b7e853015f6e599acaf37c7204ccf1883ef3",
+      "sizeBytes": 195448111
+    }
+  ],
+  "limitations": [
+    "Personal phone upgrade, nativeAIapps/accountlogin and phone throughput not accepted",
+    "No iOS build",
+    "Prebuilt artifacts are published without a hermetic rebuild claim"
+  ]
+}

@@ -140,6 +140,8 @@ try {
         $hop = if ($prefix.Contains(':')) { '::' } else { '0.0.0.0' }
         Add-OwnedRoute $prefix $index $hop
     }
+    # Discard cached physical answers before the scoped FakeDNS policy starts serving this session.
+    Clear-DnsClientCache -ErrorAction Stop
     [Console]::Out.WriteLine('READY')
     [Console]::Out.Flush()
     $stop = [Console]::In.ReadLineAsync()
@@ -156,6 +158,11 @@ try {
     if ($leaseHeld) {
         try { Remove-JournalRoutes $journal } catch {
             [Console]::Out.WriteLine('ERROR TUN route cleanup incomplete; recovery will retry on next start')
+            $exitCode = 1
+        }
+        # Fake addresses belong to the retiring core and must not survive in the Windows resolver cache.
+        try { Clear-DnsClientCache -ErrorAction Stop } catch {
+            [Console]::Out.WriteLine('ERROR TUN DNS cache cleanup failed')
             $exitCode = 1
         }
     }

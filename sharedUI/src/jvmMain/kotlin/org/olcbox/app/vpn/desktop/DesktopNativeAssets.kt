@@ -3,9 +3,14 @@ package org.olcbox.app.vpn.desktop
 import org.olcbox.app.desktop.DesktopOs
 import org.olcbox.app.desktop.DesktopPaths
 import java.io.File
+import java.io.InputStream
+import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 import java.util.jar.JarFile
 import kotlin.io.path.Path
 import kotlin.io.path.exists
@@ -187,7 +192,7 @@ internal object DesktopNativeAssets {
         }
 
         candidates.firstOrNull { it.exists() }?.let {
-            Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
+            installVerifiedAsset(target) { Files.newInputStream(it) }
             makeExecutable(target)
             return target
         }
@@ -299,7 +304,7 @@ internal object DesktopNativeAssets {
         desktopNativeResourceCandidates(fileName)
             .firstOrNull { it.exists() }
             ?.let {
-                Files.copy(it, target, StandardCopyOption.REPLACE_EXISTING)
+                installVerifiedAsset(target) { Files.newInputStream(it) }
                 return target
             }
 
@@ -313,13 +318,17 @@ internal object DesktopNativeAssets {
         ).distinct()
         classLoaders.forEach { loader ->
             loader.getResourceAsStream(resourceName)?.use { resource ->
-                Files.copy(resource, target, StandardCopyOption.REPLACE_EXISTING)
+                installVerifiedAsset(target, resource) {
+                    checkNotNull(loader.getResourceAsStream(resourceName)) { "Bundled asset disappeared" }
+                }
                 return true
             }
         }
 
         javaClass.getResourceAsStream("/$resourceName")?.use { resource ->
-            Files.copy(resource, target, StandardCopyOption.REPLACE_EXISTING)
+            installVerifiedAsset(target, resource) {
+                checkNotNull(javaClass.getResourceAsStream("/$resourceName")) { "Bundled asset disappeared" }
+            }
             return true
         }
 
@@ -327,24 +336,55 @@ internal object DesktopNativeAssets {
             .map { it.resolve(resourceName) }
             .firstOrNull(Files::isRegularFile)
             ?.let { source ->
-                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
+                installVerifiedAsset(target) { Files.newInputStream(source) }
                 return true
             }
 
         bundledJarCandidates().forEach { jarPath ->
-            val copied = runCatching {
-                JarFile(jarPath.toFile()).use { jar ->
-                    val entry = jar.getJarEntry(resourceName) ?: return@use false
-                    jar.getInputStream(entry).use { resource ->
-                        Files.copy(resource, target, StandardCopyOption.REPLACE_EXISTING)
-                    }
-                    true
-                }
-            }.getOrDefault(false)
+            val jar = runCatching { JarFile(jarPath.toFile()) }.getOrNull() ?: return@forEach
+            val copied = jar.use {
+                val entry = jar.getJarEntry(resourceName) ?: return@use false
+                installVerifiedAsset(target) { jar.getInputStream(entry) }
+                true
+            }
             if (copied) return true
         }
 
         return false
+    }
+
+    internal fun installVerifiedAsset(target: Path, openSource: () -> InputStream) {
+        openSource().use { source -> installVerifiedAsset(target, source, openSource) }
+    }
+
+    /** Verify against the current authoritative resource before reusing a mapped Windows executable. */
+    @Synchronized
+    private fun installVerifiedAsset(target: Path, source: InputStream, openSource: () -> InputStream) {
+        val expected = sha256(source)
+        val regular = Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)
+        if (regular && Files.newInputStream(target).use(::sha256).contentEquals(expected)) return
+
+        val staged = Files.createTempFile(target.parent, "asset-", ".tmp")
+        try {
+            openSource().use { Files.copy(it, staged, StandardCopyOption.REPLACE_EXISTING) }
+            check(Files.newInputStream(staged).use(::sha256).contentEquals(expected)) {
+                "Bundled asset changed during extraction"
+            }
+            // A mapped executable cannot be opened for writing on Windows. Close this probe
+            // before promotion: holding our own write handle also prevents the atomic rename.
+            if (regular) FileChannel.open(target, StandardOpenOption.WRITE).use { }
+            Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally { Files.deleteIfExists(staged) }
+    }
+
+    private fun sha256(source: InputStream): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(64 * 1024)
+        while (true) {
+            val count = source.read(buffer)
+            if (count < 0) return digest.digest()
+            if (count > 0) digest.update(buffer, 0, count)
+        }
     }
 
     private fun bundledResourceDirectories(): List<Path> {
