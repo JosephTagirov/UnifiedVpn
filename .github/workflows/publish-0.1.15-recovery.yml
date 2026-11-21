@@ -1,0 +1,104 @@
+name: Recover verified UnifiedVPN 0.1.15
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [maintenance/publish-015-resume-20261122]
+    paths:
+      - '.github/workflows/publish-0.1.15-recovery.yml'
+      - '.github/scripts/download_release_ranges.py'
+      - '.github/scripts/coordinate_release_015.py'
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: unifiedvpn-recovery-015
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'JosephTagirov/UnifiedVpn' && github.ref == 'refs/heads/maintenance/publish-015-resume-20261122'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_SOURCE: bbdeed3ee08db09625c445d3e5cb80a96f8ddcb3
+      RELEASE_TAG: v0.1.15
+      RELEASE_MANIFEST: docs/releases/verification-build-2026112101.json
+      RELEASE_DIR: dist/release-015
+      MIRROR_ROOT: https://ru-kvn.meesharr.space/download
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          path: recovery
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: bbdeed3ee08db09625c445d3e5cb80a96f8ddcb3
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Download and verify immutable release packages
+        shell: bash
+        working-directory: source
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE"
+          python3 ../recovery/.github/scripts/download_release_ranges.py \
+            --manifest "$RELEASE_MANIFEST" --mirror "$MIRROR_ROOT" --directory "$RELEASE_DIR" --workers 8
+          sdk="$ANDROID_HOME/build-tools/36.0.0"
+          if [[ ! -f "$sdk/lib/apksigner.jar" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;36.0.0'
+          fi
+          GITHUB_SHA="$RELEASE_SOURCE" python3 tools/verify_release_015.py local --sdk "$sdk"
+          cp "$RELEASE_MANIFEST" "$RELEASE_DIR/"
+      - name: Wait until the original writer is terminal
+        shell: bash
+        working-directory: source
+        run: python3 ../recovery/.github/scripts/coordinate_release_015.py
+      - name: Publish or verify the original release
+        shell: bash
+        working-directory: source
+        run: |
+          set -euo pipefail
+          verify() {
+            GITHUB_SHA="$RELEASE_SOURCE" python3 tools/verify_release_015.py "$@"
+          }
+          verify_tag() {
+            local refs tag_sha
+            refs="$(git ls-remote origin "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")"
+            tag_sha="$(awk -v ref="refs/tags/$RELEASE_TAG" '
+              $2 == ref { tag = $1 }
+              $2 == ref "^{}" { peeled = $1 }
+              END { print (peeled ? peeled : tag) }
+            ' <<< "$refs")"
+            if [[ -z "$tag_sha" && "${1:-}" == optional ]]; then
+              return 0
+            fi
+            test "$tag_sha" = "$RELEASE_SOURCE"
+          }
+          state="$(verify draft)"
+          if [[ "$state" == published ]]; then
+            verify published
+            verify_tag
+            exit 0
+          fi
+          verify_tag optional
+          if [[ "$state" == missing ]]; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_SOURCE" \
+              --title 'UnifiedVPN 0.1.15' --notes-file docs/releases/0.1.15.md --draft --latest=false
+          fi
+          verify missing > "$RUNNER_TEMP/missing-assets-015.txt"
+          while IFS= read -r asset; do
+            [[ -n "$asset" ]] || continue
+            gh release upload "$RELEASE_TAG" "$RELEASE_DIR/$asset" --repo "$GITHUB_REPOSITORY"
+          done < "$RUNNER_TEMP/missing-assets-015.txt"
+          verify complete
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          verify published
+          verify_tag
