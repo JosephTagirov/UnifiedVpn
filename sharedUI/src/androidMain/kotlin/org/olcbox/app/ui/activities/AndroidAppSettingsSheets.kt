@@ -749,6 +749,7 @@ private fun SplitTunnelingAppListContent(
     onRussianBypassPresetEnabledChanged: (Boolean) -> Unit
 ) {
     var query by remember(list) { mutableStateOf("") }
+    var showSystemApps by remember(list) { mutableStateOf(false) }
 
     // Не просто scrollToItem(0): keyed LazyColumn может успеть сохранить старый visible key
     // и слегка увести список к элементу, который переехал. Для bulk/search-сценариев
@@ -765,9 +766,8 @@ private fun SplitTunnelingAppListContent(
 
     val russianBypassPackages = remember(installedApps) {
         installedApps
-            .map { it.packageName }
-            .filter { it.matchesRussianBypassPackage() }
-            .toSet()
+            .filter { it.hasLauncher && it.packageName.matchesRussianBypassPackage() }
+            .mapTo(mutableSetOf()) { it.packageName }
     }
 
     val russianBypassActive = list == AndroidSplitTunnelList.Bypass &&
@@ -801,14 +801,10 @@ private fun SplitTunnelingAppListContent(
             )
         }
     }
-    val filteredApps = remember(appListEntries, normalizedQuery, sortSelectedPackages, sortAutoBypassPackages) {
-        val apps = if (normalizedQuery.isBlank()) {
-            appListEntries
-        } else {
-            appListEntries.filter { entry ->
-                entry.labelSortKey.contains(normalizedQuery) ||
-                        entry.packageSortKey.contains(normalizedQuery)
-            }
+    val filteredApps = remember(appListEntries, normalizedQuery, sortSelectedPackages, sortAutoBypassPackages, showSystemApps, selectedPackages) {
+        val apps = appListEntries.filter { entry ->
+            entry.app.isVisibleInSplitTunnelList(showSystemApps, selectedPackages) &&
+                (entry.labelSortKey.contains(normalizedQuery) || entry.packageSortKey.contains(normalizedQuery))
         }
         apps.sortedWith(
             compareBy<AndroidAppListEntry> {
@@ -874,6 +870,17 @@ private fun SplitTunnelingAppListContent(
             },
             label = { Text("Search apps") },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search)
+        )
+
+        Spacer(Modifier.height(4.dp))
+        FilterChip(
+            selected = showSystemApps,
+            onClick = {
+                focusManager.clearFocus()
+                showSystemApps = !showSystemApps
+                resetListScrollToTop()
+            },
+            label = { Text("Show system apps") }
         )
 
         if (list == AndroidSplitTunnelList.Bypass) {

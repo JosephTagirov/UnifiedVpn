@@ -86,12 +86,15 @@ internal class WindowsTunController(
         const val TUN_NAME = "Olcbox"
         const val PROCESS_STOP_TIMEOUT_MS = 3_000L
         const val PROCESS_KILL_TIMEOUT_MS = 1_000L
+        private const val MAX_PINNED_ENDPOINTS = 2
 
         fun helperConfiguration(port: Int, username: String, password: String, endpoints: List<String>): String {
             require(DesktopSocksProxySettings.isValidPort(port))
             require(username.length <= 64 && password.length <= 64)
             require('\u0000' !in username && '\u0000' !in password)
-            require(endpoints.size == 1) { "TUN needs one pinned VPN server address" }
+            require(endpoints.size in 1..MAX_PINNED_ENDPOINTS && endpoints.toSet().size == endpoints.size) {
+                "Windows TUN requires one or two distinct pinned VPN server addresses"
+            }
             // The elevated component validates again and never receives paths or shell text.
             val value = buildJsonObject {
                 put("port", port)

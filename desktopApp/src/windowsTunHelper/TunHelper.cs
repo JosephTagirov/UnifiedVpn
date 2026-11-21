@@ -20,6 +20,7 @@ using Microsoft.Win32.SafeHandles;
 internal static class TunHelper
 {
     const int MaxMessage = 8192;
+    const int MaxPinnedEndpoints = 2;
     static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = MaxMessage };
     static readonly SecurityIdentifier Admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
     static readonly SecurityIdentifier SystemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
@@ -75,7 +76,9 @@ internal static class TunHelper
             if (!(c[key] is string) || ((string)c[key]).Length > 64 ||
                 ((string)c[key]).IndexOf('\0') >= 0) throw new InvalidDataException();
         var endpoints = c["endpoints"] as System.Collections.ArrayList;
-        if (endpoints == null || endpoints.Count != 1) throw new InvalidDataException();
+        if (endpoints == null || endpoints.Count < 1 || endpoints.Count > MaxPinnedEndpoints)
+            throw new InvalidDataException();
+        var seen = new HashSet<IPAddress>();
         for (int index = 0; index < endpoints.Count; index++)
         {
             var entry = endpoints[index];
@@ -90,6 +93,7 @@ internal static class TunHelper
                     ip.GetAddressBytes()[0] >= 224 ||
                     (ip.GetAddressBytes()[0] == 169 && ip.GetAddressBytes()[1] == 254))))
                 throw new InvalidDataException();
+            if (!seen.Add(ip)) throw new InvalidDataException();
             endpoints[index] = ip.ToString();
         }
         return c;
@@ -331,6 +335,7 @@ internal static class TunHelper
         Validate(valid);
         Validate(valid.Replace("203.0.113.7", "2001:db8:0:0:0:0:0:7"));
         Validate(valid.Replace("203.0.113.7", "192.168.1.7"));
+        Validate(valid.Replace("\"203.0.113.7\"", "\"203.0.113.7\",\"2001:db8::7\""));
         string[] invalid = { valid.Replace("10808", "1"), valid.Replace("10808", "65536"),
             valid.Replace("203.0.113.7", "127.0.0.1"), valid.Replace("203.0.113.7", "host.example"),
             valid.Replace("203.0.113.7", "0.0.0.0"), valid.Replace("203.0.113.7", "224.0.0.1"),
@@ -343,7 +348,11 @@ internal static class TunHelper
             valid.Replace("203.0.113.7", "::ffff:127.0.0.1"), valid.Replace("203.0.113.7", "::ffff:203.0.113.7"),
             valid.Replace("203.0.113.7", "203.0.113.7'; Stop-Computer; '"),
             valid.Replace("\"port\":10808", "\"command\":\"calc.exe\""),
-            valid.Replace("[\"203.0.113.7\"]", "[]"), valid.Replace("\"username\":\"\"", "\"username\":true") };
+            valid.Replace("[\"203.0.113.7\"]", "[]"), valid.Replace("\"username\":\"\"", "\"username\":true"),
+            valid.Replace("\"203.0.113.7\"", "\"203.0.113.7\",\"203.0.113.8\",\"203.0.113.9\""),
+            valid.Replace("\"203.0.113.7\"", "\"203.0.113.7\",\"203.0.113.7\""),
+            valid.Replace("\"203.0.113.7\"", "\"2001:db8::7\",\"2001:db8:0:0:0:0:0:7\""),
+            valid.Replace("\"203.0.113.7\"", "\"203.0.113.7\",\"127.0.0.1\"") };
         foreach (var value in invalid)
         {
             bool rejected = false;
@@ -366,7 +375,7 @@ internal static class TunHelper
             if (!start.CreateNoWindow || start.WindowStyle != ProcessWindowStyle.Hidden)
                 throw new Exception("Worker visibility regression");
         }
-        Console.WriteLine("PASS: " + (invalid.Length + 4) + " helper input checks, 6 launch-plan checks; no elevation, adapter or routes created");
+        Console.WriteLine("PASS: " + (invalid.Length + 5) + " helper input checks, 6 launch-plan checks; no elevation, adapter or routes created");
         return 0;
     }
 

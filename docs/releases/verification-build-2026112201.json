@@ -1,0 +1,19 @@
+{
+  "version": "0.1.16",
+  "build": 2026112201,
+  "androidSigningCertificate": "0a8547df6c99acfc4cbf9ca0916fbf7301c648bf4aecc655f7904d43c4bbeaa0",
+  "assets": {
+    "UnifiedVPN-0.1.16-build.2026112201-android-universal.apk": {
+      "bytes": 205844051,
+      "sha256": "c16227854cda9503e0c7a2efdcdf0a90d0952f6799a6616ddad0c914ebbdf700"
+    },
+    "UnifiedVPN-0.1.16-build.2026112201-windows-amd64-installer.exe": {
+      "bytes": 197253201,
+      "sha256": "dd569b5fa1a78005c3a40c6f30d3089b95e3c79f4b039fb1677db01599a44b2c"
+    },
+    "UnifiedVPN-0.1.16-build.2026112201-windows-amd64-portable-manual.zip": {
+      "bytes": 195511812,
+      "sha256": "7c9b050eba591eba79422423ae1eedad936271e57f94d10267984c72d91ed7ec"
+    }
+  }
+}

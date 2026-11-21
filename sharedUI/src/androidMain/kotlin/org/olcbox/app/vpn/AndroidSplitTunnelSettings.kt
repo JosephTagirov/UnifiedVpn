@@ -64,5 +64,9 @@ enum class AndroidSplitTunnelList {
 
 data class AndroidInstalledApp(
     val packageName: String,
-    val label: String
-)
+    val label: String,
+    val hasLauncher: Boolean = true
+) {
+    internal fun isVisibleInSplitTunnelList(showSystemApps: Boolean, selectedPackages: Set<String>): Boolean =
+        hasLauncher || showSystemApps || packageName in selectedPackages
+}

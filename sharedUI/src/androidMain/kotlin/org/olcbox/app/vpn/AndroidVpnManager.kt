@@ -2,6 +2,7 @@ package org.olcbox.app.vpn
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.os.Build
@@ -415,14 +416,25 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             packageManager.queryIntentActivities(launcherIntent, 0)
         }
 
-        resolveInfos
-            .mapNotNull { it.activityInfo?.applicationInfo }
-            .filter { it.packageName != appContext.packageName }
+        val launchable = resolveInfos.mapNotNull { it.activityInfo?.applicationInfo }
+        val launcherPackages = launchable.mapTo(mutableSetOf()) { it.packageName }
+        val visible = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getInstalledApplications(0)
+        }
+        val systemFlags = ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+        val systemApps = visible.filter { it.enabled && it.flags and systemFlags != 0 }
+
+        (launchable + systemApps)
+            .filter { it.packageName != appContext.packageName && it.packageName != "android" }
             .distinctBy { it.packageName }
             .map { appInfo ->
                 AndroidInstalledApp(
                     packageName = appInfo.packageName,
-                    label = appInfo.loadLabel(packageManager).toString()
+                    label = appInfo.loadLabel(packageManager).toString().trim().ifBlank { appInfo.packageName },
+                    hasLauncher = appInfo.packageName in launcherPackages
                 )
             }
             .sortedWith(compareBy<AndroidInstalledApp> { it.label.lowercase() }.thenBy { it.packageName })

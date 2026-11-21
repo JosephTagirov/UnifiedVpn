@@ -478,6 +478,7 @@ private val russianExactText = mapOf(
     "Set up self-hosted server" to "Настроить свой сервер",
     "SETUP" to "НАСТРОИТЬ",
     "Settings" to "Настройки",
+    "Show system apps" to "Показывать системные приложения",
     "Share" to "Поделиться",
     "Share location" to "Поделиться профилем",
     "Share OpenFlux profile" to "Поделиться профилем OpenFlux",

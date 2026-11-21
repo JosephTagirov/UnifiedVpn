@@ -4,6 +4,7 @@ import org.olcbox.app.data.model.VpnProfileConfig
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class AndroidSplitTunnelSettingsTest {
     private val rtcSettings = AndroidSplitTunnelSettings(
@@ -109,5 +110,16 @@ class AndroidSplitTunnelSettingsTest {
 
         assertFalse(profile.isOlcRtc())
         assertEquals(AndroidSplitTunnelProfile.OlcRtc, AndroidSplitTunnelProfile.fromProfileType(profile.normalizedType))
+    }
+
+    @Test
+    fun extraSystemAppsAreOptionalAndPreviouslySelectedRowsStayAvailable() {
+        val phone = AndroidInstalledApp("example.phone", "Phone")
+        val system = AndroidInstalledApp("example.system", "System app", hasLauncher = false)
+
+        assertTrue(phone.isVisibleInSplitTunnelList(false, emptySet()))
+        assertFalse(system.isVisibleInSplitTunnelList(false, emptySet()))
+        assertTrue(system.isVisibleInSplitTunnelList(true, emptySet()))
+        assertTrue(system.isVisibleInSplitTunnelList(false, setOf(system.packageName)))
     }
 }
