@@ -3,6 +3,9 @@ package org.olcbox.app.data.datasource
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
+import io.ktor.http.headersOf
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
 import org.olcbox.app.data.identity.DeviceIdentityProvider
@@ -128,6 +131,36 @@ class RoutingPolicySubscriptionTest {
         now += SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_MS + 1
         assertEquals(1, repository.refreshDueSubscriptions())
         assertEquals("automatic-r2", source.stored?.locations?.single()?.profile?.routingPolicy?.revision)
+    }
+
+    @Test fun dailyOverrideSurvivesServerIntervalsAndCompetingDueChecks() = runTest {
+        val hourly = SubscriptionMetadata.HOUR_MS
+        var now = 1_000L
+        var requests = 0
+        val source = Source()
+        val client = HttpClient(MockEngine {
+            requests++
+            respond(envelope(), headers = headersOf("profile-update-interval", "12"))
+        })
+        val repository = LocationsRepositoryImpl(source, client, deviceIdentityProvider = identity, nowEpochMs = { now })
+        assertTrue(repository.importText(url))
+        assertEquals(now + 12 * hourly, repository.nextSubscriptionRefreshAtEpochMs())
+
+        repository.setSubscriptionUpdateInterval(url, 24 * hourly)
+        val due = now + 24 * hourly
+        assertEquals(due, repository.nextSubscriptionRefreshAtEpochMs())
+        now = due - 1
+        assertEquals(0, repository.refreshDueSubscriptions())
+        assertEquals(1, requests)
+
+        now = due
+        val results = List(2) { async { repository.refreshDueSubscriptions() } }.awaitAll()
+        assertEquals(listOf(0, 1), results.sorted())
+        assertEquals(2, requests)
+        assertEquals(due + 24 * hourly, repository.nextSubscriptionRefreshAtEpochMs())
+
+        repository.setSubscriptionUpdateInterval(url, null)
+        assertEquals(due + 12 * hourly, repository.nextSubscriptionRefreshAtEpochMs())
     }
 
     @Test fun policiesRemainScopedToTheirOwnSubscriptions() = runTest {

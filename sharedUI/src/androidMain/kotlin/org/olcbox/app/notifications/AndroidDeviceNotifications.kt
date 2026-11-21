@@ -11,14 +11,15 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.Json
 import org.olcbox.app.data.datasource.AndroidLocationsRepository
-import org.olcbox.app.data.repository.SubscriptionFetchProxy
-import java.util.UUID
+import org.olcbox.app.vpn.VpnStatus
 import org.olcbox.app.vpn.service.OlcboxVpnState
+import java.util.UUID
 
 class AndroidNotificationStore(context:Context):NotificationDeliveryStore {
     private val prefs=context.getSharedPreferences("device-notifications",Context.MODE_PRIVATE)
@@ -69,16 +70,49 @@ object AndroidDeviceNotifications {
     }
 }
 
-class DeviceNotificationJob:JobService() {
-    private var work:Job?=null
-    override fun onStartJob(params:JobParameters):Boolean {
-        work=CoroutineScope(SupervisorJob()+Dispatchers.IO).launch {
-            try { AndroidDeviceNotifications.get(applicationContext).pollOnce(OlcboxVpnState.connectedProxy()) }
-            catch(e:CancellationException){throw e} catch(_:Exception){}
-            jobFinished(params,false)
+class DeviceNotificationJob : JobService() {
+    private var work: Job? = null
+
+    override fun onStartJob(params: JobParameters): Boolean {
+        work = CoroutineScope(Dispatchers.IO).launch {
+            val context = applicationContext
+            try {
+                AndroidDeviceNotifications.get(context).pollOnce(OlcboxVpnState.connectedProxy())
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A notification failure must not prevent subscription refresh.
+            }
+
+            try {
+                // The UI coordinates changes to a live tunnel. While it is down, use the same
+                // persisted due times and repository lock for this background wake-up.
+                val status = OlcboxVpnState.status.value
+                if (status == VpnStatus.Disconnected || status is VpnStatus.Error) {
+                    AndroidLocationsRepository.get(context).refreshDueSubscriptions()
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                Log.w("SubscriptionRefresh", "Could not complete scheduled subscription refresh")
+            }
+
+            withContext(Dispatchers.Main.immediate) {
+                work = null
+                jobFinished(params, false)
+            }
         }
         return true
     }
-    override fun onStopJob(params:JobParameters):Boolean {work?.cancel();return true}
-    override fun onDestroy(){work?.cancel();super.onDestroy()}
+
+    override fun onStopJob(params: JobParameters): Boolean {
+        work?.cancel()
+        work = null
+        return true
+    }
+
+    override fun onDestroy() {
+        work?.cancel()
+        super.onDestroy()
+    }
 }

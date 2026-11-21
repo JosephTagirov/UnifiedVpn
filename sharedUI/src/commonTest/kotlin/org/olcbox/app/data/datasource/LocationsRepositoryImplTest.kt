@@ -942,11 +942,63 @@ class LocationsRepositoryImplTest {
         val bundle = source.stored
         assertEquals(1, updated)
         assertNotNull(bundle)
-        assertEquals(listOf("beta", "imported_alpha"), bundle.locations.map { it.storageId })
+        assertEquals(listOf("imported_alpha", "beta"), bundle.locations.map { it.storageId })
         assertEquals("room-beta", bundle.locations.first { it.storageId == "beta" }.location.id)
         assertEquals("https://example.test/beta", bundle.locations.first { it.storageId == "beta" }.subscriptionUrl)
         assertEquals("room-alpha-new", bundle.locations.first { it.subscriptionUrl == "https://example.test/alpha" }.location.id)
         assertEquals("beta", bundle.activeLocationId)
+    }
+
+    @Test
+    fun subscriptionUpdatesKeepDraggedOrderAndSelectedProfile() = runTest {
+        val url = "https://example.test/sub"
+        val first = "vless://first@example.test:443#First"
+        val chosen = "vless://second@example.test:443#Chosen"
+        var response = "$first\n$chosen"
+        val source = FakeLocationsDataSource()
+        val repository = LocationsRepositoryImpl(source, HttpClient(MockEngine { respond(response) }),
+            deviceIdentityProvider = StaticIdentityProvider("test-hwid"))
+        assertTrue(repository.importText(url))
+        val (firstId, chosenId) = repository.getAllLocations().map { it.storageId }
+        assertTrue(repository.importText("vless://manual@example.test:443#Manual"))
+        val manualId = repository.getAllLocations().last().storageId
+        repository.moveLocation(chosenId, firstId)
+        repository.setActiveLocationId(chosenId)
+
+        response = "$first\n${chosen.substringBefore('#')}#Renamed\nvless://new@example.test:443#New"
+        assertEquals(1, repository.refreshSubscription(url))
+        val refreshed = repository.getAllLocations()
+        assertEquals(listOf("Renamed", "First", "New", "Manual"), refreshed.map { it.displayName() })
+        assertEquals(listOf(chosenId, firstId, manualId), refreshed.filterNot { it.displayName() == "New" }.map { it.storageId })
+        assertEquals(chosenId, repository.getActiveLocationId())
+
+        assertTrue(repository.importText(url))
+        assertEquals(refreshed.map { it.storageId }, repository.getAllLocations().map { it.storageId })
+        assertEquals(chosenId, repository.getActiveLocationId())
+    }
+
+    @Test
+    fun subscriptionPublisherIdKeepsActiveProfileOnKeyRotation() = runTest {
+        val url = "https://example.test/sub"
+        fun bundle(vararg entries: LocationEntry) = kotlinx.serialization.json.Json.encodeToString(
+            LocationBundleV4.serializer(), LocationBundleV4(locations = entries.toList())
+        )
+        fun profile(id: String, config: String) = LocationEntry.fromProfile(
+            storageId = id,
+            profile = VpnProfileConfig(type = "vless", uri = "vless://$config@example.test:443#$id")
+        )
+        val other = profile("other", "unchanged")
+        var response = bundle(profile("chosen", "old"), other)
+        val repository = LocationsRepositoryImpl(FakeLocationsDataSource(), HttpClient(MockEngine { respond(response) }),
+            deviceIdentityProvider = StaticIdentityProvider("test-hwid"))
+        assertTrue(repository.importText(url))
+        val chosenId = assertNotNull(repository.getActiveLocationId())
+
+        response = bundle(other, profile("chosen", "rotated"))
+        assertEquals(1, repository.refreshSubscription(url))
+        assertEquals(listOf("chosen", "other"), repository.getAllLocations().map { it.displayName() })
+        assertEquals(chosenId, repository.getActiveLocationId())
+        assertEquals("vless://rotated@example.test:443#chosen", repository.getActiveLocation()?.profile?.uri)
     }
 
     @Test

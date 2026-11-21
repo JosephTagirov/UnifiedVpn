@@ -516,7 +516,9 @@ data class LocationMetadata(
     val ip: String? = null,
     val comment: String? = null,
     val mimo: String? = null,
-    val subscription: SubscriptionMetadata? = null
+    val subscription: SubscriptionMetadata? = null,
+    @SerialName("subscription_profile_id")
+    val subscriptionProfileId: String? = null
 ) {
     fun normalized(): LocationMetadata {
         val normalizedSubscription = subscription
@@ -531,7 +533,8 @@ data class LocationMetadata(
             ip = ip.cleanMetadataValue(),
             comment = comment.cleanMetadataValue(),
             mimo = mimo.cleanMetadataValue(),
-            subscription = normalizedSubscription
+            subscription = normalizedSubscription,
+            subscriptionProfileId = subscriptionProfileId.cleanMetadataValue()?.takeIf { it.length <= 128 }
         )
     }
 
@@ -544,6 +547,7 @@ data class LocationMetadata(
                 ip.isNullOrBlank() &&
                 comment.isNullOrBlank() &&
                 mimo.isNullOrBlank() &&
+                subscriptionProfileId.isNullOrBlank() &&
                 (subscription == null || subscription.isEmpty())
     }
 }

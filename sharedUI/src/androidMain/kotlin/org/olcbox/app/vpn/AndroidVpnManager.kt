@@ -3,6 +3,7 @@ package org.olcbox.app.vpn
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
@@ -22,6 +23,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.datasource.LocationsDataSourceImpl
 import org.olcbox.app.data.identity.PersistentDeviceIdentityProvider
@@ -353,6 +355,28 @@ class AndroidVpnManager(private val context: Context) : VpnManager {
             deviceId = deviceIdentityProvider.hwid()
         )
     }
+
+    override val supportsAutoSpeed: Boolean get() = true
+    override val adBlockingUnavailable: StateFlow<Boolean> get() = OlcboxVpnState.adBlockingUnavailable
+
+    override suspend fun autoSpeedConnection(): Any? {
+        val session = OlcboxVpnState.connectedLatencySession() ?: return null
+        val network = appContext.getSystemService(ConnectivityManager::class.java)?.activeNetwork
+            ?: return null
+        return session to network
+    }
+
+    override suspend fun measureProfileSpeed(entry: LocationEntry, isCurrent: Boolean): Long? {
+        if (isCurrent) {
+            val session = OlcboxVpnState.connectedLatencySession()
+                ?.takeIf { it.matches(entry.profile, entry.location) } ?: return null
+            return ProfileThroughput.measure(session.proxy)
+        }
+        ExternalAwgGuard.requireNotConnected(entry.profile)
+        return AndroidProfileLatency.throughput(appContext, entry.location, entry.profile)
+    }
+
+    override fun logAutoSpeedSwitch(message: String) = OlcboxVpnState.addLog(message)
 
     override fun subscriptionFetchProxy(): SubscriptionFetchProxy? {
         return OlcboxVpnState.connectedProxy()

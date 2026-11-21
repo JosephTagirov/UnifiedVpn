@@ -26,6 +26,7 @@ import org.olcbox.app.data.logging.diagnosticOlcRtcRoomReference
 import org.olcbox.app.data.logging.sanitizeDiagnosticLogLine
 import org.olcbox.app.data.logging.sanitizeOlcRtcDiagnosticOutput
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.OpenFluxProfileConfig
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.LocationsRepository
@@ -60,6 +61,7 @@ import java.io.IOException
 import java.net.InetAddress
 import java.net.Inet4Address
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.Socket
 import java.nio.file.Files
 import java.nio.file.Path
@@ -110,6 +112,8 @@ class DesktopVpnManager internal constructor(
     private var processWatchJob: Job? = null
     private var adBlockingWatchJob: Job? = null
     private var adBlockingProxy: DesktopAdBlockingProxy? = null
+    private val _adBlockingUnavailable = MutableStateFlow(false)
+    override val adBlockingUnavailable: StateFlow<Boolean> = _adBlockingUnavailable.asStateFlow()
     private var routedAwgProcess: DesktopRoutedAwgProcess? = null
     private var routedAwgWatchJob: Job? = null
     private var entryFailoverProcess: DesktopEntryFailoverProcess? = null
@@ -200,6 +204,34 @@ class DesktopVpnManager internal constructor(
         )
     }
 
+    override val supportsAutoSpeed: Boolean get() = DesktopPaths.os == DesktopOs.Windows && !probeOnly
+
+    override suspend fun autoSpeedConnection(): Any? {
+        if (_status.value != VpnStatus.Connected || _activeRoutingMode.value == DesktopRoutingMode.Tun) return null
+        val session = connectedLatencySession ?: return null
+        val networks = withContext(Dispatchers.IO) {
+            NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                .filter { it.isUp && !it.isLoopback }
+                .associate { network -> network.index to network.inetAddresses.toList().map { it.hostAddress }.toSet() }
+        }
+        return (session to networks).takeIf { networks.isNotEmpty() }
+    }
+
+    override suspend fun measureProfileSpeed(entry: LocationEntry, isCurrent: Boolean): Long? {
+        if (isCurrent) {
+            val session = connectedLatencySession
+                ?.takeIf { _status.value == VpnStatus.Connected && it.matches(entry.profile, entry.location) }
+                ?: return null
+            return ProfileThroughput.measure(session.proxy)
+        }
+        // A probe's remote endpoints can be captured by the Windows TUN routes.
+        if (_activeRoutingMode.value == DesktopRoutingMode.Tun) return null
+        ExternalAwgGuard.requireNotConnected(entry.profile)
+        return DesktopProfileLatency.throughput(locationsRepository, entry.location, entry.profile)
+    }
+
+    override fun logAutoSpeedSwitch(message: String) = addLog(message)
+
     override fun subscriptionFetchProxy(): SubscriptionFetchProxy? {
         val currentStatus = status.value
         if (currentStatus !is VpnStatus.Connected &&
@@ -256,7 +288,12 @@ class DesktopVpnManager internal constructor(
         }
     }
 
-    private suspend fun startDesktopMode(requestGeneration: Long, isRestart: Boolean) {
+    private suspend fun startDesktopMode(
+        requestGeneration: Long,
+        isRestart: Boolean,
+        suppressAdBlocking: Boolean = false
+    ) {
+        _adBlockingUnavailable.value = suppressAdBlocking
         connectedLatencySession = null
         openFluxPingTunnel = null
         setStatus(if (isRestart) VpnStatus.Reconnecting else VpnStatus.Connecting)
@@ -335,7 +372,7 @@ class DesktopVpnManager internal constructor(
             )
             val socksSettings = configuredSocksSettings.copy(port = selectedSocksPort)
             activeSocksProxySettings = socksSettings
-            val filtering = socksSettings.blockAds
+            val filtering = socksSettings.blockAds && !suppressAdBlocking
             val engineSocksSettings = if (filtering) socksSettings.copy(
                 host = "127.0.0.1",
                 port = LocalPortAllocator.select("127.0.0.1", if (selectedSocksPort < 65535) selectedSocksPort + 1 else 10809,
@@ -476,9 +513,25 @@ class DesktopVpnManager internal constructor(
             if (filtering) {
                 val filter = DesktopAdBlockingProxy()
                 adBlockingProxy = filter
-                filter.start(socksSettings, engineSocksSettings,
-                    preserveUpstreamDns = isAmneziaProfile || profile.normalizedType == VpnProfileConfig.TYPE_VLESS)
-                addLog("Ad blocking enabled (local domain filter)")
+                val startedFiltering = try {
+                    filter.start(socksSettings, engineSocksSettings,
+                        preserveUpstreamDns = isAmneziaProfile || profile.normalizedType == VpnProfileConfig.TYPE_VLESS)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    addLog("Ad blocking bridge startup failed (${failure.javaClass.simpleName}); retrying the same VPN profile")
+                    stopDesktopMode(finalStatus = false)
+                    currentCoroutineContext().ensureActive()
+                    if (requestGeneration != generation) return
+                    if (locationsRepository.getActiveLocationId() != active.storageId) {
+                        setStatus(VpnStatus.Disconnected)
+                        return
+                    }
+                    return startDesktopMode(requestGeneration, isRestart = true, suppressAdBlocking = true)
+                }
+                _adBlockingUnavailable.value = !startedFiltering
+                addLog(if (startedFiltering) "Ad blocking enabled (local domain filter)"
+                    else "Ad blocking is unavailable for this connection; VPN routing is preserved")
                 val filterProcess = filter.process ?: error("Ad blocking filter is missing")
                 adBlockingWatchJob = scope.launch {
                     val exit = waitForProcessExit(filterProcess) ?: return@launch
@@ -486,8 +539,8 @@ class DesktopVpnManager internal constructor(
                     scope.launch {
                         mutex.withLock {
                             if (requestGeneration == generation && adBlockingProxy === filter) {
-                                handleUnexpectedProcessExit("Ad blocking filter stopped ($exit)",
-                                    "Ad blocking filter stopped", requestGeneration)
+                                handleUnexpectedProcessExit("Ad blocking bridge stopped ($exit)",
+                                    "Ad blocking bridge stopped", requestGeneration)
                             }
                         }
                     }

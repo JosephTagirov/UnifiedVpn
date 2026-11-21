@@ -80,6 +80,22 @@ class HomeSubscriptionRefreshTest {
         }
     }
 
+    @Test fun removedActiveProfileDoesNotConnectToTheReplacement() = runTest {
+        withHome { f ->
+            f.refresh = {
+                f.repository.saveBundle(LocationBundleV4(locations = listOf(profile("replacement"))))
+                1
+            }
+            f.home.refreshSubscriptions()
+            runCurrent()
+            assertEquals("replacement", f.home.state.value.selectedLocation?.storageId)
+            assertEquals(1, f.vpn.stopCalls)
+            assertEquals(0, f.vpn.startCalls)
+            assertEquals("Subscription removed the selected profile. Choose a profile to connect.",
+                f.home.state.value.subscriptionRefreshMessage)
+        }
+    }
+
     @Test fun failedFetchKeepsProfilesAndExplainsTheFailure() = runTest {
         withHome { f ->
             f.refresh = { 0 }

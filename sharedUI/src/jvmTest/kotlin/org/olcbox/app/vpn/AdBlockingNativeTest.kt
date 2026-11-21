@@ -10,6 +10,18 @@ import kotlin.concurrent.thread
 import kotlin.test.*
 
 class AdBlockingNativeTest {
+    @Test fun brokenCachedListIsReplacedByThePackagedList() = runBlocking {
+        val directory = Files.createTempDirectory("adblock-cache-").toFile()
+        try {
+            val installed = AdBlockingRules.install(directory)
+            val packaged = installed.readBytes()
+            installed.writeText("invalid cached data")
+            assertContentEquals(packaged, AdBlockingRules.install(directory).readBytes())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test fun preferencesMigrateToEnabledAndPersistAnOptOut() = runBlocking {
         val dir = Files.createTempDirectory("adblock-settings-")
         val path = dir.resolve("settings.json")

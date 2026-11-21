@@ -7,18 +7,25 @@ internal object AdBlockingConfig {
     const val INBOUND = "tun-bridge-in"
     const val UPSTREAM = "tun-upstream"
     const val RULES = "ads"
+    const val UNAVAILABLE_WARNING = "Ad blocking is unavailable for this connection"
+
+    fun localProbeHost(listenHost: String): String = when (listenHost) {
+        "0.0.0.0" -> "127.0.0.1"
+        "::", "[::]" -> "::1"
+        else -> listenHost.removeSurrounding("[", "]")
+    }
 
     fun build(
         listenHost: String, listenPort: Int, username: String, password: String,
-        upstreamHost: String, upstreamPort: Int, rulesPath: String,
+        upstreamHost: String, upstreamPort: Int, rulesPath: String?,
         upstreamUsername: String = username, upstreamPassword: String = password,
         preserveUpstreamDns: Boolean = false
     ): String {
         require(listenPort in 1..65535 && upstreamPort in 1..65535 && listenPort != upstreamPort)
-        require(rulesPath.isNotBlank())
+        require(rulesPath == null || rulesPath.isNotBlank())
         val inbound = buildJsonObject {
             put("type", "socks"); put("tag", INBOUND)
-            put("listen", listenHost); put("listen_port", listenPort)
+            put("listen", listenHost.removeSurrounding("[", "]")); put("listen_port", listenPort)
             if (username.isNotBlank()) putJsonArray("users") { addJsonObject {
                 put("username", username); put("password", password)
             } }
@@ -47,19 +54,21 @@ internal object AdBlockingConfig {
                         putJsonObject("tls") { put("enabled", true); put("server_name", "dns.google") }
                     }
                 } }
-                putJsonArray("rules") { addJsonObject {
+                if (rulesPath != null) putJsonArray("rules") { addJsonObject {
                     put("rule_set", RULES); put("action", "predefined"); put("rcode", "NXDOMAIN")
                 } }
                 put("final", "tun-dns"); put("strategy", if (preserveUpstreamDns) "prefer_ipv4" else "ipv4_only"); put("reverse_mapping", true)
             }
             putJsonObject("route") {
-                putJsonArray("rule_set") { addJsonObject {
+                if (rulesPath != null) putJsonArray("rule_set") { addJsonObject {
                     put("type", "local"); put("tag", RULES); put("format", "source"); put("path", rulesPath)
                 } }
                 putJsonArray("rules") {
                     addJsonObject { put("inbound", INBOUND); put("port", 53); put("action", "hijack-dns") }
-                    addJsonObject { put("action", "sniff"); put("timeout", "300ms") }
-                    addJsonObject { put("rule_set", RULES); put("action", "reject"); put("no_drop", true) }
+                    if (rulesPath != null) {
+                        addJsonObject { put("action", "sniff"); put("timeout", "300ms") }
+                        addJsonObject { put("rule_set", RULES); put("action", "reject"); put("no_drop", true) }
+                    }
                 }
                 put("final", UPSTREAM)
             }

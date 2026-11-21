@@ -212,6 +212,9 @@
     "domain:rosseti.ru",
     "domain:rosagroleasing.ru",
     "domain:yastatic.net",
+    "domain:cdn.yandex.net",
+    "full:ipv4-internet.yandex.net",
+    "full:ipv6-internet.yandex.net",
     "domain:maps.yandex.net",
     "full:api.routing.yandex.net",
     "full:captcha-backgrounds.s3.yandex.net",
@@ -3090,6 +3093,36 @@
         "primary-dependency-1"
       ],
       "official_service_url": "https://yandex.ru/support/taxi-distr/ru/api/widgets-about"
+    },
+    {
+      "rule": "domain:cdn.yandex.net",
+      "service": "Yandex Internetometer measurement CDN",
+      "category": "service-dependency",
+      "basis": "official-documentation-or-exact-primary-page-host",
+      "sources": [
+        "internetometer-methodology"
+      ],
+      "official_service_url": "https://yandex.ru/support2/internet/ru/methodology"
+    },
+    {
+      "rule": "full:ipv4-internet.yandex.net",
+      "service": "Yandex Internetometer IPv4 check",
+      "category": "service-dependency",
+      "basis": "official-documentation-or-exact-primary-page-host",
+      "sources": [
+        "internetometer-public-page"
+      ],
+      "official_service_url": "https://yandex.ru/internet/"
+    },
+    {
+      "rule": "full:ipv6-internet.yandex.net",
+      "service": "Yandex Internetometer IPv6 check",
+      "category": "service-dependency",
+      "basis": "official-documentation-or-exact-primary-page-host",
+      "sources": [
+        "internetometer-public-page"
+      ],
+      "official_service_url": "https://yandex.ru/internet/"
     },
     {
       "rule": "domain:maps.yandex.net",
@@ -18402,12 +18435,26 @@
       "checked_at": "2026-11-14",
       "kind": "primary-http-observation",
       "evidence_file": "media-foreign-ip-comparison.json"
+    },
+    {
+      "id": "internetometer-methodology",
+      "url": "https://yandex.ru/support2/internet/ru/methodology",
+      "title": "Yandex Internetometer selects measurement servers in the Yandex CDN",
+      "checked_at": "2026-11-21",
+      "kind": "service-official"
+    },
+    {
+      "id": "internetometer-public-page",
+      "url": "https://yandex.ru/internet/",
+      "title": "Internetometer runtime configuration names its IPv4 and IPv6 checks",
+      "checked_at": "2026-11-21",
+      "kind": "service-official"
     }
   ],
   "coverage": {
     "existing_precise_rules_preserved": 28,
-    "effective_rule_count": 869,
-    "provenance_rule_count": 1270,
+    "effective_rule_count": 872,
+    "provenance_rule_count": 1273,
     "service_families": 549,
     "operator_internal_endpoint_inventory_available": false,
     "active_banks": 301,

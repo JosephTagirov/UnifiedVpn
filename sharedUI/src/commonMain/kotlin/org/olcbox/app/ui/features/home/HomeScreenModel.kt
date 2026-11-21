@@ -6,9 +6,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
@@ -27,8 +30,12 @@ import org.olcbox.app.data.repository.LocationImportResult
 import org.olcbox.app.data.repository.LocationsRepository
 import org.olcbox.app.data.share.FriendAccessPackageCodec
 import org.olcbox.app.ui.features.locations.LocationItem
+import org.olcbox.app.vpn.AutoProfileSpeed
 import org.olcbox.app.vpn.VpnManager
 import org.olcbox.app.vpn.VpnStatus
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
+import kotlin.time.Duration.Companion.minutes
 
 class HomeScreenViewModel(
     private val vpnManager: VpnManager,
@@ -53,11 +60,23 @@ class HomeScreenViewModel(
     private val subscriptionRefreshWake = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     private val subscriptionRefreshMutex = Mutex()
     private var loadCurrentConfigRequest = 0L
+    private var homeScreenResumed = false
+    private var autoSpeedJob: Job? = null
+    private var autoSpeedProfileId: String? = null
+    private var lastSpeedCandidateId: String? = null
+    private var lastSpeedSwitch: TimeMark? = null
     val state get() = _state.asStateFlow()
     val logs get() = vpnManager.logs
+    val supportsAutoSpeed get() = vpnManager.supportsAutoSpeed
 
     init {
         startSubscriptionAutoRefresh()
+
+        vpnManager.adBlockingUnavailable?.let { warning ->
+            viewModelScope.launch {
+                warning.collect { unavailable -> _state.update { it.copy(adBlockingUnavailable = unavailable) } }
+            }
+        }
 
         viewModelScope.launch {
             locationsRepository.changes
@@ -146,6 +165,100 @@ class HomeScreenViewModel(
         return vpnManager.ping(config, profile)
     }
 
+    fun setAutoSpeedEnabled(enabled: Boolean) {
+        if (enabled == _state.value.autoSpeedEnabled || !supportsAutoSpeed) return
+        autoSpeedProfileId = _state.value.selectedLocation?.storageId
+        lastSpeedCandidateId = null
+        _state.update { it.copy(autoSpeedEnabled = enabled, autoSpeedMessage = null) }
+        updateAutoSpeedJob()
+    }
+
+    fun setHomeScreenResumed(resumed: Boolean) {
+        homeScreenResumed = resumed
+        updateAutoSpeedJob()
+    }
+
+    private fun updateAutoSpeedJob() {
+        if (!homeScreenResumed || !_state.value.autoSpeedEnabled) {
+            autoSpeedJob?.cancel()
+            autoSpeedJob = null
+            return
+        }
+        if (autoSpeedJob?.isActive == true) return
+        autoSpeedJob = viewModelScope.launch {
+            vpnManager.status.collectLatest { status ->
+                if (status != VpnStatus.Connected) return@collectLatest
+                while (true) {
+                    val waitAfterSwitch = lastSpeedSwitch?.let { 10.minutes - it.elapsedNow() }
+                    if (waitAfterSwitch != null && waitAfterSwitch.isPositive()) delay(waitAfterSwitch)
+                    try {
+                        compareProfileSpeeds()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        _state.update { it.copy(autoSpeedMessage = "Speed comparison is unavailable for this connection") }
+                    }
+                    delay(5.minutes)
+                }
+            }
+        }
+    }
+
+    private suspend fun compareProfileSpeeds() {
+        val revision = locationsRepository.changes.value
+        val bundle = locationsRepository.getBundle()
+        val active = bundle.locations.firstOrNull { it.storageId == bundle.activeLocationId } ?: return
+        if (autoSpeedProfileId != null && autoSpeedProfileId != active.storageId) {
+            // A manual selection can also come from Android's notification.
+            setAutoSpeedEnabled(false)
+            return
+        }
+        autoSpeedProfileId = active.storageId
+        val candidate = AutoProfileSpeed.nextCandidate(active, bundle.locations, lastSpeedCandidateId) ?: return
+        val connection = vpnManager.autoSpeedConnection()
+        if (connection == null) {
+            _state.update { it.copy(autoSpeedMessage = "Speed comparison is unavailable for this connection") }
+            return
+        }
+
+        lastSpeedCandidateId = candidate.storageId
+        _state.update { it.copy(autoSpeedMessage = null) }
+        val measurement = AutoProfileSpeed.confirmImprovement(
+            measureCurrent = { vpnManager.measureProfileSpeed(active, isCurrent = true) },
+            measureCandidate = { vpnManager.measureProfileSpeed(candidate, isCurrent = false) },
+            sameConnection = { vpnManager.autoSpeedConnection() == connection }
+        ) ?: return
+        if (!speedSwitchStillAllowed()) return
+        withContext(NonCancellable) {
+            val selectedAtRevision =
+                locationsRepository.compareAndSetActiveLocationId(revision, candidate.storageId) ?: return@withContext
+            try {
+                if (vpnManager.autoSpeedConnection() != connection ||
+                    !speedSwitchStillAllowed() || locationsRepository.changes.value != selectedAtRevision
+                ) {
+                    locationsRepository.compareAndSetActiveLocationId(selectedAtRevision, active.storageId)
+                    return@withContext
+                }
+                vpnManager.startVpn()
+            } catch (error: Exception) {
+                locationsRepository.compareAndSetActiveLocationId(selectedAtRevision, active.storageId)
+                throw error
+            }
+            autoSpeedProfileId = candidate.storageId
+            lastSpeedSwitch = TimeSource.Monotonic.markNow()
+            _state.update { it.copy(autoSpeedMessage = "Connecting to a faster profile") }
+            vpnManager.logAutoSpeedSwitch(
+                "Auto speed selected ${candidate.storageId} in place of ${active.storageId} " +
+                    "after two HTTPS download comparisons " +
+                    "(${measurement.currentBitsPerSecond / 1_000} to ${measurement.candidateBitsPerSecond / 1_000} kbit/s)"
+            )
+        }
+    }
+
+    private fun speedSwitchStillAllowed(): Boolean =
+        homeScreenResumed && _state.value.autoSpeedEnabled &&
+            !_state.value.isVpnLoading && vpnManager.status.value == VpnStatus.Connected
+
     suspend fun checkConnectionFor(config: LocationConfig): Long? {
         return vpnManager.checkConnection(config)
     }
@@ -196,12 +309,13 @@ class HomeScreenViewModel(
         return vpnManager.status.value.shouldRestartAfterProfileSelection()
     }
 
-    fun restartVpnIfRunning(force: Boolean = false) {
+    fun restartVpnIfRunning(force: Boolean = false, expectedLocationId: String? = null) {
         if (!force && !vpnManager.status.value.shouldRestartAfterProfileSelection()) return
 
         viewModelScope.launch {
-            _state.update { it.copy(isVpnLoading = true) }
             val active = locationsRepository.getActiveLocation()
+            if (expectedLocationId != null && active?.storageId != expectedLocationId) return@launch
+            _state.update { it.copy(isVpnLoading = true) }
             if (active == null || !active.isComplete()) {
                 vpnManager.stopVpn()
                 loadCurrentConfigNow()
@@ -431,13 +545,12 @@ class HomeScreenViewModel(
                         locationsRepository.refreshSubscription(subscriptionUrl, vpnManager.subscriptionFetchProxy())
                     }
                     loadCurrentConfigNow()
-                    if (updatedCount > 0 && subscriptionRefreshChangesActiveProfile(before, locationsRepository.getActiveLocation())) {
-                        restartVpnIfRunning()
-                    }
+                    val activeWasRemoved = updatedCount > 0 && applySubscriptionProfileChange(before)
                     val failed = updatedCount < requestedCount
                     val message = when {
                         requestedCount == 0 -> "No subscriptions to update"
                         updatedCount == 0 -> "Could not update subscriptions. Saved profiles were kept."
+                        activeWasRemoved -> SUBSCRIPTION_REMOVED_ACTIVE_PROFILE
                         failed -> "Subscriptions updated: $updatedCount. Some subscriptions could not be refreshed."
                         else -> "Subscriptions updated: $updatedCount"
                     }
@@ -492,11 +605,26 @@ class HomeScreenViewModel(
         }
         if (updatedCount > 0) {
             loadCurrentConfigNow()
-            if (subscriptionRefreshChangesActiveProfile(before, locationsRepository.getActiveLocation())) {
-                restartVpnIfRunning()
+            if (applySubscriptionProfileChange(before)) {
+                _state.update { it.copy(subscriptionRefreshMessage = SUBSCRIPTION_REMOVED_ACTIVE_PROFILE) }
             }
         }
       }
+    }
+
+    private suspend fun applySubscriptionProfileChange(before: LocationEntry?): Boolean {
+        if (before == null) return false
+        val bundle = locationsRepository.getBundle()
+        val updated = bundle.locations.firstOrNull { it.storageId == before.storageId }
+        if (updated == null) {
+            // Removing the current entry can preselect a replacement in the picker.
+            if (vpnManager.status.value.shouldRestartAfterProfileSelection()) vpnManager.stopVpn()
+            return true
+        }
+        if (bundle.activeLocationId == before.storageId && subscriptionRefreshChangesActiveProfile(before, updated)) {
+            restartVpnIfRunning(expectedLocationId = before.storageId)
+        }
+        return false
     }
 
     private fun buildLogsExport(logs: List<String>): String = org.olcbox.app.data.logging.LogPresentation.export(logs)
@@ -515,7 +643,10 @@ data class HomeScreenState(
     val connectionError: String? = null,
     val isRefreshingSubscriptions: Boolean = false,
     val subscriptionRefreshMessage: String? = null,
-    val subscriptionRefreshFailed: Boolean = false
+    val subscriptionRefreshFailed: Boolean = false,
+    val autoSpeedEnabled: Boolean = false,
+    val autoSpeedMessage: String? = null,
+    val adBlockingUnavailable: Boolean = false
 )
 
 internal fun subscriptionRefreshChangesActiveProfile(before: LocationEntry?, after: LocationEntry?): Boolean {
@@ -531,6 +662,7 @@ internal fun subscriptionRefreshChangesActiveProfile(before: LocationEntry?, aft
 
 private const val MIN_SUBSCRIPTION_REFRESH_WAIT_MS = 1_000L
 private const val IDLE_SUBSCRIPTION_REFRESH_WAIT_MS = 24L * 60L * 60L * 1_000L
+private const val SUBSCRIPTION_REMOVED_ACTIVE_PROFILE = "Subscription removed the selected profile. Choose a profile to connect."
 
 internal fun VpnStatus.shouldRestartAfterProfileSelection(): Boolean {
     return this is VpnStatus.Connected ||

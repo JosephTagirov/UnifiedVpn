@@ -52,8 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import org.olcbox.app.data.model.parseSubscriptionRefreshIntervalMs
 import org.olcbox.app.ui.components.StartButton
 import org.olcbox.app.ui.features.home.components.AddConfigurationSheet
@@ -62,6 +61,7 @@ import org.olcbox.app.ui.features.home.components.LocationSelectorScreen
 import org.olcbox.app.ui.features.home.components.LogsSheet
 import org.olcbox.app.ui.features.home.components.RelayStatus
 import org.olcbox.app.ui.features.locations.LocationViewModel
+import org.olcbox.app.vpn.AdBlockingConfig
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,8 +108,10 @@ fun HomeScreen(
     val uriHandler = LocalUriHandler.current
     val requiresSetup = !state.canStartVpn && !state.isVpnConnected && !state.isVpnLoading
 
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+    LifecycleResumeEffect(viewModel) {
         viewModel.onForeground()
+        viewModel.setHomeScreenResumed(true)
+        onPauseOrDispose { viewModel.setHomeScreenResumed(false) }
     }
 
     val primaryActionLabel = when {
@@ -194,9 +196,29 @@ fun HomeScreen(
                 }
             )
 
+            if (viewModel.supportsAutoSpeed && locations.size > 1) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = state.autoSpeedEnabled,
+                        onCheckedChange = viewModel::setAutoSpeedEnabled
+                    )
+                    Text("Auto by speed")
+                }
+                state.autoSpeedMessage?.let { message ->
+                    Text(message, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
             state.connectionError?.let { message ->
                 Text(message, color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.fillMaxWidth().padding(top = 12.dp))
+            }
+            if (state.isVpnConnected && state.adBlockingUnavailable) {
+                Text(
+                    AdBlockingConfig.UNAVAILABLE_WARNING,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp)
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -241,6 +263,7 @@ fun HomeScreen(
                 selectedLocationId = locationViewModel.selectedLocationId,
                 pingsState = pingsState,
                 onLocationSelected = { id ->
+                    viewModel.setAutoSpeedEnabled(false)
                     val restartAfterSelection = viewModel.shouldRestartVpnAfterProfileSelection()
                     locationViewModel.selectLocation(id) {
                         viewModel.loadCurrentConfig {

@@ -10,10 +10,23 @@ import org.olcbox.app.data.model.LocationConfig
 import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.LocationsRepository
+import org.olcbox.app.data.repository.SubscriptionFetchProxy
 import java.net.ServerSocket
 
 internal object DesktopProfileLatency {
-    suspend fun ping(repository: LocationsRepository, location: LocationConfig, profile: VpnProfileConfig): Long? = ProfileLatency.isolated {
+    suspend fun ping(repository: LocationsRepository, location: LocationConfig, profile: VpnProfileConfig): Long? =
+        withIsolatedProxy(repository, location, profile, 95_000L) { proxy -> ProfileLatency.measure(proxy) }
+
+    suspend fun throughput(repository: LocationsRepository, location: LocationConfig, profile: VpnProfileConfig): Long? =
+        withIsolatedProxy(repository, location, profile, 35_000L, ProfileThroughput::measure)
+
+    private suspend fun <T> withIsolatedProxy(
+        repository: LocationsRepository,
+        location: LocationConfig,
+        profile: VpnProfileConfig,
+        timeoutMs: Long,
+        probe: suspend (SubscriptionFetchProxy) -> T?
+    ): T? = ProfileLatency.isolated {
         withContext(Dispatchers.IO) {
             val entries = repository.getAllLocations()
             val entry = entries.firstOrNull { ProfileLatencySession(it.profile,it.location,org.olcbox.app.data.repository.SubscriptionFetchProxy("127.0.0.1",1)).matches(profile,location) }
@@ -26,12 +39,12 @@ internal object DesktopProfileLatency {
             manager.updateSocksProxySettings(DesktopSocksProxySettings(host="127.0.0.1",port=ServerSocket(0).use { it.localPort },
                 username="",password="",blockAds=false,routingMode=DesktopRoutingMode.LocalSocks,externalRoutingMode=DesktopRoutingMode.LocalSocks))
             try {
-                withTimeoutOrNull(95_000) {
+                withTimeoutOrNull(timeoutMs) {
                     manager.startVpn()
                     val state=manager.status.first { it is VpnStatus.Connected || it is VpnStatus.Error }
                     if(state !is VpnStatus.Connected) return@withTimeoutOrNull null
                     val proxy=manager.subscriptionFetchProxy() ?: return@withTimeoutOrNull null
-                    ProfileLatency.measure(proxy)
+                    probe(proxy)
                 }
             } catch(cancel: CancellationException) { throw cancel }
               catch(_: Exception) { null }

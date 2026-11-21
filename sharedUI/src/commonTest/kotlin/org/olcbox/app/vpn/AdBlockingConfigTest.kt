@@ -30,4 +30,28 @@ class AdBlockingConfigTest {
     @Test fun rejectsRecursiveSocksConfiguration() {
         assertFailsWith<IllegalArgumentException> { AdBlockingConfig.build("127.0.0.1", 10808,"","","127.0.0.1",10808,"ads.json") }
     }
+
+    @Test fun filterStartupFallbackKeepsTheSameTunnelAndDnsWithoutAdRules() {
+        val filtered = config(true)
+        val fallback = Json.parseToJsonElement(AdBlockingConfig.build(
+            "127.0.0.1", 10808, "u", "p", "127.0.0.1", 10809, null,
+            preserveUpstreamDns = true
+        )).jsonObject
+
+        assertEquals(filtered["inbounds"], fallback["inbounds"])
+        assertEquals(filtered["outbounds"], fallback["outbounds"])
+        assertEquals(filtered.getValue("dns").jsonObject.filterKeys { it != "rules" },
+            fallback.getValue("dns").jsonObject.toMap())
+        val route = fallback.getValue("route").jsonObject
+        assertEquals(AdBlockingConfig.UPSTREAM, route.getValue("final").jsonPrimitive.content)
+        assertNull(route["rule_set"])
+        assertEquals("hijack-dns", route.getValue("rules").jsonArray.single().jsonObject.getValue("action").jsonPrimitive.content)
+    }
+
+    @Test fun readinessUsesTheBoundAddressFamilyAndExplicitListenHost() {
+        assertEquals("127.0.0.1", AdBlockingConfig.localProbeHost("0.0.0.0"))
+        assertEquals("::1", AdBlockingConfig.localProbeHost("::"))
+        assertEquals("::1", AdBlockingConfig.localProbeHost("[::]"))
+        assertEquals("192.0.2.1", AdBlockingConfig.localProbeHost("192.0.2.1"))
+    }
 }

@@ -294,35 +294,10 @@ class LocationsRepositoryImpl(
             .filterKeys { url -> onlyUrls == null || url in onlyUrls }
         if (groupedByUrl.isEmpty()) return 0
 
-        val targetUrls = groupedByUrl.keys
-        val refreshedLocations = bundle.locations
-            .filter { entry ->
-                val url = entry.subscriptionUrl?.trim()?.takeIf { it.isNotBlank() }
-                url == null || (onlyUrls != null && url !in targetUrls)
-            }
-            .toMutableList()
-        val usedStorageIds = refreshedLocations.mapTo(mutableSetOf()) { it.storageId }
-        val activeBefore = bundle.activeLocationId
-        var activeAfter = activeBefore
+        var updatedBundle = bundle
         var successfulRefreshes = 0
-        var attemptedRefreshes = 0
-
-        fun preservePreviousEntries(entries: List<LocationEntry>, failedAtEpochMs: Long? = null) {
-            entries.forEach { entry ->
-                if (usedStorageIds.add(entry.storageId)) {
-                    refreshedLocations += if (failedAtEpochMs == null) {
-                        entry
-                    } else {
-                        entry.copy(
-                            metadata = entry.metadata.withSubscriptionRefreshFailure(failedAtEpochMs)
-                        ).normalized()
-                    }
-                }
-            }
-        }
 
         groupedByUrl.forEach { (url, previousEntries) ->
-            attemptedRefreshes += 1
             val refreshTimestamp = nowEpochMs()
             val previousInterval = previousEntries.subscriptionUpdateIntervalMs()
             val allowInsecureRequests = previousEntries.any {
@@ -334,75 +309,39 @@ class LocationsRepositoryImpl(
                 fallbackSubscriptionInterval = previousInterval,
                 subscriptionProxy = subscriptionProxy,
                 allowInsecureRequests = allowInsecureRequests
-            ) ?: run {
-                preservePreviousEntries(previousEntries, refreshTimestamp)
+            )
+            val refreshed = resolved?.parsed?.bundle?.locations.orEmpty()
+            if (resolved == null || refreshed.isEmpty()) {
+                updatedBundle = updatedBundle.copy(locations = updatedBundle.locations.map { entry ->
+                    if (entry.subscriptionUrl?.trim() == url) {
+                        entry.copy(metadata = entry.metadata.withSubscriptionRefreshFailure(refreshTimestamp))
+                    } else entry
+                })
                 return@forEach
             }
-            val source = resolved.source
-            val refreshed = resolved.parsed.bundle.locations
-            val updateInterval = source.updateIntervalMs
+            val updateInterval = resolved.source.updateIntervalMs
                 ?: refreshed.firstNotNullOfOrNull {
                     it.metadata?.subscription?.updateIntervalMs
                 }
                 ?: previousInterval
                 ?: SubscriptionMetadata.DEFAULT_UPDATE_INTERVAL_MS
-            val manualInterval = previousEntries.firstNotNullOfOrNull {
-                it.metadata?.subscription?.manualUpdateIntervalMs
-            }
-            if (refreshed.isEmpty()) {
-                preservePreviousEntries(previousEntries, refreshTimestamp)
-                return@forEach
-            }
-
-            val reusedBySignature = previousEntries
-                .groupBy { subscriptionSignature(it) }
-                .mapValues { (_, entries) -> entries.toMutableList() }
-
-            val reassigned = refreshed.mapIndexed { index, entry ->
-                val signature = subscriptionSignature(entry)
-                val reusedPool = reusedBySignature[signature]
-                val reusedEntry = if (reusedPool.isNullOrEmpty()) null else reusedPool.removeAt(0)
-                val storageId = reusedEntry?.storageId ?: uniqueStorageId(
-                    base = "imported_${entry.location.storageSlug().ifBlank { "location_${index + 1}" }}",
-                    used = usedStorageIds
-                )
-                if (activeBefore == reusedEntry?.storageId) {
-                    activeAfter = storageId
-                }
+            val withRefreshState = refreshed.mapIndexed { index, entry ->
                 entry.copy(
-                    storageId = storageId,
-                    subscriptionUrl = url,
-                    dnsServer = entry.location.dnsServer
-                        .ifBlank { reusedEntry?.location?.dnsServer.orEmpty() }
-                        .takeIf { it.isNotBlank() },
+                    storageId = "imported_${entry.location.storageSlug().ifBlank { "location_${index + 1}" }}",
                     metadata = entry.metadata.withSubscriptionRefreshState(
                         updateIntervalMs = updateInterval,
-                        manualUpdateIntervalMs = manualInterval,
+                        manualUpdateIntervalMs = null,
                         lastRefreshAttemptAtEpochMs = refreshTimestamp,
                         lastRefreshAtEpochMs = refreshTimestamp,
                         consecutiveRefreshFailures = 0
                     )
-                ).normalized()
+                )
             }
-
-            if (activeBefore != null &&
-                activeAfter == activeBefore &&
-                previousEntries.any { it.storageId == activeBefore }
-            ) {
-                activeAfter = reassigned.firstOrNull()?.storageId
-            }
-            refreshedLocations += reassigned
+            updatedBundle = mergeSubscriptionLocations(updatedBundle, url, withRefreshState)
             successfulRefreshes += 1
         }
 
-        if (attemptedRefreshes == 0) return 0
-
-        saveBundleUnlocked(
-            bundle.copy(
-                activeLocationId = activeAfter,
-                locations = refreshedLocations
-            )
-        )
+        saveBundleUnlocked(updatedBundle)
         return successfulRefreshes
     }
 
@@ -1330,61 +1269,102 @@ class LocationsRepositoryImpl(
     ): LocationBundleV4 {
         val normalizedUrl = subscriptionUrl.trim()
         val currentBundle = current.normalized()
-        val previousEntries = currentBundle.locations.filter {
-            it.subscriptionUrl?.trim() == normalizedUrl
-        }
-        if (previousEntries.isEmpty()) {
+        if (currentBundle.locations.none { it.subscriptionUrl?.trim() == normalizedUrl }) {
             return mergeImportedBundle(
                 current = currentBundle,
                 imported = imported,
                 replaceMatchingStorageIds = false
             )
         }
+        return mergeSubscriptionLocations(currentBundle, normalizedUrl, imported.locations)
+    }
 
-        val remainingEntries = currentBundle.locations.filterNot {
-            it.subscriptionUrl?.trim() == normalizedUrl
+    private fun mergeSubscriptionLocations(
+        current: LocationBundleV4,
+        subscriptionUrl: String,
+        incoming: List<LocationEntry>
+    ): LocationBundleV4 {
+        val previousEntries = current.locations.filter {
+            it.subscriptionUrl?.trim() == subscriptionUrl
         }
-        val usedStorageIds = remainingEntries.mapTo(mutableSetOf()) { it.storageId }
-        val previousBySignature = previousEntries
-            .groupBy(::subscriptionSignature)
+        val usedStorageIds = current.locations.mapTo(mutableSetOf()) { it.storageId }
+        val previousByPublisherId = previousEntries.groupBy { it.metadata?.subscriptionProfileId }
+        val incomingByPublisherId = incoming.groupBy { it.metadata?.subscriptionProfileId }
+        val matches = incoming.map { entry ->
+            val id = entry.metadata?.subscriptionProfileId
+            id?.takeIf { incomingByPublisherId[it]?.size == 1 }
+                ?.let { previousByPublisherId[it]?.singleOrNull() }
+                ?.takeIf { it.profile.normalizedType == entry.profile.normalizedType }
+        }.toMutableList()
+        val matchedIds = matches.mapNotNullTo(mutableSetOf()) { it?.storageId }
+        val previousBySignature = previousEntries.filterNot { it.storageId in matchedIds }
+            .groupBy { subscriptionSignature(it) }
             .mapValues { (_, entries) -> entries.toMutableList() }
+        fun idsAreCompatible(previous: LocationEntry, updated: LocationEntry): Boolean {
+            val previousId = previous.metadata?.subscriptionProfileId
+            val updatedId = updated.metadata?.subscriptionProfileId
+            return previousId == null || updatedId == null || previousId == updatedId
+        }
+        incoming.forEachIndexed { index, entry ->
+            if (matches[index] != null) return@forEachIndexed
+            val pool = previousBySignature[subscriptionSignature(entry)] ?: return@forEachIndexed
+            val matchIndex = pool.indexOfFirst { idsAreCompatible(it, entry) }
+            if (matchIndex >= 0) matches[index] = pool.removeAt(matchIndex)
+        }
+        val previousVless = previousBySignature.values.flatten().filter { it.profile.normalizedType == VpnProfileConfig.TYPE_VLESS }
+            .groupBy { subscriptionSignature(it, ignoreVlessName = true) }
+        val unmatchedVless = incoming.indices.filter {
+            matches[it] == null && incoming[it].profile.normalizedType == VpnProfileConfig.TYPE_VLESS
+        }
+            .groupBy { subscriptionSignature(incoming[it], ignoreVlessName = true) }
+        unmatchedVless.forEach { (signature, indexes) ->
+            val index = indexes.singleOrNull() ?: return@forEach
+            val previous = previousVless[signature]?.singleOrNull() ?: return@forEach
+            if (idsAreCompatible(previous, incoming[index])) matches[index] = previous
+        }
         val manualInterval = previousEntries.firstNotNullOfOrNull {
             it.metadata?.subscription?.manualUpdateIntervalMs
         }
 
-        val updatedEntries = imported.locations.mapIndexed { index, entry ->
-            val previousPool = previousBySignature[subscriptionSignature(entry)]
-            val previousEntry = if (previousPool.isNullOrEmpty()) {
-                null
-            } else {
-                previousPool.removeAt(0)
-            }
+        val replacements = mutableMapOf<String, LocationEntry>()
+        val newEntries = mutableListOf<LocationEntry>()
+        incoming.forEachIndexed { index, entry ->
+            val previousEntry = matches[index]
             val storageId = previousEntry?.storageId ?: uniqueStorageId(
                 base = entry.storageId.ifBlank {
                     "imported_${entry.location.storageSlug().ifBlank { "location_${index + 1}" }}"
                 },
                 used = usedStorageIds
             )
-            usedStorageIds.add(storageId)
-
-            entry.copy(
+            val updated = entry.copy(
                 storageId = storageId,
-                subscriptionUrl = normalizedUrl,
+                subscriptionUrl = subscriptionUrl,
                 dnsServer = entry.location.dnsServer
                     .ifBlank { previousEntry?.location?.dnsServer.orEmpty() }
                     .takeIf { it.isNotBlank() },
-                metadata = entry.metadata.withManualSubscriptionInterval(manualInterval)
+                metadata = entry.metadata.withManualSubscriptionInterval(manualInterval).copy(
+                    subscriptionProfileId = entry.metadata?.subscriptionProfileId
+                        ?: previousEntry?.metadata?.subscriptionProfileId
+                )
             ).normalized()
+            if (previousEntry == null) newEntries += updated else replacements[storageId] = updated
         }
 
-        val mergedLocations = remainingEntries + updatedEntries
-        val previousIds = previousEntries.mapTo(mutableSetOf()) { it.storageId }
-        val activeLocationId = currentBundle.activeLocationId
-            ?.takeIf { activeId -> activeId !in previousIds || updatedEntries.any { it.storageId == activeId } }
-            ?: updatedEntries.firstOrNull()?.storageId
-            ?: remainingEntries.firstOrNull()?.storageId
+        val lastPreviousId = previousEntries.lastOrNull()?.storageId
+        val mergedLocations = buildList {
+            for (entry in current.locations) {
+                if (entry.subscriptionUrl?.trim() != subscriptionUrl) add(entry)
+                else replacements[entry.storageId]?.let { add(it) }
+                if (entry.storageId == lastPreviousId) addAll(newEntries)
+            }
+            if (lastPreviousId == null) addAll(newEntries)
+        }
+        val activeLocationId = current.activeLocationId
+            ?.takeIf { activeId -> mergedLocations.any { it.storageId == activeId } }
+            ?: mergedLocations.firstOrNull { it.subscriptionUrl == subscriptionUrl }?.storageId
+            ?: mergedLocations.firstOrNull()?.storageId
 
-        return currentBundle.copy(
+        return current.copy(
             activeLocationId = activeLocationId,
             locations = mergedLocations
         )
@@ -1402,19 +1382,15 @@ class LocationsRepositoryImpl(
         }.getOrNull()?.mapNotNull { element ->
             val item = element.jsonObjectOrNull() ?: return@mapNotNull null
 
-            decodeLocationEntry(item, subscriptionUrl)?.let {
-                return@mapNotNull it.copy(
-                    metadata = it.metadata.withSubscriptionInterval(updateIntervalMs)
-                ).normalized()
-            }
-
-            val storageId = item.string("storage_id")
-                ?: item.string("storageId")
-                ?: item.string("id")?.let { "imported_${it.storageSlug()}" }
-
-            parseSingleLocation(item, storageId, subscriptionUrl)?.let { entry ->
+            val publisherId = item.string("storage_id") ?: item.string("storageId")
+            val storageId = publisherId ?: item.string("id")?.let { "imported_${it.storageSlug()}" }
+            val entry = parseSingleLocation(item, storageId, subscriptionUrl)
+            entry?.let {
+                val metadata = entry.metadata.withSubscriptionInterval(updateIntervalMs)
                 entry.copy(
-                    metadata = entry.metadata.withSubscriptionInterval(updateIntervalMs)
+                    metadata = if (subscriptionUrl == null) metadata else (metadata ?: LocationMetadata()).copy(
+                        subscriptionProfileId = metadata?.subscriptionProfileId ?: publisherId
+                    )
                 ).normalized()
             }
         } ?: return null
@@ -1774,17 +1750,20 @@ class LocationsRepositoryImpl(
         }.getOrNull()
     }
 
-    private fun subscriptionSignature(entry: LocationEntry): String {
+    private fun subscriptionSignature(entry: LocationEntry, ignoreVlessName: Boolean = false): List<String> {
         val profile = entry.profile
         if (!profile.isOlcRtc()) {
             val normalized = profile.normalized()
+            fun String.connectionUri(): String = if (ignoreVlessName && startsWith("vless://", ignoreCase = true)) {
+                substringBefore('#')
+            } else this
             return listOf(
                 normalized.normalizedType,
-                normalized.uri.orEmpty(),
-                normalized.rawConfig.orEmpty(),
+                normalized.uri.orEmpty().connectionUri(),
+                normalized.rawConfig.orEmpty().connectionUri(),
                 normalized.localSocksHost.orEmpty(),
                 normalized.localSocksPort?.toString().orEmpty()
-            ).joinToString("|")
+            )
         }
 
         val normalized = entry.location.normalized()
@@ -1793,7 +1772,7 @@ class LocationsRepositoryImpl(
             normalized.transport,
             normalized.id,
             normalized.key
-        ).joinToString("|")
+        )
     }
 
     private fun LocationConfig.storageSlug(): String {

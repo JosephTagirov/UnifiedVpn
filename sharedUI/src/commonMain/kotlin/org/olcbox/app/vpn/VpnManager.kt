@@ -2,6 +2,7 @@ package org.olcbox.app.vpn
 
 import kotlinx.coroutines.flow.StateFlow
 import org.olcbox.app.data.model.LocationConfig
+import org.olcbox.app.data.model.LocationEntry
 import org.olcbox.app.data.model.VpnProfileConfig
 import org.olcbox.app.data.repository.SubscriptionFetchProxy
 
@@ -18,6 +19,7 @@ interface VpnManager {
     val logs: StateFlow<List<String>>
     val status: StateFlow<VpnStatus>
     val isConnected: StateFlow<Boolean>
+    val adBlockingUnavailable: StateFlow<Boolean>? get() = null
     fun needsPermission(): Boolean
     fun startVpn()
     fun stopVpn()
@@ -27,4 +29,8 @@ interface VpnManager {
     ): Long?
     suspend fun checkConnection(locationConfig: LocationConfig): Long?
     fun subscriptionFetchProxy(): SubscriptionFetchProxy? = null
+    val supportsAutoSpeed: Boolean get() = false
+    suspend fun autoSpeedConnection(): Any? = null
+    suspend fun measureProfileSpeed(entry: LocationEntry, isCurrent: Boolean): Long? = null
+    fun logAutoSpeedSwitch(message: String) {}
 }

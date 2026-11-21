@@ -1,0 +1,30 @@
+{
+  "version": "0.1.15",
+  "build": 2026112101,
+  "androidSigningCertificate": "0a8547df6c99acfc4cbf9ca0916fbf7301c648bf4aecc655f7904d43c4bbeaa0",
+  "androidAlignment16KiB": true,
+  "androidAdBlockResource": true,
+  "androidUpgradeEmulator": {
+    "upgradeFrom": "0.1.14",
+    "upgradeTo": "0.1.15",
+    "profileStorePreserved": true,
+    "adBlockEnabled": true,
+    "vpnTunnelEstablished": true,
+    "physicalDevice": false
+  },
+  "windowsInstallerIdentityVerified": true,
+  "assets": {
+    "UnifiedVPN-0.1.15-build.2026112101-android-universal.apk": {
+      "bytes": 205839955,
+      "sha256": "5cd7cf027aac7fff688981c2b7a907053a7912b94cf39a81677dd9dc7cb0db15"
+    },
+    "UnifiedVPN-0.1.15-build.2026112101-windows-amd64-installer.exe": {
+      "bytes": 197257301,
+      "sha256": "d71a08141c02258fca9eb76bf4d1fdff7ab2e438206a1710149c39a36f50b135"
+    },
+    "UnifiedVPN-0.1.15-build.2026112101-windows-amd64-portable-manual.zip": {
+      "bytes": 195509672,
+      "sha256": "21a3d2fb3231faaf5607f9e73464530e0cd2fbd641eb4703860f79bbad8b015e"
+    }
+  }
+}

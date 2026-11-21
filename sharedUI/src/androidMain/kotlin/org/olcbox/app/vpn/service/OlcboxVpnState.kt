@@ -36,6 +36,13 @@ object OlcboxVpnState {
     private val _isConnected = MutableStateFlow(false)
     val isConnected = _isConnected.asStateFlow()
 
+    private val _adBlockingUnavailable = MutableStateFlow(false)
+    internal val adBlockingUnavailable = _adBlockingUnavailable.asStateFlow()
+
+    internal fun setAdBlockingUnavailable(unavailable: Boolean) {
+        _adBlockingUnavailable.value = unavailable
+    }
+
     @Volatile
     private var activeProxy: SubscriptionFetchProxy? = null
 

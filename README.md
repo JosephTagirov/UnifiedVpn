@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.8">v0.1.8 · build 2026110305</a> &nbsp; / &nbsp;
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.15">v0.1.15 · build 2026112101</a> &nbsp; / &nbsp;
   Alpha &nbsp; / &nbsp;
   <a href="LICENSE">MIT License</a>
 </p>
@@ -30,28 +30,24 @@
 ## Скачать приложение
 
 <p align="center">
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/UnifiedVPN-0.1.8-build.2026110305-android-universal.apk"><img src="docs/assets/download-android.svg" alt="Скачать UnifiedVPN для Android — APK, Android 6 и новее" width="300" height="84"></a>
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/UnifiedVPN-0.1.8-build.2026110305-windows-amd64-installer.exe"><img src="docs/assets/download-windows.svg" alt="Скачать UnifiedVPN для Windows — установщик EXE, x64" width="300" height="84"></a>
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/UnifiedVPN-0.1.15-build.2026112101-android-universal.apk"><img src="docs/assets/download-android.svg" alt="Скачать UnifiedVPN для Android — APK, Android 6 и новее" width="300" height="84"></a>
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/UnifiedVPN-0.1.15-build.2026112101-windows-amd64-installer.exe"><img src="docs/assets/download-windows.svg" alt="Скачать UnifiedVPN для Windows — установщик EXE, x64" width="300" height="84"></a>
 </p>
 
 | Android 6+ | Windows x64 |
 | :--- | :--- |
-| [**Скачать APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/UnifiedVPN-0.1.8-build.2026110305-android-universal.apk) | [**Скачать установщик EXE**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/UnifiedVPN-0.1.8-build.2026110305-windows-amd64-installer.exe) |
-| Откройте APK на телефоне. При обновлении устанавливайте поверх прежней версии, без удаления приложения. | Запустите установщик: он обновит установленную копию и сохранит настройки. Открытая переносная копия в другой папке не мешает обновлению. [Portable ZIP](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/UnifiedVPN-0.1.8-build.2026110305-portable-manual.zip) можно распаковать в отдельную папку. |
+| [**Скачать APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/UnifiedVPN-0.1.15-build.2026112101-android-universal.apk) | [**Скачать установщик EXE**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/UnifiedVPN-0.1.15-build.2026112101-windows-amd64-installer.exe) |
+| Откройте APK на телефоне. При обновлении устанавливайте поверх прежней версии, без удаления приложения. | Запустите установщик для обновления установленной копии с сохранением настроек. Открытая переносная копия в другой папке не мешает обновлению. [Portable ZIP](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/UnifiedVPN-0.1.15-build.2026112101-windows-amd64-portable-manual.zip) можно распаковать в отдельную папку. |
 
 <p align="center">
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.8">Что нового и ограничения</a> ·
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.15">Что нового и ограничения</a> ·
   <a href="https://github.com/JosephTagirov/UnifiedVpn/releases">Все версии</a> ·
-  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/SHA256-build-2026110305.json">Контрольные суммы SHA-256</a>
+  <a href="https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/verification-build-2026112101.json">Контрольные суммы SHA-256</a>
 </p>
 
-> **Альфа-версия.** Скорость и доступность зависят от сети. Проверка Яндекса в OpenFlux пока нестабильна. В 0.1.8 доступны Android APK, Windows EXE и portable ZIP; нового Linux-пакета и собственного iOS-приложения в этой поставке нет.
+> **Альфа-версия.** Скорость и доступность зависят от сети. Проверка Яндекса в OpenFlux пока нестабильна.
 
-В 0.1.8 исправлен установщик Windows: открытая переносная копия больше не блокирует обновление ошибкой 1603. Проверка учитывает полный путь процесса. Сохранены настройки VLESS/XHTTP для Android и Windows,
-ускорено отключение OpenFlux, добавлена подсказка создания ссылки VK Calls
-и новое окно установки Windows с проверкой уже установленной версии.
-Подробности: [изменения](CHANGELOG.md), [установка](docs/WINDOWS_SETUP.md),
-[механизм адблока](docs/AD_BLOCKING.md) и [проверки](docs/testing/vless-openflux-installer-2026110301.md).
+Для профиля VK Calls на iPhone откройте ссылку из кабинета в Ghostlane. [Ghostlane в App Store](https://apps.apple.com/ru/app/ghostlane/id6795355210)
 
 <a id="features"></a>
 
@@ -73,11 +69,12 @@
 
 Приложение работает с вашими профилями и подписками. Для подключения нужна готовая конфигурация от администратора или вашего сервера.
 
-### В выпуске 0.1.8
+### В выпуске 0.1.15
 
-В одной сборке объединены **блокировка рекламы**, обновлённый **OpenFlux** и кнопка **«Обновить подписку»**. Добавлены проверка другого активного VPN, автоматический выбор прокси, VPN/TUN для AWG и VLESS и исправления XHTTP. Адблокер включён по умолчанию и отключается в настройках подключения после переподключения.
-
-Все 860 JVM/Android host-теста прошли; VLESS/XHTTP проверен с включённым адблокером в итоговом Windows-пакете. Получение конфигурации старого редактора Яндекса прошло один раз, повтор завершился тайм-аутом: устойчивое OpenFlux-соединение через новые документы и Volga пока не подтверждено. Итоговый APK на физическом Android ещё не проверен. Подробнее — [проверки объединённой сборки](docs/testing/windows-portable-update-2026110305.md).
+- Обновление подписки сохраняет порядок профилей и текущий выбор, пока выбранный профиль есть в подписке. Android проверяет срок обновления в фоне.
+- Режим **«Авто по скорости»** сравнивает загрузку через профили. Он доступен на Android и в прокси-режимах Windows.
+- Если фильтр рекламы не запустился, приложение пытается установить VPN на том же профиле и показывает предупреждение о недоступной блокировке. [Блокировка рекламы](docs/AD_BLOCKING.md)
+- Яндекс Интернетометр и его серверы измерения используют прямой маршрут. Speedtest работает через VPN.
 
 ### Из предыдущего выпуска 0.1.4
 
@@ -121,15 +118,17 @@
 
 **UnifiedVPN** is an Android-first VPN client with **olcRTC, VLESS, AmneziaWG and experimental OpenFlux** profiles. Import a subscription or a configuration and manage your connections from one interface.
 
-**Current release: [v0.1.8 · build 2026110305](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.8).**
+**Current release [v0.1.15 · build 2026112101](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.15).**
 
-- [**Download Android APK**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/UnifiedVPN-0.1.8-build.2026110305-android-universal.apk) — Android 6+. Install over the existing app when updating.
-- [**Download Windows installer**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/UnifiedVPN-0.1.8-build.2026110305-windows-amd64-installer.exe) — x64. Setup updates the installed copy and preserves settings. A running portable copy in another folder does not block setup. [Portable ZIP](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/UnifiedVPN-0.1.8-build.2026110305-portable-manual.zip) is also available.
-- [**SHA-256 checksums**](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.8/SHA256-build-2026110305.json).
+- Install the APK over the existing app on Android 6 or later. [Android APK](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/UnifiedVPN-0.1.15-build.2026112101-android-universal.apk)
+- The x64 installer upgrades the installed copy and preserves settings. A running portable copy in another folder does not block setup. [Windows installer](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/UnifiedVPN-0.1.15-build.2026112101-windows-amd64-installer.exe) · [Portable ZIP](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/UnifiedVPN-0.1.15-build.2026112101-windows-amd64-portable-manual.zip)
+- [SHA-256 checksums](https://github.com/JosephTagirov/UnifiedVpn/releases/download/v0.1.15/verification-build-2026112101.json)
 
 To get started, install the app, use **+** to import your subscription or profile, select a profile and connect. A configuration from your administrator or your own server is required.
 
-Release 0.1.8 adds owner messages and subscription expiry reminders. Windows setup retains the installation path guard introduced in 0.1.7. Setup now checks the installed executable path. Local ad blocking, OpenFlux diagnostics and subscription refresh are retained. All 870 JVM/Android host tests passed; packaged Windows VLESS/XHTTP HTTPS worked with filtering enabled. **This is alpha software:** Yandex verification remains intermittent, stable OpenFlux traffic through the new documents and Volga is unverified, and the final APK has not been tested on physical Android. Availability and speed depend on the network. See the [release notes](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.8) for tested scenarios and limitations.
+Subscription refresh preserves the order and selection of profiles that are still in the feed. Android checks for scheduled updates in the background. The optional speed-based mode compares download throughput on Android and in Windows proxy modes. If the ad filter cannot start, the client tries the same VPN profile and shows a warning. [Release notes](https://github.com/JosephTagirov/UnifiedVpn/releases/tag/v0.1.15)
+
+On iPhone, open the VK Calls profile from the account portal in Ghostlane. [Ghostlane on the App Store](https://apps.apple.com/ru/app/ghostlane/id6795355210)
 
 [Technical reference](docs/REFERENCE.md#english) · [Engines](docs/ENGINES.md) · [Issues](https://github.com/JosephTagirov/UnifiedVpn/issues)
 

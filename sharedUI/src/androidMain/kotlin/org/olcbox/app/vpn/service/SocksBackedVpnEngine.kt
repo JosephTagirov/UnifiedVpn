@@ -3,6 +3,7 @@ package org.olcbox.app.vpn.service
 import android.content.Context
 import android.os.Build
 import android.util.Base64
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import org.json.JSONArray
 import org.json.JSONObject
@@ -36,6 +37,7 @@ internal interface SocksBackedVpnEngine {
     val usesAppSocksCredentials: Boolean get() = true
     val usesEntryFailover: Boolean get() = false
     val usesClientDirectRouting: Boolean get() = false
+    val adBlockingUnavailable: Boolean get() = false
     val isRunning: Boolean
     suspend fun start()
     fun stop()
@@ -244,7 +246,9 @@ private class SingBoxTunSocksBridge(
     private val preserveUpstreamDns: Boolean
 ) : SocksBackedVpnEngine {
     override val isRunning: Boolean
-        get() = process?.isAlive == true && canConnect(socksHost, socksPort)
+        get() = process?.isAlive == true && canConnect(AdBlockingConfig.localProbeHost(socksHost), socksPort)
+    override var adBlockingUnavailable: Boolean = false
+        private set
 
     private var runtimeConfig: File? = null
     private var process: Process? = null
@@ -270,14 +274,34 @@ private class SingBoxTunSocksBridge(
             target.setExecutable(true, false)
         }
         stop()
-        val configFile = File(workDir, "tun-bridge-$socksPort.json").also { file ->
-            file.writeText(if (blockAds) AdBlockingConfig.build(
-                socksHost, socksPort, username, password, upstreamSocksHost, upstreamSocksPort,
-                AdBlockingRules.install(workDir).absolutePath, upstreamUsername, upstreamPassword,
-                preserveUpstreamDns = preserveUpstreamDns
-            ) else buildTunBridgeConfig().toString())
+        if (!blockAds) {
+            startBridge(executable, workDir, buildTunBridgeConfig().toString(), filtering = false)
+            return
         }
+
+        fun config(rulesPath: String?): String = AdBlockingConfig.build(
+            socksHost, socksPort, username, password, upstreamSocksHost, upstreamSocksPort, rulesPath,
+            upstreamUsername, upstreamPassword, preserveUpstreamDns
+        )
+        try {
+            val rules = AdBlockingRules.install(workDir) {
+                context.assets.open(AdBlockingRules.ANDROID_ASSET_PATH).use { it.readBytes() }
+            }
+            startBridge(executable, workDir, config(rules.absolutePath), filtering = true)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            stop()
+            log("Ad blocking startup failed (${failure.javaClass.simpleName}); retrying the tunnel bridge")
+            startBridge(executable, workDir, config(null), filtering = false)
+            adBlockingUnavailable = true
+        }
+    }
+
+    private suspend fun startBridge(executable: File, workDir: File, config: String, filtering: Boolean) {
+        val configFile = File(workDir, "tun-bridge-$socksPort.json")
         runtimeConfig = configFile
+        configFile.writeText(config)
         val started = ProcessBuilder(
             executable.absolutePath,
             "run",
@@ -295,13 +319,14 @@ private class SingBoxTunSocksBridge(
             log = if (blockAds) ({ _: String -> }) else log
         )
 
-        val deadline = System.currentTimeMillis() + SING_BOX_READY_TIMEOUT_MS
-        while (System.currentTimeMillis() < deadline) {
+        val timeoutMs = if (filtering) AD_BLOCKING_READY_TIMEOUT_MS else SING_BOX_READY_TIMEOUT_MS
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        while (System.nanoTime() < deadline) {
             if (!started.isAlive) {
-                throw IllegalStateException("TUN DNS bridge exited before SOCKS became ready")
+                error("TUN DNS bridge exited before SOCKS became ready (code ${started.exitValue()})")
             }
-            if (canConnect(socksHost, socksPort)) {
-                log(if (blockAds) "Ad blocking enabled (local domain filter)" else "TUN DNS bridge ready on $socksHost:$socksPort")
+            if (canConnect(AdBlockingConfig.localProbeHost(socksHost), socksPort)) {
+                log(if (filtering) "Ad blocking enabled (local domain filter)" else "TUN DNS bridge ready on $socksHost:$socksPort")
                 return
             }
             delay(SOCKS_READY_POLL_MS)
@@ -311,6 +336,7 @@ private class SingBoxTunSocksBridge(
     }
 
     override fun stop() {
+        adBlockingUnavailable = false
         val running = process
         process = null
         running?.destroy()
@@ -343,9 +369,9 @@ private class SingBoxTunSocksBridge(
             .put("server_port", upstreamSocksPort)
             .put("version", "5")
             .also { socks ->
-                if (username.isNotBlank()) {
-                    socks.put("username", username)
-                    socks.put("password", password)
+                if (upstreamUsername.isNotBlank()) {
+                    socks.put("username", upstreamUsername)
+                    socks.put("password", upstreamPassword)
                 }
             }
 
@@ -1306,6 +1332,7 @@ private const val MAX_SING_BOX_DNS_SERVERS = 3
 private val DEFAULT_SING_BOX_DNS_SERVERS = listOf("1.1.1.1:53", "8.8.8.8:53")
 private const val CONNECT_TIMEOUT_MS = 150
 private const val SING_BOX_READY_TIMEOUT_MS = 8_000L
+private const val AD_BLOCKING_READY_TIMEOUT_MS = 20_000L
 private const val SOCKS_READY_POLL_MS = 150L
 private const val ENGINE_STOP_TIMEOUT_MS = 1_500L
 private const val ENGINE_FORCE_STOP_TIMEOUT_MS = 1_000L

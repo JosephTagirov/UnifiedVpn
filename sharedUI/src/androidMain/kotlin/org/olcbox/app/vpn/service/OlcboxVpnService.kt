@@ -566,6 +566,7 @@ class OlcboxVpnService : VpnService() {
     }
 
     private fun applyStartOptions(options: StartOptions) {
+        OlcboxVpnState.setAdBlockingUnavailable(false)
         connectionMode = options.connectionMode
         socksListenHost = options.socksListenHost
         configuredSocksHost = options.socksListenHost
@@ -1322,6 +1323,10 @@ class OlcboxVpnService : VpnService() {
 
         return try {
             bridge.start()
+            OlcboxVpnState.setAdBlockingUnavailable(bridge.adBlockingUnavailable)
+            if (bridge.adBlockingUnavailable) {
+                addLog("Ad blocking is unavailable for this connection; VPN routing is preserved")
+            }
             true
         } catch (e: CancellationException) {
             stopTunSocksBridge()

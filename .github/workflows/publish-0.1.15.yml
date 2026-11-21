@@ -1,0 +1,76 @@
+name: Publish verified UnifiedVPN 0.1.15
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [maintenance/publish-015-20261121]
+    paths:
+      - '.github/workflows/publish-0.1.15.yml'
+      - 'docs/releases/verification-build-2026112101.json'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: unifiedvpn-stable-015
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'JosephTagirov/UnifiedVpn' && github.ref == 'refs/heads/maintenance/publish-015-20261121'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: v0.1.15
+      RELEASE_MANIFEST: docs/releases/verification-build-2026112101.json
+      RELEASE_DIR: dist/release-015
+      MIRROR_ROOT: https://ru-kvn.meesharr.space/download
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Download and verify immutable release packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RELEASE_DIR"
+          for asset in \
+            UnifiedVPN-0.1.15-build.2026112101-android-universal.apk \
+            UnifiedVPN-0.1.15-build.2026112101-windows-amd64-installer.exe \
+            UnifiedVPN-0.1.15-build.2026112101-windows-amd64-portable-manual.zip
+          do
+            curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 \
+              "$MIRROR_ROOT/$asset" --output "$RELEASE_DIR/$asset"
+          done
+          sdk="$ANDROID_HOME/build-tools/36.0.0"
+          if [[ ! -f "$sdk/lib/apksigner.jar" ]]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;36.0.0'
+          fi
+          python3 tools/verify_release_015.py local --sdk "$sdk"
+          cp "$RELEASE_MANIFEST" "$RELEASE_DIR/"
+      - name: Publish and verify the stable release
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(python3 tools/verify_release_015.py draft)"
+          if [[ "$state" == published ]]; then
+            python3 tools/verify_release_015.py published
+            exit 0
+          fi
+          if [[ "$state" == missing ]]; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title 'UnifiedVPN 0.1.15' --notes-file docs/releases/0.1.15.md --draft --latest=false
+          fi
+          python3 tools/verify_release_015.py missing > "$RUNNER_TEMP/missing-assets-015.txt"
+          while IFS= read -r asset; do
+            [[ -n "$asset" ]] || continue
+            gh release upload "$RELEASE_TAG" "$RELEASE_DIR/$asset" --repo "$GITHUB_REPOSITORY"
+          done < "$RUNNER_TEMP/missing-assets-015.txt"
+          python3 tools/verify_release_015.py complete
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease=false --latest
+          python3 tools/verify_release_015.py published

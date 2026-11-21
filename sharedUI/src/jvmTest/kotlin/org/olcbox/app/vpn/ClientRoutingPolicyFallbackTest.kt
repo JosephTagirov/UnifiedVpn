@@ -5,8 +5,10 @@ import org.olcbox.app.data.model.VpnProfileConfig
 import kotlin.test.*
 
 class ClientRoutingPolicyFallbackTest {
-    @Test fun oldMissingAndInvalidPoliciesUseUnchangedBuiltInRules() {
-        assertEquals(869, ClientDirectPolicy.domainRules.size)
+    @Test fun oldMissingAndInvalidPoliciesUseCurrentBuiltInRules() {
+        assertTrue(ClientDirectPolicy.domainRules.containsAll(listOf(
+            "domain:cdn.yandex.net", "full:ipv4-internet.yandex.net", "full:ipv6-internet.yandex.net"
+        )))
         assertEquals(ClientDirectPolicy.domainRules, ClientDirectPolicy.effectiveDomains(null))
         assertEquals(ClientDirectPolicy.domainRules, ClientDirectPolicy.effectiveDomains(VpnProfileConfig()))
         assertEquals(ClientDirectPolicy.domainRules, ClientDirectPolicy.effectiveDomains(

@@ -16,7 +16,38 @@ import java.net.ServerSocket
 import java.util.UUID
 
 internal object AndroidProfileLatency {
-    suspend fun ping(context: Context, location: LocationConfig, profile: VpnProfileConfig): Long? = ProfileLatency.isolated {
+    suspend fun ping(context: Context, location: LocationConfig, profile: VpnProfileConfig): Long? =
+        withIsolatedProxy(context, location, profile, 95_000L) { proxy, usesEntryFailover ->
+            ProfileLatency.measure(
+                proxy,
+                onFailure = { error ->
+                    android.util.Log.w(
+                        "UnifiedVPN.Latency",
+                        org.olcbox.app.data.logging.sanitizeDiagnosticLogLine(error.toString())
+                    )
+                },
+                probe = { candidate ->
+                    if (usesEntryFailover) {
+                        EntryFailoverHealthProbe.healthy(
+                            XraySocksSettings(candidate.host, candidate.port, candidate.username, candidate.password)
+                        )
+                    } else {
+                        OpenFluxTunnelPing.probeHttps(candidate)
+                    }
+                }
+            )
+        }
+
+    suspend fun throughput(context: Context, location: LocationConfig, profile: VpnProfileConfig): Long? =
+        withIsolatedProxy(context, location, profile, 35_000L) { proxy, _ -> ProfileThroughput.measure(proxy) }
+
+    private suspend fun <T> withIsolatedProxy(
+        context: Context,
+        location: LocationConfig,
+        profile: VpnProfileConfig,
+        timeoutMs: Long,
+        probe: suspend (SubscriptionFetchProxy, Boolean) -> T?
+    ): T? = ProfileLatency.isolated {
         withContext(Dispatchers.IO) {
             val port=ServerSocket(0).use { it.localPort }
             val user=UUID.randomUUID().toString().replace("-","")
@@ -25,16 +56,11 @@ internal object AndroidProfileLatency {
             val engine=createSocksBackedVpnEngine(context,profile,port,user,password,{ android.util.Log.d("UnifiedVPN.Latency",org.olcbox.app.data.logging.sanitizeDiagnosticLogLine(it)) },location=location,
                 entryFailoverEnabled=OlcboxVpnState.connectedLatencySession()==null,directRoutingEnabled=false)
             try {
-                withTimeoutOrNull(95_000) {
+                withTimeoutOrNull(timeoutMs) {
                     engine.start()
                     val proxy = SubscriptionFetchProxy(engine.socksHost,engine.socksPort,
                         if(engine.usesAppSocksCredentials) user else "",if(engine.usesAppSocksCredentials) password else "")
-                    ProfileLatency.measure(proxy,onFailure={ error ->
-                            android.util.Log.w("UnifiedVPN.Latency",org.olcbox.app.data.logging.sanitizeDiagnosticLogLine(error.toString()))
-                        },probe={ candidate ->
-                            if (engine.usesEntryFailover) EntryFailoverHealthProbe.healthy(XraySocksSettings(candidate.host,candidate.port,candidate.username,candidate.password))
-                            else OpenFluxTunnelPing.probeHttps(candidate)
-                        })
+                    probe(proxy, engine.usesEntryFailover)
                 }
             } catch(cancel: CancellationException) { throw cancel }
               catch(unavailable: VpnPingUnavailableException) { throw unavailable }
